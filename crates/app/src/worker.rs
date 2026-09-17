@@ -1,18 +1,15 @@
 //! Client side of the sidecar protocol.
 //!
-//! One worker, one child process, strictly request/response. That is the
-//! narrow version of P5: no pool, no queue, no supervision. It is enough to
-//! carry a single stream end to end and to find out what the real latency is,
-//! which is the whole point of doing this before the pool exists.
-//!
-//! What P5 adds on top: several workers on one prioritised queue, a hard
-//! bound with a drop policy, respawn after a crash, and reordering by `seq`.
+//! One worker, one child process, strictly request/response. Several of these
+//! behind one queue make the pool in [`crate::pool`]; on its own a `Worker`
+//! knows nothing about queueing, supervision or ordering.
 
 use anyhow::{bail, Context, Result};
 use audio_core::Segment;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use whisper_protocol as protocol;
 use whisper_protocol::{Request, Response};
 
@@ -28,7 +25,10 @@ pub struct Ready {
 }
 
 pub struct Worker {
-    child: Child,
+    /// Shared so that [`Killer`] can reach it from the watchdog thread. The
+    /// read side of the protocol lives on `stdout`, which is taken out of the
+    /// `Child`, so holding this lock never blocks a decode in flight.
+    child: Arc<Mutex<Child>>,
     /// Taken during shutdown: closing it is what tells the worker to exit.
     stdin: Option<BufWriter<ChildStdin>>,
     stdout: BufReader<ChildStdout>,
@@ -97,7 +97,7 @@ impl Worker {
         };
 
         Ok(Self {
-            child,
+            child: Arc::new(Mutex::new(child)),
             stdin: Some(BufWriter::new(stdin)),
             stdout,
             ready,
@@ -109,6 +109,17 @@ impl Worker {
         &self.ready
     }
 
+    /// A handle for killing this worker from another thread.
+    ///
+    /// The pool's watchdog has no other way to act on a worker that stopped
+    /// answering: the decode is blocked in a read on a pipe that will never
+    /// deliver. Killing the process closes the write end, the read returns
+    /// EOF, and the wedged decode fails like an ordinary crash — so timeout
+    /// and crash are healed by the same code path instead of two.
+    pub fn killer(&self) -> Killer {
+        Killer(Arc::clone(&self.child))
+    }
+
     fn stdin(&mut self) -> Result<&mut BufWriter<ChildStdin>> {
         self.stdin
             .as_mut()
@@ -117,9 +128,9 @@ impl Worker {
 
     /// Sends one segment and blocks until its transcript comes back.
     ///
-    /// Blocking is fine here because the caller runs on its own thread — but it
-    /// is also why this cannot stay: with one worker, a long segment delays
-    /// every stream behind it. P5's queue is what fixes that.
+    /// Blocking is deliberate: each worker owns a thread in the pool, and the
+    /// queue in front of them is what keeps a long segment from delaying the
+    /// streams behind it.
     pub fn transcribe(&mut self, segment: &Segment) -> Result<Response> {
         let request = Request::Transcribe {
             stream_id: segment.stream_id.0,
@@ -163,9 +174,24 @@ impl Worker {
             // understand the request sees EOF on stdin and leaves its loop.
         }
 
-        if let Err(err) = self.child.wait() {
+        let Ok(mut child) = self.child.lock() else {
+            return;
+        };
+        if let Err(err) = child.wait() {
             tracing::warn!(error = %err, "sidecar did not exit cleanly, killing it");
-            let _ = self.child.kill();
+            let _ = child.kill();
+        }
+    }
+}
+
+/// Kills one worker's child process from outside. See [`Worker::killer`].
+#[derive(Clone)]
+pub struct Killer(Arc<Mutex<Child>>);
+
+impl Killer {
+    pub fn kill(&self) {
+        if let Ok(mut child) = self.0.lock() {
+            let _ = child.kill();
         }
     }
 }
@@ -188,8 +214,10 @@ impl Drop for Worker {
             return;
         }
         tracing::warn!("sidecar dropped without shutdown — killing it");
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

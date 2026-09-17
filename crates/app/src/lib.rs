@@ -1,17 +1,19 @@
 //! Tauri backend.
 //!
-//! Holds the capture session and the sidecar, and forwards their output to the
-//! UI as events. The worker pool (P5), the full command surface (P6) and the
-//! SQLite persistence (P10) still to come — what is here is the narrow
-//! vertical slice: one channel, one worker, one chat list.
+//! Holds the capture session and the worker pool, and forwards their output to
+//! the UI as events. The full command surface (P6) and the SQLite persistence
+//! (P10) are still to come — what is here carries one channel through the
+//! pipeline into one chat list.
 
+pub mod pool;
 pub mod session;
 pub mod worker;
 
 use audio_core::{LanguageCode, LanguageMode};
 use serde::{Deserialize, Serialize};
 use session::{
-    DeviceOption, EventSink, LevelEvent, Session, SessionConfig, SessionState, TranscriptEvent,
+    DeviceOption, EventSink, LevelEvent, OverloadEvent, Session, SessionConfig, SessionState,
+    TranscriptEvent,
 };
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -45,6 +47,7 @@ impl Default for StreamConfig {
 /// and a typo there fails silently — nothing arrives, nothing complains.
 pub const EVENT_TRANSCRIPT: &str = "transcript";
 pub const EVENT_LEVEL: &str = "level";
+pub const EVENT_OVERLOAD: &str = "overload";
 pub const EVENT_SESSION_STATE: &str = "session-state";
 
 /// Sends session output over the Tauri bridge.
@@ -57,6 +60,10 @@ impl EventSink for TauriEvents {
 
     fn level(&self, event: LevelEvent) {
         let _ = self.0.emit(EVENT_LEVEL, event);
+    }
+
+    fn overload(&self, event: OverloadEvent) {
+        let _ = self.0.emit(EVENT_OVERLOAD, event);
     }
 
     fn state(&self, event: SessionState) {

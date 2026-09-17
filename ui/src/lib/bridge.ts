@@ -42,6 +42,16 @@ export interface LevelEvent {
   dropped: number;
 }
 
+// A segment that was thrown away before it could be decoded, because the
+// decode queue was full. Distinct from `LevelEvent.dropped`, which counts
+// audio lost on the way *into* the pipeline — this is audio that was captured
+// cleanly and then could not be kept up with.
+export interface OverloadEvent {
+  streamId: number;
+  seq: number;
+  dropped: number;
+}
+
 export type SessionState =
   | {
       state: "running";
@@ -68,6 +78,9 @@ export const onTranscript = (fn: (e: TranscriptEvent) => void): Promise<Unlisten
 
 export const onLevel = (fn: (e: LevelEvent) => void): Promise<UnlistenFn> =>
   listen<LevelEvent>("level", (e) => fn(e.payload));
+
+export const onOverload = (fn: (e: OverloadEvent) => void): Promise<UnlistenFn> =>
+  listen<OverloadEvent>("overload", (e) => fn(e.payload));
 
 export const onSessionState = (fn: (e: SessionState) => void): Promise<UnlistenFn> =>
   listen<SessionState>("session-state", (e) => fn(e.payload));

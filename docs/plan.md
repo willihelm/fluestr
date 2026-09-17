@@ -39,7 +39,7 @@ architectural decisions look arbitrary without them.
 | Frontend | **Svelte + TypeScript** |
 | Whisper | **Sidecar process** (crash-isolated), pool of workers |
 | Models | **Downloaded on first start**, selectable in settings |
-| UI scope, MVP | Chat view, live search and filter, levels and stream health, vocabulary editor |
+| UI scope, MVP | Chat view with a group sidebar, live search and filter, levels and stream health, vocabulary editor, and a separate Settings page for channel setup |
 | Not in the MVP | Export, markers, diarisation, cloud, multi-user |
 
 ---
@@ -57,10 +57,10 @@ named below is missing. **Open** — not started.
 | P3 | VAD & segment scheduler | **Partial** | Speech detection is energy-based; Silero sits in the sidecar, not in the segmenter |
 | P3b | Language stabiliser | **Open** | — |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
-| P5 | Worker pool & backpressure | **Open** | One worker, no queue, no supervision |
+| P5 | Worker pool & backpressure | **Partial** | No reference load test; still fed by a single stream |
 | P6 | Tauri API | **Partial** | No generated shared types; level events not bundled across streams |
 | P7 | Chat UI | **Partial** | One stream, no virtualisation, no language picker from the sidecar's list |
-| P8 | Levels & stream health | **Partial** | Level and overrun count only |
+| P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Open** | — |
 | P10 | SQLite persistence | **Open** | — |
 | P11 | Model manager | **Open** | Models discovered from `.scratch/models` or environment variables |
@@ -70,8 +70,10 @@ named below is missing. **Open** — not started.
 | P15 | Vocabulary & prompt management | **Partial** | A single text box, not stored, not named |
 
 **What runs today:** one channel end to end — microphone, ring buffer,
-resampling, segmentation, speech gate, sidecar, chat list — at a measured
-~330 ms from the end of a spoken segment to the text appearing.
+resampling, segmentation, speech gate, worker pool, chat list — at a measured
+~330 ms from the end of a spoken segment to the text appearing. The pool
+behind the segmenter is already indifferent to how many streams feed it; what
+is still single-stream is everything in front of it.
 
 ---
 
@@ -255,27 +257,56 @@ verbatim; the model is provably loaded only once. ✔
 **Outstanding:** registration as a Tauri `externalBin` so the binary is bundled
 and co-signed. Belongs with P13.
 
-### P5 — Worker pool & backpressure — **Open**
+### P5 — Worker pool & backpressure — **Partial**
 
-Pool of M sidecar processes on **one** shared queue, oldest segment first so no
-stream starves. Hard queue bound; on overflow the *oldest* segment is dropped
-and an `overload` event fired per stream — **silent loss is explicitly
-forbidden**. Supervision: crash or timeout kills and respawns the process,
-requeues the affected segment once, then discards it. A result aggregator
-orders results by `seq` per stream.
+Pool of M sidecar processes (default 2) on **one** shared queue, oldest segment
+first so no stream starves. Hard bound of 32 segments; on overflow the
+*oldest* is dropped and an `overload` event fired per stream — **silent loss is
+explicitly forbidden**. Supervision: crash or timeout kills and respawns the
+process, requeues the affected segment once, then discards it. A result
+aggregator orders results by `seq` per stream.
 
 **Accepted when:** a load test with eight synthetic continuous-speech streams
 runs 10 minutes without memory growth; a `kill -9` on a worker is healed within
-~2 s without a UI error.
+~2 s without a UI error. ✔ for the second — `tests/pool.rs` kills the pool's
+own sidecars mid-session and asserts that they come back and keep decoding.
 
-**Today:** exactly one worker, strict request/response, no queue. A long
-segment delays everything behind it. The `Worker` kills its child process on
-drop, so a failed session start does not leave a sidecar holding the model.
+**The invariant everything else rests on:** every segment the pool accepts
+produces **exactly one** result, including the ones it gives up on. Without it
+the reorder buffer would stall on the missing sequence number and lose that
+stream for the rest of the session — a far worse failure than the dropped
+segment itself. It is asserted over a whole run rather than per segment,
+because that is the only way it can be asserted at all.
+
+Three things fell out of building it that were not in the plan:
+
+- **Dropping the oldest is the opposite end from the one work is taken from.**
+  Workers pop the oldest so a busy stream cannot starve a quiet one; overflow
+  drops the oldest because by then its transcript is the one worth least. Both
+  rules are right and they point in opposite directions, which is worth
+  knowing before someone "fixes" one of them.
+- **A wedged worker is killed, not signalled.** The decode is blocked reading a
+  pipe that will never deliver again, so there is nothing to interrupt.
+  Killing the process closes the pipe, and the read then fails exactly like a
+  crash — so timeout and crash are healed by one code path rather than two.
+- **Stop has to drain the queue.** Stop is pressed *after* the last thing worth
+  hearing was said, so discarding the backlog reliably loses the end of every
+  session. The queue now drains within a 5 s grace period before it closes.
+  Found by a test asserting the invariant above, not by reading the code.
+
+A failed respawn is retried three times before the pool gives up on that
+worker: a replacement can be killed while it is still loading its model, and
+treating that as permanent turns a passing problem into a permanently smaller
+pool.
+
+**Outstanding:** the reference load test, which belongs with P14 and needs the
+multi-stream session from P6/P7 to be worth running. Until then the pool size,
+the queue bound and the timeouts are reasoned defaults, not measured ones.
 
 ### P6 — Tauri API — **Partial**
 
 Commands `list_devices`, `start_session`, `stop_session` exist; events
-`transcript`, `level`, `session-state` are emitted.
+`transcript`, `level`, `overload` and `session-state` are emitted.
 
 Two things learned here, both in the code as comments:
 
@@ -285,13 +316,18 @@ Two things learned here, both in the code as comments:
   unhandled rejection is silent, which makes a working backend look like a hung
   one.
 - **`start_session` returns the running state** rather than only emitting it,
-  so the transition the operator waits for after pressing Start arrives as the
-  answer to that click. Events carry only what happens afterwards.
+  so the transition the operator waits for after pressing the single global
+  Start button arrives as the answer to that click. Events carry only what
+  happens afterwards.
+- **Start is non-destructive.** It starts or resumes capture without clearing
+  the transcripts already displayed or stored for the current session. Clearing
+  history, if offered at all, is a separate explicit action and never a side
+  effect of Start or Stop.
 
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
 `specta`) instead of hand-written TypeScript; level events bundled across all
-eight streams at 20 Hz rather than one event per stream; `update_stream_config`
-and `search_session`.
+eight streams at 20 Hz rather than one event per stream; `update_stream_config`,
+group CRUD and channel-to-group assignment commands, and `search_session`.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
 load keep the WebView main thread under ~30 %.
@@ -304,22 +340,47 @@ latency per message. Follow behaviour with a "jump to latest" button. Channels
 are numbered from 1, the way they are numbered on an interface; the backend
 stays zero-based and the conversion happens at that one boundary.
 
-**Outstanding:** several streams side by side with colours and free labels;
-**virtualised list** — an hour across eight streams is tens of thousands of
-nodes; the session setup screen with per-stream language configuration from the
-sidecar's language list rather than a text field; one-click language override.
+**Target interaction model.** Channel configuration belongs on the dedicated
+Settings page, not in the live chat view: input mapping, label, language,
+vocabulary assignment and channel colour are edited there. Each channel has a
+user-editable colour; a deterministic palette colour is preselected when the
+channel is created, with enough contrast for labels, badges and level meters.
+
+The chat page has a left sidebar for groups. An operator can create, rename and
+delete groups, and select a group to focus the chat on its member channels.
+Groups are non-exclusive views: a channel may belong to any number of groups,
+and removing it from a group never removes the channel itself. The sidebar also
+offers an all-channels view. Starting and stopping is session-wide, through one
+global Start/Stop control; there is deliberately no per-channel Start button.
+Start leaves the existing chat history visible and appends new transcripts to
+it; neither Start nor Stop clears the list.
+
+**Outstanding:** several streams side by side with their configured colours and
+free labels; group sidebar and membership management; **virtualised list** — an
+hour across eight streams is tens of thousands of nodes; Settings page for
+channel setup with per-stream language configuration from the sidecar's language
+list rather than a text field; one global session Start/Stop control; one-click
+language override.
 
 **Accepted when:** eight streams run visibly live; scrolling stays smooth at
-10,000 segments; a third language can be chosen without a code change.
+10,000 segments; a third language can be chosen without a code change; a
+channel has a preselected but editable colour; a channel can appear in two
+groups and is visible in both; all configured channels start from one action.
+Starting again after a Stop retains the preceding chat history and appends new
+segments to it.
 
 ### P8 — Levels & stream health — **Partial**
 
-Today: one level meter (RMS and peak, computed in Rust) plus the per-stream
-overrun count from P2.
+Today: one level meter (RMS and peak, computed in Rust), the per-stream
+overrun count from P2, and the per-stream count of segments the decode queue
+had to give up on (P5). The two counts are deliberately separate: one is audio
+lost on the way *into* the pipeline, the other is audio that was captured
+cleanly and then could not be kept up with, and they call for different fixes.
 
-**Outstanding:** peak hold, silence indicator, clipping warning, overload
-indicator from P5, worker queue depth, and a global status bar with active
-workers, queue length and throughput.
+**Outstanding:** peak hold, silence indicator, clipping warning, worker queue
+depth, and a global status bar with active workers, queue length and
+throughput. `WorkerPool` already exposes `workers()` and `queue_depth()` for
+it.
 
 **Accepted when:** a deliberately clipped channel and a silent one are both
 immediately recognisable in the UI.
@@ -369,12 +430,16 @@ download to the first transcription; a tampered file is rejected by checksum.
 
 Persistent settings: worker count, model choice, VAD thresholds, maximum
 segment length, hysteresis parameters from P3b, theme. Session presets: a named
-channel mapping including labels, language configuration and assigned
-vocabulary — an engineer does not want to remap eight channels before every
-show. Device recognition via a stable id, not the display name.
+channel mapping including labels, colours, language configuration and assigned
+vocabulary, plus named groups and their channel memberships — an engineer does
+not want to remap eight channels or rebuild their working views before every
+show. Channel colours are automatically assigned from a deterministic palette
+when no saved choice exists, then persist as explicit user-editable values.
+The Settings page is the home for this configuration. Device recognition via a
+stable id, not the display name.
 
-**Accepted when:** a preset survives a restart and a reconnect of the
-interface.
+**Accepted when:** a preset, including channel colours and non-exclusive group
+memberships, survives a restart and a reconnect of the interface.
 
 **Candidates already identified as needing to be settings:** the segmenter's
 `silence_timeout` (it is a *latency* parameter, not only a quality one — it is
@@ -462,7 +527,8 @@ P0 Scaffolding
 ```
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. One channel, text
-in the log. *Reached ahead of P5 by the vertical slice, with one worker.*
+in the log. *Reached, including the pool — what P5 still owes is a load test
+that cannot be run until several streams exist to load it with.*
 
 **Milestone B (usable MVP):** + P3, P6, P7, P11, P12. Eight channels, chat UI,
 model download.
@@ -476,20 +542,21 @@ P3b, P8, P9, P10, P13.
 
 In this order, with the reason each one comes where it does.
 
-1. **P5 — worker pool and backpressure.** The measured latency holds on one
-   stream. Eight streams through one worker will not hold it, and every number
-   in measurements.md §8 has to be re-measured against the queue. This is also
-   where the 2-in-11 segments that cost a decode and are then discarded start
-   to matter.
-2. **P3 — move Silero in front of the segmenter.** Saves those decodes
-   entirely, and replaces the energy detector that will not survive a real
-   intercom feed.
-3. **P6 → P7** — generated shared types, bundled level events, several streams
-   with a virtualised list.
+1. **P3 — move Silero in front of the segmenter.** Now the first thing worth
+   doing: the pool made every wasted decode a decode a real segment could have
+   had, and 2 of 11 segments in a live session were decoded only to be thrown
+   away by the text filter. It also replaces the energy detector, which will
+   not survive a real intercom feed.
+2. **P6 → P7** — generated shared types, bundled level events, several streams
+   with a virtualised list. The pool is already indifferent to the stream
+   count, so this is what finally puts more than one stream behind it.
+3. **P14 reference load test** — the numbers in measurements.md §8 were all
+   taken on one stream through one worker and none of them has been re-measured
+   against the queue. Possible only once step 2 exists.
 4. **P11 → P12** — model download and persisted presets, which together make
    the app usable by someone who is not holding a terminal.
-5. **P14 fixture set → P15** — develop vocabulary against a measurable
-   baseline, not by feel.
+5. **P15** — develop vocabulary against the measurable baseline from step 3,
+   not by feel.
 
 ---
 

@@ -1,38 +1,39 @@
-//! One channel, end to end: microphone → ring → 16 kHz → segments → sidecar →
+//! One channel, end to end: microphone → ring → 16 kHz → segments → pool →
 //! chat.
 //!
-//! This is the narrow vertical slice, not the MVP. It runs a **single** stream
-//! through a **single** worker so that the real end-to-end latency becomes
-//! measurable before P3, P5 and P6 are built out separately. Everything it
-//! does provisionally is marked as such.
+//! Still a **single** stream: the multichannel session is P6/P7. What is no
+//! longer provisional is everything behind the segmenter — segments go into
+//! the queue in [`crate::pool`], which is already indifferent to how many
+//! streams feed it.
 //!
 //! # Threads
-//!
-//! Three, each with a reason:
 //!
 //! - the **capture thread** inside `audio-core`, because `cpal::Stream` is
 //!   `!Send` on macOS;
 //! - the **processing thread**, which drains the ring, resamples and segments;
-//! - the **decode thread**, which talks to the sidecar.
+//! - the pool's **decode threads**, one per sidecar, plus its watchdog;
+//! - the **aggregator thread**, which puts results back in order and turns
+//!   them into events.
 //!
-//! The last split matters: a decode takes hundreds of milliseconds, and if the
-//! processing thread waited for it, the ring would overflow and audio would be
-//! lost while the app was busy transcribing the audio before it.
+//! The split between processing and decoding matters: a decode takes hundreds
+//! of milliseconds, and if the processing thread waited for one, the ring
+//! would overflow and audio would be lost while the app was busy transcribing
+//! the audio before it. That is also why [`WorkerPool::submit`] never blocks.
 
-use crate::worker::Worker;
+use crate::pool::{Completed, Outcome, PoolConfig, PoolEvent, Reorder, WorkerPool};
 use anyhow::{bail, Context, Result};
 use audio_core::{
     ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, ChannelAssignment,
-    ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segment, Segmenter,
-    SegmenterConfig, StreamId, StreamProcessor, SAMPLE_RATE,
+    ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segmenter, SegmenterConfig,
+    StreamId, StreamProcessor, SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use whisper_protocol::Response;
 
 /// How long the ring holds audio before the processing thread has to have
 /// drained it. Four seconds is generous for one stream; it is the buffer that
@@ -57,8 +58,10 @@ const LEVEL_HZ: u32 = 20;
 /// whisper.cpp's own default for the same threshold.
 ///
 /// Note where the cost falls: the segment is decoded first and discarded
-/// afterwards, so this buys correctness, not time. Not spending the decode at
-/// all needs a VAD that models speech rather than loudness, which is P3.
+/// afterwards, so this buys correctness, not time — and under load it is a
+/// decode that a real segment could have had. Not spending it at all needs a
+/// VAD that models speech rather than loudness in front of the segmenter,
+/// which is P3.
 const NO_SPEECH_THRESHOLD: f32 = 0.6;
 
 /// What the UI sends to start a session.
@@ -109,6 +112,23 @@ pub struct LevelEvent {
     pub dropped: u64,
 }
 
+/// A segment that was thrown away before it could be decoded.
+///
+/// The pool drops the stalest segment when its queue is full, and an operator
+/// who spoke and saw no text has to be able to tell that from a channel that
+/// was not listening. Silent loss is explicitly forbidden, so this event is
+/// the other half of that policy.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverloadEvent {
+    pub stream_id: u16,
+    /// Sequence number of the segment that was dropped.
+    pub seq: u64,
+    /// Cumulative count for this stream, so the UI can show a total rather
+    /// than only the latest incident.
+    pub dropped: u64,
+}
+
 /// Lifecycle of the session, as the UI needs to render it.
 #[derive(Debug, Clone, Serialize)]
 // `rename_all` covers the variant names, `rename_all_fields` their contents —
@@ -140,6 +160,7 @@ pub enum SessionState {
 pub trait EventSink: Send + Sync + 'static {
     fn transcript(&self, event: TranscriptEvent);
     fn level(&self, event: LevelEvent);
+    fn overload(&self, event: OverloadEvent);
     fn state(&self, event: SessionState);
 }
 
@@ -148,7 +169,9 @@ pub struct Session {
     stop: Arc<AtomicBool>,
     capture: Option<Box<dyn CaptureSession>>,
     processing: Option<JoinHandle<()>>,
-    decoding: Option<JoinHandle<()>>,
+    aggregating: Option<JoinHandle<()>>,
+    /// Shared with the processing thread, which submits into it.
+    pool: Arc<WorkerPool>,
     pub sample_rate: u32,
 }
 
@@ -194,9 +217,10 @@ impl Session {
                  run `just vad-model`"
             );
         }
-        let worker = Worker::spawn(&binary, &model, vad_model.as_deref(), 4)
+        let (pool, results) = WorkerPool::spawn(PoolConfig::new(binary, model, vad_model))
             .context("starting the sidecar")?;
-        let ready = worker.ready().clone();
+        let pool = Arc::new(pool);
+        let ready = pool.ready().clone();
 
         let rate = info.default_sample_rate;
         let (sink, source) = ring::channel(rate, RING_SECONDS);
@@ -240,13 +264,11 @@ impl Session {
         );
 
         let stop = Arc::new(AtomicBool::new(false));
-        let (segment_tx, segment_rx) = mpsc::channel::<(Segment, Instant)>();
-
-        let decoding = spawn_decoder(worker, segment_rx, config.label.clone(), events.clone());
+        let aggregating = spawn_aggregator(results, config.label.clone(), events.clone());
         let processing = spawn_processor(
             processor,
             segmenter,
-            segment_tx,
+            pool.clone(),
             capture_event_rx,
             stop.clone(),
             events.clone(),
@@ -258,6 +280,7 @@ impl Session {
             sample_rate = granted,
             language = %config.language,
             prompt = config.initial_prompt.is_some(),
+            workers = pool.workers(),
             "session running"
         );
 
@@ -275,16 +298,15 @@ impl Session {
                 stop,
                 capture: Some(capture),
                 processing: Some(processing),
-                decoding: Some(decoding),
+                aggregating: Some(aggregating),
+                pool,
                 sample_rate: granted,
             },
             state,
         ))
     }
 
-    /// Stops in the order the data flows, so nothing is left half-processed:
-    /// capture first, then the processing thread flushes its last segment, and
-    /// only once the channel is closed does the decoder shut the sidecar down.
+    /// Stops in the order the data flows, so nothing is left half-processed.
     pub fn stop(mut self) {
         self.shutdown();
     }
@@ -296,10 +318,16 @@ impl Session {
                 tracing::warn!(error = %err, "stopping the capture");
             }
         }
+        // The processing thread flushes whatever was still being spoken into
+        // the queue as it leaves, so the pool must outlive it.
         if let Some(handle) = self.processing.take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self.decoding.take() {
+        self.pool.shutdown();
+        // Only once the pool has closed its results channel does the
+        // aggregator release what it was still holding back and report the
+        // session as stopped.
+        if let Some(handle) = self.aggregating.take() {
             let _ = handle.join();
         }
     }
@@ -314,7 +342,7 @@ impl Drop for Session {
 fn spawn_processor(
     mut processor: StreamProcessor,
     mut segmenter: Segmenter,
-    segments: mpsc::Sender<(Segment, Instant)>,
+    pool: Arc<WorkerPool>,
     capture_events: mpsc::Receiver<CaptureEvent>,
     stop: Arc<AtomicBool>,
     events: Arc<dyn EventSink>,
@@ -354,9 +382,7 @@ fn spawn_processor(
 
                 window.extend_from_slice(&buffer);
                 for segment in segmenter.push(&buffer) {
-                    if segments.send((segment, Instant::now())).is_err() {
-                        return;
-                    }
+                    pool.submit(segment, Instant::now());
                 }
 
                 if last_level.elapsed() >= level_interval {
@@ -375,7 +401,7 @@ fn spawn_processor(
 
             // Whatever was still being spoken when stop was pressed.
             if let Some(segment) = segmenter.finish() {
-                let _ = segments.send((segment, Instant::now()));
+                pool.submit(segment, Instant::now());
             }
         })
         .expect("spawning the processing thread")
@@ -406,90 +432,142 @@ pub fn discard_reason(text: &str, no_speech_probability: f32) -> Option<&'static
     None
 }
 
-fn spawn_decoder(
-    mut worker: Worker,
-    segments: mpsc::Receiver<(Segment, Instant)>,
+/// Turns pool results into UI events.
+///
+/// Two jobs the single worker did not have. It puts results back in order —
+/// several workers decode at once and a short segment overtakes a long one,
+/// and a chat log read out of order is actively misleading. And it owns the
+/// end of the session: the pool closing its results channel is what tells the
+/// UI that everything spoken has been accounted for.
+fn spawn_aggregator(
+    results: Receiver<PoolEvent>,
     label: String,
     events: Arc<dyn EventSink>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
-        .name("decode".into())
+        .name("aggregate".into())
         .spawn(move || {
-            for (segment, closed_at) in segments {
-                match worker.transcribe(&segment) {
-                    Ok(Response::Transcript {
-                        stream_id,
-                        seq,
-                        text,
-                        detected_language,
-                        no_speech_probability,
-                        decode_ms,
-                        ..
-                    }) => {
-                        // Three ways a segment turns out not to be speech, all
-                        // logged rather than dropped quietly: the operator has
-                        // to be able to find out why nothing appeared.
-                        if let Some(reason) = discard_reason(&text, no_speech_probability) {
-                            tracing::info!(
-                                stream_id,
-                                seq,
-                                decode_ms,
-                                no_speech_probability,
-                                reason,
-                                "not speech, dropped"
-                            );
-                            continue;
+            let mut reorder = Reorder::new();
+            let mut dropped: HashMap<u16, u64> = HashMap::new();
+            let mut fatal: Option<String> = None;
+
+            for event in results {
+                match event {
+                    PoolEvent::Completed(completed) => {
+                        for ready in reorder.accept(completed) {
+                            emit(&events, &label, ready, &mut dropped);
                         }
-
-                        let latency_ms = closed_at.elapsed().as_millis() as u32;
-                        // Length and timings, not the words: this is an
-                        // operator's intercom traffic, and a terminal log is
-                        // not where it belongs by default. The text itself
-                        // sits one level lower, for when a run has to be
-                        // debugged deliberately.
-                        tracing::info!(
-                            stream_id,
-                            seq,
-                            decode_ms,
-                            latency_ms,
-                            chars = text.chars().count(),
-                            "transcript"
-                        );
-                        tracing::debug!(stream_id, seq, text = %text, "transcript text");
-
-                        events.transcript(TranscriptEvent {
-                            stream_id,
-                            seq,
-                            label: label.clone(),
-                            t_start_ms: segment.t_start.as_millis() as u64,
-                            t_end_ms: segment.t_end.as_millis() as u64,
-                            text,
-                            detected_language,
-                            decode_ms,
-                            latency_ms,
-                        });
                     }
-                    Ok(Response::Error { message, .. }) => {
-                        tracing::warn!(seq = segment.seq, message, "sidecar rejected a segment");
+                    // Not a session error: the pool healed itself, and the
+                    // segment that was in flight has already been retried or
+                    // reported. Worth a line because it is the only thing that
+                    // explains a gap in an otherwise healthy transcript.
+                    PoolEvent::WorkerRestarted { worker, reason } => {
+                        tracing::warn!(worker, reason, "a sidecar was replaced");
                     }
-                    Ok(other) => {
-                        tracing::warn!("unexpected response: {other:?}");
-                    }
-                    // Without a pool there is nothing to respawn into, so the
-                    // session ends. P5 turns this into a restart.
-                    Err(err) => {
-                        events.state(SessionState::Failed {
-                            message: format!("sidecar lost: {err}"),
-                        });
-                        return;
-                    }
+                    // Remembered rather than reported straight away: results
+                    // from the workers that are still finishing belong in the
+                    // chat before the message saying it is over.
+                    PoolEvent::Exhausted { message } => fatal = Some(message),
                 }
             }
 
-            worker.shutdown();
-            events.state(SessionState::Stopped);
+            // The pool is finished, so a segment still missing is never going
+            // to arrive. Holding its successors back now would lose the last
+            // words spoken rather than the one segment that went astray.
+            for ready in reorder.drain() {
+                emit(&events, &label, ready, &mut dropped);
+            }
+
+            match fatal {
+                Some(message) => events.state(SessionState::Failed { message }),
+                None => events.state(SessionState::Stopped),
+            }
         })
-        .expect("spawning the decode thread")
+        .expect("spawning the aggregator thread")
+}
+
+fn emit(
+    events: &Arc<dyn EventSink>,
+    label: &str,
+    completed: Completed,
+    dropped: &mut HashMap<u16, u64>,
+) {
+    let Completed {
+        stream_id,
+        seq,
+        t_start,
+        t_end,
+        closed_at,
+        outcome,
+    } = completed;
+    let stream_id = stream_id.0;
+
+    match outcome {
+        Outcome::Text {
+            text,
+            detected_language,
+            no_speech_probability,
+            decode_ms,
+        } => {
+            // Three ways a segment turns out not to be speech, all logged
+            // rather than dropped quietly: the operator has to be able to find
+            // out why nothing appeared.
+            if let Some(reason) = discard_reason(&text, no_speech_probability) {
+                tracing::info!(
+                    stream_id,
+                    seq,
+                    decode_ms,
+                    no_speech_probability,
+                    reason,
+                    "not speech, dropped"
+                );
+                return;
+            }
+
+            let latency_ms = closed_at.elapsed().as_millis() as u32;
+            // Length and timings, not the words: this is an operator's
+            // intercom traffic, and a terminal log is not where it belongs by
+            // default. The text itself sits one level lower, for when a run
+            // has to be debugged deliberately.
+            tracing::info!(
+                stream_id,
+                seq,
+                decode_ms,
+                latency_ms,
+                chars = text.chars().count(),
+                "transcript"
+            );
+            tracing::debug!(stream_id, seq, text = %text, "transcript text");
+
+            events.transcript(TranscriptEvent {
+                stream_id,
+                seq,
+                label: label.to_string(),
+                t_start_ms: t_start.as_millis() as u64,
+                t_end_ms: t_end.as_millis() as u64,
+                text,
+                detected_language,
+                decode_ms,
+                latency_ms,
+            });
+        }
+        // One segment lost, the session intact — a sidecar that rejected it,
+        // or a worker that died with it twice over.
+        Outcome::Failed(message) => {
+            tracing::warn!(stream_id, seq, message, "a segment was lost");
+        }
+        Outcome::Overloaded => {
+            let total = dropped.entry(stream_id).or_default();
+            *total += 1;
+            tracing::warn!(stream_id, seq, total, "segment dropped, queue full");
+            events.overload(OverloadEvent {
+                stream_id,
+                seq,
+                dropped: *total,
+            });
+        }
+    }
 }
 
 /// Everything the device picker needs.
@@ -519,6 +597,158 @@ pub fn list_devices() -> Result<Vec<DeviceOption>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use audio_core::StreamId;
+    use std::sync::Mutex;
+
+    /// Collects what the UI would have been shown.
+    #[derive(Default)]
+    struct Recorder {
+        transcripts: Mutex<Vec<TranscriptEvent>>,
+        overloads: Mutex<Vec<OverloadEvent>>,
+        states: Mutex<Vec<SessionState>>,
+    }
+
+    impl EventSink for Recorder {
+        fn transcript(&self, event: TranscriptEvent) {
+            self.transcripts.lock().unwrap().push(event);
+        }
+        fn level(&self, _: LevelEvent) {}
+        fn overload(&self, event: OverloadEvent) {
+            self.overloads.lock().unwrap().push(event);
+        }
+        fn state(&self, event: SessionState) {
+            self.states.lock().unwrap().push(event);
+        }
+    }
+
+    fn completed(seq: u64, outcome: Outcome) -> PoolEvent {
+        PoolEvent::Completed(Completed {
+            stream_id: StreamId(0),
+            seq,
+            t_start: Duration::from_millis(seq * 500),
+            t_end: Duration::from_millis(seq * 500 + 500),
+            closed_at: Instant::now(),
+            outcome,
+        })
+    }
+
+    fn spoken(seq: u64, text: &str) -> PoolEvent {
+        completed(
+            seq,
+            Outcome::Text {
+                text: text.into(),
+                detected_language: Some("de".into()),
+                no_speech_probability: 0.01,
+                decode_ms: 320,
+            },
+        )
+    }
+
+    /// Runs the aggregator over a fixed sequence of pool events and returns
+    /// everything the UI saw.
+    fn aggregate(events: Vec<PoolEvent>) -> Arc<Recorder> {
+        let recorder = Arc::new(Recorder::default());
+        let sink: Arc<dyn EventSink> = recorder.clone();
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_aggregator(rx, "Regie".into(), sink);
+        for event in events {
+            tx.send(event).unwrap();
+        }
+        drop(tx);
+        handle.join().unwrap();
+        recorder
+    }
+
+    #[test]
+    fn transcripts_reach_the_chat_in_order_however_the_workers_finished() {
+        // Several workers decode at once and a short segment overtakes a long
+        // one. Read out of order a chat log is not merely untidy, it says
+        // something different from what was said.
+        let recorder = aggregate(vec![
+            spoken(2, "drei"),
+            spoken(0, "eins"),
+            spoken(1, "zwei"),
+        ]);
+
+        let seen: Vec<String> = recorder
+            .transcripts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| t.text.clone())
+            .collect();
+        assert_eq!(seen, ["eins", "zwei", "drei"]);
+    }
+
+    #[test]
+    fn a_dropped_segment_does_not_hold_back_the_words_after_it() {
+        // The reason the pool reports segments it gave up on rather than
+        // staying quiet about them: the ones behind it would never appear.
+        let recorder = aggregate(vec![
+            spoken(1, "zwei"),
+            completed(0, Outcome::Overloaded),
+            spoken(2, "drei"),
+        ]);
+
+        let texts: Vec<String> = recorder
+            .transcripts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| t.text.clone())
+            .collect();
+        assert_eq!(texts, ["zwei", "drei"]);
+
+        // And the loss itself is visible, not just absent.
+        let overloads = recorder.overloads.lock().unwrap();
+        assert_eq!(overloads.len(), 1);
+        assert_eq!(overloads[0].seq, 0);
+        assert_eq!(overloads[0].dropped, 1);
+    }
+
+    #[test]
+    fn the_last_words_survive_a_segment_that_never_came_back() {
+        // At shutdown the missing predecessor is never going to arrive.
+        // Holding its successors back would lose the end of the session.
+        let recorder = aggregate(vec![spoken(1, "zwei"), spoken(2, "drei")]);
+        assert_eq!(recorder.transcripts.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn non_speech_is_filtered_on_the_way_to_the_chat() {
+        let recorder = aggregate(vec![
+            spoken(0, "[BREAK]"),
+            spoken(1, "Standby für Cue fünf"),
+        ]);
+        let texts = recorder.transcripts.lock().unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].text, "Standby für Cue fünf");
+    }
+
+    #[test]
+    fn a_clean_run_ends_as_stopped_and_an_exhausted_pool_as_failed() {
+        // The UI has to tell "you pressed Stop" from "there is nothing left to
+        // transcribe with", and both arrive the same way.
+        let clean = aggregate(vec![spoken(0, "eins")]);
+        assert!(matches!(
+            clean.states.lock().unwrap().as_slice(),
+            [SessionState::Stopped]
+        ));
+
+        let broken = aggregate(vec![
+            spoken(0, "eins"),
+            PoolEvent::Exhausted {
+                message: "no sidecar could be restarted".into(),
+            },
+        ]);
+        // The transcript still gets through: results already in flight belong
+        // in the chat before the message saying it is over.
+        assert_eq!(broken.transcripts.lock().unwrap().len(), 1);
+        assert!(matches!(
+            broken.states.lock().unwrap().as_slice(),
+            [SessionState::Failed { .. }]
+        ));
+    }
 
     #[test]
     fn the_transcript_event_matches_what_the_ui_reads() {

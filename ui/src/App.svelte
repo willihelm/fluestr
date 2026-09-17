@@ -4,6 +4,7 @@
   import {
     listDevices,
     onLevel,
+    onOverload,
     onSessionState,
     onTranscript,
     startSession,
@@ -36,6 +37,10 @@
   });
   let messages = $state<TranscriptEvent[]>([]);
   let level = $state<LevelEvent>({ streamId: 0, rms: 0, peak: 0, dropped: 0 });
+  // Segments the decode queue had to give up on. Shown rather than only
+  // logged: an operator who spoke and saw no text needs to be able to tell
+  // "the app fell behind" from "the channel was not listening".
+  let overloaded = $state(0);
 
   let running = $derived(status.state === "running");
   let busy = $derived(status.state === "starting");
@@ -56,6 +61,7 @@
         messages = [...messages, event];
       }),
       onLevel((event) => (level = event)),
+      onOverload((event) => (overloaded = event.dropped)),
       onSessionState((event) => (status = event)),
     ];
 
@@ -102,6 +108,7 @@
     await stopSession();
     status = { state: "idle" };
     level = { streamId: 0, rms: 0, peak: 0, dropped: 0 };
+    overloaded = 0;
   };
 </script>
 
@@ -172,6 +179,11 @@
         {(status.loadMs / 1000).toFixed(1)} s
       </span>
       <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
+      {#if overloaded > 0}
+        <span class="error" title="The decode queue was full and the oldest segments were dropped">
+          {overloaded} not transcribed
+        </span>
+      {/if}
     {:else if status.state === "starting"}
       <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
     {:else if status.state === "failed"}
