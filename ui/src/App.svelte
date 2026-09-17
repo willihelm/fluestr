@@ -20,7 +20,10 @@
 
   let devices = $state<DeviceOption[]>([]);
   let device = $state("");
-  let channel = $state(0);
+  // Counted from 1, the way channels are numbered on an interface and in a
+  // patch list. The backend stays zero-based because that is what the audio
+  // API uses; the conversion happens at this boundary and nowhere else.
+  let channelNumber = $state(1);
   let label = $state("Regie");
   let language = $state("de");
   // The vocabulary prompt is the single strongest lever on code-switching
@@ -73,13 +76,19 @@
 
   const start = async () => {
     messages = [];
+    // Keep the number inside what the device offers. The backend rejects an
+    // out-of-range channel with a precise message, but that message counts
+    // from zero and would contradict the field the operator just typed into.
+    const channels = selected?.channels ?? 1;
+    channelNumber = Math.min(Math.max(1, Math.round(channelNumber)), channels);
+
     // The model load happens inside `start_session` and can take seconds on a
     // machine's first ever start — the UI has to say so rather than look hung.
     status = { state: "starting" };
     try {
       status = await startSession({
         device,
-        channel,
+        channel: channelNumber - 1,
         label,
         language,
         initialPrompt: prompt.trim() === "" ? null : prompt,
@@ -115,9 +124,9 @@
       Channel
       <input
         type="number"
-        min="0"
-        max={(selected?.channels ?? 1) - 1}
-        bind:value={channel}
+        min="1"
+        max={selected?.channels ?? 1}
+        bind:value={channelNumber}
         disabled={running || busy}
       />
     </label>
@@ -158,7 +167,7 @@
     {#if status.state === "running"}
       <span class="ok">●</span>
       <span>
-        {status.device} · channel {status.channel} · {status.sampleRate} Hz ·
+        {status.device} · channel {status.channel + 1} · {status.sampleRate} Hz ·
         {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
         {(status.loadMs / 1000).toFixed(1)} s
       </span>

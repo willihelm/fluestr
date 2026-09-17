@@ -121,13 +121,14 @@ fn main() -> Result<()> {
                     initial_prompt.as_deref(),
                     args.threads,
                 ) {
-                    Ok((text, detected, decode_ms)) => Response::Transcript {
+                    Ok(decoded) => Response::Transcript {
                         stream_id,
                         seq,
-                        text,
-                        detected_language: detected,
+                        text: decoded.text,
+                        detected_language: decoded.detected_language,
                         language_probabilities: None, // P3b
-                        decode_ms,
+                        no_speech_probability: decoded.no_speech_probability,
+                        decode_ms: decoded.decode_ms,
                     },
                     // A failed segment must not take the worker down — the app
                     // needs the attribution in order to drop it.
@@ -168,7 +169,7 @@ fn transcribe(
     language_mode: &LanguageMode,
     initial_prompt: Option<&str>,
     threads: usize,
-) -> Result<(String, Option<String>, u32)> {
+) -> Result<Decoded> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(threads as i32);
 
@@ -186,6 +187,14 @@ fn transcribe(
     // Never translate: silent translation is the most dangerous failure mode
     // because the output looks plausible.
     params.set_translate(false);
+
+    // No sound-event annotations. An intercom channel is silent or carries
+    // only room noise for long stretches, and whisper's habit of captioning
+    // that as "[BREAK]", "(music)" or "(Bell)" fills the chat with entries
+    // that are not communication. The operator wants what was *said*.
+    params.set_suppress_nst(true);
+    // Nothing at all rather than an invented blank line.
+    params.set_suppress_blank(true);
 
     // One stream's context must not contaminate another — the state is shared
     // per worker, the streams are not.
@@ -211,17 +220,35 @@ fn transcribe(
     let decode_ms = t0.elapsed().as_millis() as u32;
 
     let mut text = String::new();
+    // Highest across the segments rather than an average: with
+    // `single_segment` there is normally just one, and if there ever is more
+    // than one, the most doubtful of them is what should be reported.
+    let mut no_speech: f32 = 0.0;
     for i in 0..state.full_n_segments() {
         if let Some(segment) = state.get_segment(i) {
             if let Ok(s) = segment.to_str_lossy() {
                 text.push_str(&s);
             }
+            no_speech = no_speech.max(segment.no_speech_probability());
         }
     }
 
     let detected = whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_string);
 
-    Ok((text.trim().to_string(), detected, decode_ms))
+    Ok(Decoded {
+        text: text.trim().to_string(),
+        detected_language: detected,
+        no_speech_probability: no_speech,
+        decode_ms,
+    })
+}
+
+/// What one decode produced.
+struct Decoded {
+    text: String,
+    detected_language: Option<String>,
+    no_speech_probability: f32,
+    decode_ms: u32,
 }
 
 #[cfg(test)]

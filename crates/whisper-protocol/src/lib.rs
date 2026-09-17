@@ -67,6 +67,16 @@ pub enum Response {
         /// Only populated in auto mode — the basis for the language
         /// stabiliser (P3b).
         language_probabilities: Option<Vec<(String, f32)>>,
+        /// whisper.cpp's own estimate that the audio contained no speech.
+        ///
+        /// The only component in the chain that actually models the
+        /// difference between speech and other sound: a bell, a burst of
+        /// music or room noise all score high here while an energy-based VAD
+        /// cannot tell them from a spoken word. `default` because an older
+        /// sidecar will not send it, and 0.0 then means "no opinion" rather
+        /// than "definitely speech" being fabricated.
+        #[serde(default)]
+        no_speech_probability: f32,
         decode_ms: u32,
     },
     Languages {
@@ -294,6 +304,7 @@ mod tests {
             text: "Standby für Cue fünf".into(),
             detected_language: Some("de".into()),
             language_probabilities: None,
+            no_speech_probability: 0.02,
             decode_ms: 412,
         };
         let mut buf = Vec::new();

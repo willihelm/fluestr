@@ -278,6 +278,47 @@ re-measured against.
 laptop microphone in a quiet room — the easiest possible case, and an upper
 bound rather than a promise.
 
+### Whisper captions sound, not just speech
+
+The same run filled the chat with entries that were not communication:
+
+```
+0:09  [BREAK]
+0:12  [BREAK]
+0:14  (music)
+0:20  (Bell)
+```
+
+An intercom channel is silent or carries only room noise for long stretches,
+and whisper annotates what it hears rather than staying quiet. The energy VAD
+opened segments for a bell and for background sound because it measures
+loudness, and loudness is all it can measure.
+
+**Three layers, in the order they take effect:**
+
+1. **`suppress_nst`** in the sidecar — whisper is told not to emit sound-event
+   tokens at all. Together with `suppress_blank` this removes the ordinary
+   case.
+2. **`no_speech_probability`** per segment, now carried in the protocol. This
+   is the only value in the whole chain that comes from something which
+   actually models the difference between speech and other sound. Segments
+   above 0.6 (whisper.cpp's own default) are dropped. It also catches the
+   dangerous case the text filter cannot: plausible words hallucinated over
+   silence, which look entirely fine in the chat.
+3. **`is_only_non_speech`** on the text — the backstop for what still gets
+   through. Fails *safe*: unbalanced delimiters mean "keep it", because a
+   stray `(music` is a much smaller harm than silently swallowing a sentence
+   that happened to contain a bracket.
+
+Every rejection is logged with its reason. An operator who spoke and saw no
+text has to be able to find out which layer fired — silent loss is the one
+failure this project does not accept.
+
+**Where the cost falls:** the segment is decoded and *then* discarded, so this
+buys correctness, not time. Not spending the decode at all needs a VAD that
+models speech rather than loudness — the Silero VAD that ships with whisper-rs
+(see below), which is P3.
+
 ### What the slice does provisionally
 
 Marked as such in the code, listed here so none of it is mistaken for a

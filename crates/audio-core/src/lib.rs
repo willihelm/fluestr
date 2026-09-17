@@ -21,7 +21,7 @@ pub use device::{AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, Devi
 pub use lang::{LanguageCode, LanguageMode};
 pub use resample::{Resampler, StreamProcessor};
 pub use ring::{RingSink, RingSource, RingStats};
-pub use segment::{Segment, StreamId, Transcript, SAMPLE_RATE};
+pub use segment::{is_only_non_speech, Segment, StreamId, Transcript, SAMPLE_RATE};
 pub use segmenter::{Segmenter, SegmenterConfig};
 pub use vad::{EnergyVad, Vad};
 

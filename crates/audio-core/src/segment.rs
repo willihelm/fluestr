@@ -54,7 +54,57 @@ pub struct Transcript {
     /// Probability vector across all languages, the basis for the language
     /// stabiliser (P3b). Only populated in auto mode.
     pub language_probabilities: Option<Vec<(String, f32)>>,
+    /// whisper.cpp's own estimate that the audio held no speech. See
+    /// [`is_only_non_speech`] for the other half of the same problem.
+    pub no_speech_probability: f32,
     pub decode_ms: u32,
+}
+
+/// True when the text carries no spoken words — only whisper's sound-event
+/// annotations, or nothing at all.
+///
+/// An intercom channel is silent or carries only room noise for long stretches,
+/// and whisper captions that as `[BREAK]`, `(music)` or `(Bell)`. Those are not
+/// communication and must not reach the chat.
+///
+/// The decoder is told not to produce them in the first place
+/// (`suppress_nst`), so this is the second line rather than the first — it
+/// catches what still slips through. Text that merely *contains* an annotation
+/// survives: "Standby (fünf)" is somebody talking.
+pub fn is_only_non_speech(text: &str) -> bool {
+    let mut depth = 0usize;
+    let mut fenced = false;
+    let mut spoken = false;
+    let mut unbalanced = false;
+
+    for ch in text.chars() {
+        match ch {
+            '[' | '(' | '<' | '{' => depth += 1,
+            ']' | ')' | '>' | '}' => {
+                if depth == 0 {
+                    unbalanced = true;
+                } else {
+                    depth -= 1;
+                }
+            }
+            // Musical notes and asterisks fence an annotation without nesting,
+            // so they toggle rather than count.
+            '\u{266a}' | '\u{266b}' | '*' => fenced = !fenced,
+            _ if depth == 0 && !fenced && (ch.is_alphanumeric() || ch == '\'') => spoken = true,
+            _ => {}
+        }
+    }
+
+    // A delimiter left open means the text was cut off, or the bracket was
+    // never an annotation to begin with. Then keep it: showing a stray
+    // "(music" is a far smaller harm than silently dropping a sentence that
+    // happened to contain one bracket, and silent loss is the one failure this
+    // project does not accept.
+    if depth != 0 || fenced || unbalanced {
+        return false;
+    }
+
+    !spoken
 }
 
 #[cfg(test)]
@@ -93,5 +143,57 @@ mod tests {
         let mut seg = segment_with_samples(0);
         seg.t_end = Duration::ZERO;
         assert_eq!(seg.duration(), Duration::ZERO);
+    }
+
+    #[test]
+    fn whispers_sound_annotations_are_recognised_as_non_speech() {
+        // All of these actually appeared in the chat during the first live run
+        // on a quiet channel.
+        for annotation in [
+            "[BREAK]",
+            "(music)",
+            "(Bell)",
+            "[BLANK_AUDIO]",
+            "[Music]",
+            "*coughs*",
+            "\u{266a}\u{266a}",
+            "[ Silence ]",
+            "(applause) [music]",
+            "",
+            "   ",
+            "...",
+            "- ",
+        ] {
+            assert!(
+                is_only_non_speech(annotation),
+                "{annotation:?} should count as non-speech"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_speech_survives_the_filter() {
+        // German on purpose: this is speech data, not code.
+        for spoken in [
+            "Standby für Cue fünf",
+            "Go.",
+            "Nice.",
+            // An annotation next to real words is still somebody talking.
+            "Standby (fünf)",
+            "[BREAK] und jetzt Blackout",
+            "5",
+        ] {
+            assert!(
+                !is_only_non_speech(spoken),
+                "{spoken:?} should count as speech"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unclosed_bracket_does_not_swallow_the_rest() {
+        // A truncated annotation must not make the words after it disappear.
+        assert!(!is_only_non_speech("(music"));
+        assert!(!is_only_non_speech("Blackout)"));
     }
 }

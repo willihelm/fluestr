@@ -48,6 +48,19 @@ const PUMP_INTERVAL: Duration = Duration::from_millis(20);
 /// event at this rate.
 const LEVEL_HZ: u32 = 20;
 
+/// Above this, whisper's own judgement that the audio held no speech is
+/// trusted and the segment is dropped.
+///
+/// An intercom channel is silent or carries only room noise for long stretches,
+/// and an energy VAD cannot tell a bell or a burst of music from a spoken word
+/// — whisper can, and this is where that judgement is applied. 0.6 is
+/// whisper.cpp's own default for the same threshold.
+///
+/// Note where the cost falls: the segment is decoded first and discarded
+/// afterwards, so this buys correctness, not time. Not spending the decode at
+/// all needs a VAD that models speech rather than loudness, which is P3.
+const NO_SPEECH_THRESHOLD: f32 = 0.6;
+
 /// What the UI sends to start a session.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,9 +171,12 @@ impl Session {
         let info = backend.device(&device_id)?;
 
         if config.channel >= info.channels {
+            // Numbered the way the UI shows it. The index is zero-based
+            // because the audio API is, but an error an operator reads has no
+            // business exposing that.
             bail!(
-                "channel {} does not exist on '{}' ({} channels)",
-                config.channel,
+                "channel {} does not exist on '{}' — it has {} channels",
+                config.channel as u32 + 1,
                 info.name,
                 info.channels
             );
@@ -357,6 +373,28 @@ fn spawn_processor(
         .expect("spawning the processing thread")
 }
 
+/// Why a decoded segment does not belong in the chat, or `None` if it does.
+///
+/// Returns the reason rather than a bool so the rejection can be logged.
+/// Nothing here may drop anything quietly: an operator who spoke and saw no
+/// text needs to be able to find out which of these fired.
+fn discard_reason(text: &str, no_speech_probability: f32) -> Option<&'static str> {
+    if text.is_empty() {
+        return Some("empty");
+    }
+    // whisper's own verdict, and the only one in the chain that actually
+    // models the difference between speech and other sound.
+    if no_speech_probability > NO_SPEECH_THRESHOLD {
+        return Some("no speech");
+    }
+    // The decoder is told not to caption sound events at all; this catches
+    // what still gets through.
+    if audio_core::is_only_non_speech(text) {
+        return Some("annotation only");
+    }
+    None
+}
+
 fn spawn_decoder(
     mut worker: Worker,
     segments: mpsc::Receiver<(Segment, Instant)>,
@@ -373,14 +411,22 @@ fn spawn_decoder(
                         seq,
                         text,
                         detected_language,
+                        no_speech_probability,
                         decode_ms,
                         ..
                     }) => {
-                        // Whisper returns an empty string for a segment that
-                        // turned out to be noise. Showing it as an empty bubble
-                        // would be worse than showing nothing.
-                        if text.is_empty() {
-                            tracing::info!(stream_id, seq, decode_ms, "empty transcript, dropped");
+                        // Three ways a segment turns out not to be speech, all
+                        // logged rather than dropped quietly: the operator has
+                        // to be able to find out why nothing appeared.
+                        if let Some(reason) = discard_reason(&text, no_speech_probability) {
+                            tracing::info!(
+                                stream_id,
+                                seq,
+                                decode_ms,
+                                no_speech_probability,
+                                reason,
+                                "not speech, dropped"
+                            );
                             continue;
                         }
 
@@ -506,6 +552,40 @@ mod tests {
         })
         .unwrap();
         assert_eq!(failed["state"], "failed");
+    }
+
+    #[test]
+    fn sound_annotations_never_reach_the_chat() {
+        // Exactly what showed up on a quiet channel during the first live run.
+        assert_eq!(discard_reason("[BREAK]", 0.1), Some("annotation only"));
+        assert_eq!(discard_reason("(music)", 0.1), Some("annotation only"));
+        assert_eq!(discard_reason("(Bell)", 0.1), Some("annotation only"));
+        assert_eq!(discard_reason("", 0.1), Some("empty"));
+    }
+
+    #[test]
+    fn whispers_own_no_speech_verdict_is_trusted() {
+        // Plausible words over silence are the dangerous case: the text looks
+        // fine, so nothing about it gives the operator a reason to doubt it.
+        assert_eq!(discard_reason("Thank you.", 0.95), Some("no speech"));
+        assert_eq!(discard_reason("Thank you.", 0.1), None);
+    }
+
+    #[test]
+    fn speech_is_kept_even_next_to_an_annotation() {
+        // German on purpose: this is speech data, not code.
+        assert_eq!(discard_reason("Standby für Cue fünf", 0.02), None);
+        assert_eq!(discard_reason("Go.", 0.2), None);
+        assert_eq!(discard_reason("[BREAK] dann Blackout", 0.2), None);
+    }
+
+    #[test]
+    fn the_threshold_is_not_accidentally_inverted() {
+        assert_eq!(discard_reason("Go.", NO_SPEECH_THRESHOLD), None);
+        assert_eq!(
+            discard_reason("Go.", NO_SPEECH_THRESHOLD + 0.01),
+            Some("no speech")
+        );
     }
 
     #[test]
