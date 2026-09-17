@@ -10,7 +10,8 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-17, after the multi-stream session.
+**Status of this document:** 2026-09-17, after the Settings page and the
+group sidebar.
 
 ---
 
@@ -58,8 +59,8 @@ named below is missing. **Open** — not started.
 | P3b | Language stabiliser | **Open** | — |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
-| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, group CRUD or `search_session` |
-| P7 | Chat UI | **Partial** | No group sidebar, no Settings page, no virtualisation, no language picker from the sidecar's list |
+| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no persisted group CRUD, no `clear_communication` in the backend, no `search_session` |
+| P7 | Chat UI | **Partial** | No language picker from the sidecar's list; the window is a window, not a jump to an arbitrary position |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Open** | — |
 | P10 | SQLite persistence | **Open** | — |
@@ -67,13 +68,17 @@ named below is missing. **Open** — not started.
 | P12 | Settings & presets | **Open** | Every threshold is a constant in the code |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
-| P15 | Vocabulary & prompt management | **Partial** | Per-channel text boxes, not stored or named; must become one global Settings control |
+| P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, but not stored, not named, and not yet measured against a baseline |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
 detection, the shared worker pool, one colour-coded chat — at a measured
 ~330 ms on one stream from the end of a spoken segment to the text appearing.
-What the eight-channel case still lacks is a measurement of its own: the
+Around it: a Settings page holding the device, the channel map, the one global
+vocabulary and the groups; a chat page with a group sidebar that narrows the
+view to a group's channels; consecutive segments merged into one bubble per
+utterance; and Clear all communication as the only action that empties the
+chat. What the eight-channel case still lacks is a measurement of its own: the
 latency and CPU numbers were all taken with one stream running.
 
 ---
@@ -171,7 +176,10 @@ Cargo workspace with four crates: `app` (Tauri backend), `whisper-worker`
 enters it only through the optional `silero` feature, so the Windows port and
 the crate's own tests never have to build it). Frontend in
 `ui/` with Vite + Svelte + TS, Tauri v2, pnpm, pinned Rust toolchain,
-`justfile`, CI on `macos-14`.
+`justfile`, CI on `macos-14`. The frontend's non-component logic — bubble
+grouping, group membership, the vocabulary prompt — is tested with vitest, run
+by `just check` and by CI alongside the Rust tests: a type checker says the
+shapes line up, not that the rules hold.
 
 **Accepted when:** `just dev` opens a window on Apple Silicon, CI is green. ✔
 
@@ -401,10 +409,21 @@ Two more things worth knowing, both in the code:
   lives; persistence needs one that survives a restart, and that belongs with
   P10.
 
+**Vocabulary is session-level, not per stream.** `SessionConfig::vocabulary`
+is handed to every stream's segmenter, and `StreamConfig` no longer carries a
+prompt at all. Putting it in the wire format rather than leaving it to the UI
+to send the same string eight times is what makes "one vocabulary per
+production" a property of the system instead of a convention — a later caller
+cannot half-apply it. The field is `#[serde(default)]`, so a config written
+before it existed still starts a session with no prompt rather than failing.
+
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
 `specta`) instead of hand-written TypeScript; `update_stream_config`, group
 CRUD and channel-to-group assignment commands, `clear_communication` (atomic
-deletion of transcript data only), and `search_session`.
+deletion of transcript data only), and `search_session`. Groups exist in the UI
+and have no backend at all yet — they live as long as the window does, and
+their persistence is P12's. `clear_communication` likewise clears what exists
+today, which is the in-memory chat; the stored half arrives with P10.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
@@ -412,20 +431,36 @@ it belongs with the P14 load test.
 
 ### P7 — Chat UI (Svelte) — **Partial**
 
-Today: a device picker and an editable list of channels — device channel,
-label, language, colour and (currently) a vocabulary prompt per row, added and
-removed freely — one global Start/Stop for all of them, a meter per running stream, and
-one chat carrying every channel's lines with its colour down the left edge and
-its label, timestamp, language badge and measured latency on each. Follow
-behaviour with a "jump to latest" button.
+Today: two pages. **Settings** holds the input device, the editable list of
+channels — device channel, label, language and colour, added and removed
+freely — the one global vocabulary, and the groups with their membership.
+**Chat** holds a group sidebar, a meter per running stream in the selected
+view, and the lines themselves, each with its channel's colour down the left
+edge and its label, timestamp, language badges and measured latency. Follow
+behaviour with a "jump to latest" button. Start/Stop is in the header and
+belongs to neither page: an operator who has to find the right page before they
+can stop capture has already lost.
 
 A bubble is an utterance, not a segment: consecutive segments of the same
 channel are merged into one, up to a silence of 1.5 s between them and ceilings
 on length and duration, and a merged bubble carries every language its parts
 were detected as. Merging only ever appends to the *last* bubble in the list —
 a channel that has meanwhile been interrupted by another one starts a new
-bubble rather than growing upwards, because the list is read as a chronology. Editing the setup is locked while a
-session runs, because the channel map is fixed when capture opens.
+bubble rather than growing upwards, because the list is read as a chronology.
+Editing the channel map is locked while a session runs, because it is fixed
+when capture opens. Group membership is *not* locked: a group is a view, not
+capture configuration, and an operator watching eight channels live is exactly
+who needs to narrow them to three.
+
+**The list renders a window, not the session.** The last 200 bubbles are in the
+DOM; scrolling to the top of them adds a page at a time, with the scroll
+position corrected by the height the new content added so the line being read
+stays put, and returning to the bottom trims the window again. A window rather
+than a virtual scroller with estimated heights: a bubble's height depends on
+how its text wraps, so estimates mean a scrollbar that lies and jumps as they
+are corrected. What it costs is that a point an hour back takes several steps
+to reach — which is what P9's search and its jump into the chat position are
+for, rather than scrolling.
 
 Channels are numbered from 1, the way they are numbered on an interface; the
 backend stays zero-based and the conversion happens at that one boundary.
@@ -435,7 +470,7 @@ change it. The colour is configuration, not decoration: with eight channels
 interleaved in one list it is what makes a line's origin readable at a glance,
 faster than reading eight labels, and it is the same colour on the meter strip.
 
-**Target interaction model.** Channel configuration belongs on the dedicated
+**The interaction model.** Channel configuration belongs on the dedicated
 Settings page, not in the live chat view: input mapping, label, language and
 channel colour are edited there. Vocabulary is likewise managed on Settings,
 but globally: one active vocabulary/prompt applies to all channels and has no
@@ -443,11 +478,18 @@ per-channel assignment. Each channel has a user-editable colour; a deterministic
 palette colour is preselected when the channel is created, with enough contrast
 for labels, badges and level meters.
 
-The chat page has a left sidebar for groups. An operator can create, rename and
-delete groups, and select a group to focus the chat on its member channels.
+The chat page has a left sidebar for groups, and selecting one focuses the
+chat and the meters on its member channels. The sidebar *selects*; groups are
+created, renamed, deleted and filled on the Settings page. It is read during a
+show, when the question is "show me just the stage" and not "let me reorganise
+my groups", and a rename box under the cursor at that moment is a liability.
+
 Groups are non-exclusive views: a channel may belong to any number of groups,
 and removing it from a group never removes the channel itself. The sidebar also
-offers an all-channels view. Starting and stopping is session-wide, through one
+offers an all-channels view, which is what the chat shows when no group is
+selected rather than a group that happens to contain everything. A group with
+no members shows nothing and says so — falling back to showing every channel
+would be a different view than the one that was asked for. Starting and stopping is session-wide, through one
 global Start/Stop control; there is deliberately no per-channel Start button.
 Start leaves the existing chat history visible and appends new transcripts to
 it; neither Start nor Stop clears the list. A global **Clear all
@@ -461,20 +503,23 @@ channel into two views is unusual but not wrong — so it is a warning rather
 than an error. During setup it is nearly always a slip, and the symptom, every
 line appearing twice, does not point at its cause.
 
-**Outstanding:** group sidebar and membership management; **virtualised list**
-— an hour across eight streams is tens of thousands of nodes; Settings page for
-channel setup, which is where the channel list belongs rather than above the
-chat; per-stream language configuration from the sidecar's language list rather
-than a text field; one-click language override.
+**Outstanding:** per-stream language configuration from the sidecar's language
+list rather than a free-text field, and a one-click language override. Beyond
+the MVP line but worth naming: the window can only be walked backwards a page
+at a time, so jumping to an arbitrary position needs P9's search to drive it.
 
 **Accepted when:** eight streams run visibly live; speech that runs on is one
-bubble rather than one per segment ✔; scrolling stays smooth at 10,000 segments; a third language can be chosen without a code change; a
-channel has a preselected but editable colour ✔; a channel can appear in two
-groups and is visible in both; all configured channels start from one action ✔.
-Starting again after a Stop retains the preceding chat history and appends new
-segments to it ✔. Clear all communication requires confirmation, removes every
-displayed and stored transcript, and leaves the channel and group configuration
-intact.
+bubble rather than one per segment ✔; scrolling stays smooth at 10,000
+segments — the DOM is now bounded by construction, but "smooth" is a claim
+about a machine under load and belongs to the P14 test; a third language can be
+chosen without a code change (any ISO code can be typed today; the picker is
+outstanding); a channel has a preselected but editable colour ✔; a channel can
+appear in two groups and is visible in both ✔; all configured channels start
+from one action ✔. Starting again after a Stop retains the preceding chat
+history and appends new segments to it ✔. Clear all communication requires
+confirmation ✔, removes every displayed transcript across all groups and
+sessions ✔ and leaves the channel, group and vocabulary configuration intact ✔;
+removing the *stored* transcripts waits on P10, because there is no store yet.
 
 ### P8 — Levels & stream health — **Partial**
 
@@ -556,6 +601,13 @@ id, not the display name.
 **Accepted when:** a preset, including channel colours and non-exclusive group
 memberships, survives a restart and a reconnect of the interface.
 
+**What P7 has now handed it:** groups, their names and their memberships, the
+active vocabulary, and the channel map with its colours all exist and are all
+lost when the window closes. Membership is keyed on the channel's own key
+rather than on its position, which is the shape that has to survive the
+round trip — a preset that stored positions would silently re-point every group
+the first time a channel was deleted.
+
 **Candidates already identified as needing to be settings:** the segmenter's
 `silence_timeout` (it is a *latency* parameter, not only a quality one — it is
 the time the segmenter must wait before it can know a segment ended), and the
@@ -608,17 +660,26 @@ worse. The numbers are an upper bound, not a promise.
 
 ### P15 — Vocabulary & prompt management — **Partial**
 
-Today: one free-text prompt field per channel in the UI, passed through to the
-sidecar's `initial_prompt`. Its effect is measured — `Q5` becomes `Cue`,
-`Fadeout` becomes `Fade out` (measurements.md §4). This is transitional: it
-must move to Settings and become one global prompt for all channels.
+Today: **one** free-text vocabulary on the Settings page, applied to every
+stream through `SessionConfig::vocabulary` (see P6) and passed to the sidecar
+as `initial_prompt`. Its effect is measured — `Q5` becomes `Cue`, `Fadeout`
+becomes `Fade out` (measurements.md §4). The box shows an estimated token count
+against whisper's 224-token window and warns twice over: that an over-long
+prompt loses the terms typed *first*, and that length itself makes
+hallucination on quiet channels more likely, because whisper treats the prompt
+as context it may continue.
 
-**Outstanding:** global named vocabulary lists stored in SQLite, with exactly
-one active list (or assembled global prompt) used for every stream; a Settings
-UI rather than channel controls; assembly into the prompt with **whisper's ~224
-token limit** handled by sensible shortening rather than silent truncation,
-with the UI showing the usage; a warning that over-long or unsuitable prompts
-encourage hallucination; a shipped starter list.
+The estimate is four characters to the token, which is a heuristic and not
+whisper's tokeniser — German compounds and technical terms split worse than
+average, so it reads low exactly where this list is densest. Hence the warning
+at 80 % rather than at the limit, and hence `estimated` in the name of
+everything that carries it.
+
+**Outstanding:** named vocabulary lists stored in SQLite with exactly one
+active, a shipped starter list, and shortening that is deliberate rather than
+whisper's silent truncation. And the measurement: the point of a global list is
+that its effect is visible on *every* channel, which needs the P14 fixture set
+to show.
 
 **Accepted when:** on the P14 fixture set the enabled global vocabulary list
 measurably improves the word error rate of the technical terms against the
@@ -654,9 +715,10 @@ in the log. *Reached, including the pool — what P5 still owes is a load test o
 live audio.*
 
 **Milestone B (usable MVP):** + P6, P7, P11, P12. Eight channels, chat UI,
-model download. *P3 is done, and eight channels now run: what is left is the
-model download, the saved presets, and the parts of the chat view (group
-sidebar, Settings page, virtualisation) that eight channels make necessary.*
+model download. *P3 is done, eight channels run, and the chat view the eight
+make necessary — Settings page, group sidebar, bounded list — is in place. What
+is left is the model download and the saved presets: everything configured on
+the Settings page currently dies with the window.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P3b, P8, P9, P10, P13.
@@ -672,19 +734,23 @@ In this order, with the reason each one comes where it does.
    detection is arithmetic, not a measurement, and the queue has only been put
    under contention by synthetic segments. Eight channels now run, so this is
    finally possible — and it comes first because every number the remaining
-   decisions rest on is currently a single-stream number.
-2. **P7, the rest** — group sidebar, Settings page, virtualised list. The
-   virtualisation in particular is load-dependent: an hour across eight streams
-   is tens of thousands of nodes, and step 1 is what says how fast they
-   actually arrive.
-3. **P11 → P12** — model download and persisted presets, which together make
-   the app usable by someone who is not holding a terminal. Eight channels make
-   presets stop being a convenience: nobody remaps eight channels, their
-   labels, colours and languages before every show. P12 also takes the
-   constants P3 still owns: the Silero threshold, `silence_timeout`,
+   decisions rest on is currently a single-stream number. The chat's window
+   bounds the DOM, which removes the frontend from the list of things that
+   could explain a bad result.
+2. **P11 → P12** — model download and persisted presets, which together make
+   the app usable by someone who is not holding a terminal. P12 has become the
+   more urgent of the two: the Settings page now holds a channel map, eight
+   colours, a vocabulary and a set of groups, and every one of them is typed in
+   again after every restart. Nobody rebuilds that before a show. P12 also
+   takes the constants P3 still owns: the Silero threshold, `silence_timeout`,
    `max_segment`.
-4. **P15** — develop vocabulary against the measurable baseline from step 1,
-   not by feel.
+3. **P15** — develop vocabulary against the measurable baseline from step 1,
+   not by feel. The control exists and is global; what is missing is the
+   evidence that any particular list is better than another.
+4. **P7's language picker** — `list_languages` through the Tauri API and a
+   picker in place of the free-text field. Small, and last of these, because a
+   typed `de` works today; it is discoverability that is missing, not
+   capability.
 
 ## Whole-system verification
 
