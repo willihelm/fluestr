@@ -8,10 +8,10 @@ inevitably lose information — nobody can follow eight conversations in
 parallel, and what was said is gone. This app makes what you missed readable
 and searchable, locally and without any cloud service.
 
-**Status:** P0 (scaffolding) and P1 (audio capture) are in place, P4 (whisper
-sidecar) works at its core. Segmentation, worker pool and chat UI still to
-come — the pieces are not yet wired together, so there is nothing to run
-end-to-end.
+**Status:** P0 (scaffolding), P1 (audio capture) and P2 (ring buffers and
+resampling) are in place, P4 (whisper sidecar) works at its core. Segmentation,
+worker pool and chat UI still to come — the pieces are not yet wired together,
+so there is nothing to run end-to-end.
 
 ---
 
@@ -106,6 +106,9 @@ just fixture de_mixed "Achtung Regie, Standby für Cue fünf. Auf mein Kommando 
 WHISPER_TEST_MODEL=.scratch/models/ggml-small-q5_1.bin \
 WHISPER_TEST_FIXTURE=.scratch/fixtures/de_mixed.wav \
   cargo test -p whisper-worker --test sidecar -- --ignored --nocapture
+
+# Resampling throughput (P2) — a property of the machine, so not part of CI:
+cargo test -p audio-core --release -- --ignored --nocapture resampling_cost
 ```
 
 `just fixture` generates test audio through macOS text-to-speech. That is fine

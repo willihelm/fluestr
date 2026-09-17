@@ -8,23 +8,65 @@
 use crate::capture::SampleSink;
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// Per-stream counters for one ring buffer.
+///
+/// [`CaptureStats`](crate::CaptureStats) aggregates the same loss across the
+/// whole device; these counters attribute it to a single stream, which is what
+/// the health display (P8) has to show — "channel 3 is losing audio" is
+/// actionable, "the session is losing audio" is not.
+///
+/// Written from the audio callback, so atomics rather than a mutex. `Relaxed`
+/// is sufficient: these are diagnostics, not synchronisation.
+#[derive(Debug, Default)]
+pub struct RingStats {
+    samples_written: AtomicU64,
+    samples_dropped: AtomicU64,
+}
+
+impl RingStats {
+    /// Samples that made it into the ring.
+    pub fn samples_written(&self) -> u64 {
+        self.samples_written.load(Ordering::Relaxed)
+    }
+
+    /// Samples lost because the ring was full — the overrun count P2 owes P8.
+    /// Any non-zero value means the processing thread is not keeping up.
+    pub fn samples_dropped(&self) -> u64 {
+        self.samples_dropped.load(Ordering::Relaxed)
+    }
+}
 
 /// Producer end of a per-stream ring buffer, usable as a [`SampleSink`].
 pub struct RingSink {
     producer: HeapProd<f32>,
+    stats: Arc<RingStats>,
 }
 
 impl SampleSink for RingSink {
     fn push(&mut self, samples: &[f32]) -> usize {
         // `push_slice` takes what fits and reports the rest — exactly the
         // "never block, count the loss" contract the callback needs.
-        self.producer.push_slice(samples)
+        let accepted = self.producer.push_slice(samples);
+        self.stats
+            .samples_written
+            .fetch_add(accepted as u64, Ordering::Relaxed);
+        let dropped = samples.len() - accepted;
+        if dropped > 0 {
+            self.stats
+                .samples_dropped
+                .fetch_add(dropped as u64, Ordering::Relaxed);
+        }
+        accepted
     }
 }
 
 /// Consumer end, read from the processing thread.
 pub struct RingSource {
     consumer: HeapCons<f32>,
+    stats: Arc<RingStats>,
 }
 
 impl RingSource {
@@ -42,6 +84,11 @@ impl RingSource {
     pub fn is_empty(&self) -> bool {
         self.consumer.is_empty()
     }
+
+    /// Counters shared with the producer end.
+    pub fn stats(&self) -> &Arc<RingStats> {
+        &self.stats
+    }
 }
 
 /// Creates a ring buffer sized in seconds of audio at `sample_rate`.
@@ -53,7 +100,14 @@ impl RingSource {
 pub fn channel(sample_rate: u32, seconds: f32) -> (RingSink, RingSource) {
     let capacity = ((sample_rate as f32 * seconds) as usize).max(1024);
     let (producer, consumer) = HeapRb::<f32>::new(capacity).split();
-    (RingSink { producer }, RingSource { consumer })
+    let stats = Arc::new(RingStats::default());
+    (
+        RingSink {
+            producer,
+            stats: stats.clone(),
+        },
+        RingSource { consumer, stats },
+    )
 }
 
 #[cfg(test)]
@@ -104,5 +158,46 @@ mod tests {
         let accepted = sink.push(&vec![0.5f32; 90_000]);
         assert_eq!(accepted, 90_000);
         assert_eq!(source.available(), 90_000);
+    }
+
+    #[test]
+    fn a_stalled_consumer_raises_the_overrun_count_rather_than_panicking() {
+        // The P2 acceptance case: the processing thread stops reading and the
+        // callback keeps writing. Nothing may panic or block; the loss has to
+        // become a number instead.
+        let (mut sink, source) = channel(16_000, 0.0);
+        let block = vec![0.25f32; 700];
+
+        for _ in 0..3 {
+            sink.push(&block);
+        }
+
+        let stats = source.stats();
+        assert_eq!(stats.samples_written(), 1024, "only the capacity fits");
+        assert_eq!(stats.samples_dropped(), 2100 - 1024);
+        assert_eq!(source.available(), 1024);
+    }
+
+    #[test]
+    fn draining_the_ring_makes_room_again_without_resetting_the_count() {
+        let (mut sink, mut source) = channel(16_000, 0.0);
+        sink.push(&vec![0.5f32; 2000]);
+        assert_eq!(source.stats().samples_dropped(), 976);
+
+        let mut out = vec![0.0; 1024];
+        assert_eq!(source.read(&mut out), 1024);
+        assert_eq!(sink.push(&[1.0, 2.0]), 2);
+
+        // The counter is cumulative over the session — P8 shows total loss,
+        // not "loss since someone last looked".
+        assert_eq!(source.stats().samples_dropped(), 976);
+        assert_eq!(source.stats().samples_written(), 1026);
+    }
+
+    #[test]
+    fn counters_start_at_zero() {
+        let (_sink, source) = channel(16_000, 1.0);
+        assert_eq!(source.stats().samples_written(), 0);
+        assert_eq!(source.stats().samples_dropped(), 0);
     }
 }

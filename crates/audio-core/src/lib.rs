@@ -9,6 +9,7 @@ pub mod backend;
 pub mod capture;
 pub mod device;
 pub mod lang;
+pub mod resample;
 pub mod ring;
 pub mod segment;
 
@@ -16,7 +17,8 @@ pub use backend::CpalBackend;
 pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSink};
 pub use device::{AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo};
 pub use lang::{LanguageCode, LanguageMode};
-pub use ring::{RingSink, RingSource};
+pub use resample::{Resampler, StreamProcessor};
+pub use ring::{RingSink, RingSource, RingStats};
 pub use segment::{Segment, StreamId, Transcript, SAMPLE_RATE};
 
 /// Errors raised by the audio core.
@@ -30,6 +32,9 @@ pub enum AudioError {
 
     #[error("device disconnected during capture: {0}")]
     DeviceDisconnected(String),
+
+    #[error("resampling: {0}")]
+    Resample(String),
 
     #[error("audio backend: {0}")]
     Backend(String),

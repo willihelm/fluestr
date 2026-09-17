@@ -173,7 +173,52 @@ below the `AudioBackend` trait.
 
 ---
 
-## 7. Incidental findings
+## 7. Resampling to 16 kHz (P2)
+
+`rubato` `SincFixedIn`, 128-tap sinc with a Blackman-Harris² window, cutoff from
+`calculate_cutoff`, 1024-frame input chunks, one channel per instance.
+
+**Anti-aliasing.** A 12 kHz tone at 48 kHz input sits above the 8 kHz Nyquist of
+the 16 kHz output. Naive decimation would mirror it onto 4 kHz — the middle of
+the speech band, indistinguishable from real signal afterwards.
+
+| Measurement | Value |
+|---|---|
+| 12 kHz tone, energy at 4 kHz after conversion | 0.000024 (**−92 dB**) |
+| 1 kHz tone, amplitude after conversion | 1.00 (±0.05) |
+| Spurious energy at 0.5 / 2 / 3 / 6 kHz | < 0.02 |
+
+**Cost.** One stream, 48 kHz → 16 kHz, release build:
+
+| Audio | Wall clock | Realtime factor |
+|---|---|---|
+| 60 s | 26-28 ms | **~2200x** |
+
+Eight streams therefore cost well under one percent of a core. Resampling is
+not a latency factor; it only must not happen in the audio callback, where the
+per-block cost would still be a deadline risk.
+
+**Latency floor.** Two terms, both deliberate: the 1024-frame input chunk
+(21 ms at 48 kHz) and half the filter length as group delay (64 input samples,
+1.3 ms). About 22 ms in total — an order of magnitude below the segment lengths
+P3 works with, so it does not shape the budget. 256 taps would roughly double
+the second term for stopband attenuation nobody can use at 16 kHz.
+
+**Overruns.** Per-stream counters live on the ring buffer (`RingStats`), not
+only in the device-wide `CaptureStats`: "channel 3 is losing audio" is
+actionable for an operator, "the session is losing audio" is not. A stalled
+consumer raises the count and the callback keeps running — verified by unit
+test, which is the P2 acceptance criterion.
+
+### Reproducing
+
+```sh
+cargo test -p audio-core --release -- --ignored --nocapture resampling_cost
+```
+
+---
+
+## 8. Incidental findings
 
 - **whisper-rs 0.16 ships a Silero VAD** (`whisper_vad.rs`). Relevant for P3:
   the planned alternative to `webrtc-vad` may already be available and would
