@@ -37,7 +37,7 @@ setup:
 # --- Checks --------------------------------------------------------------
 
 # Everything CI runs as well
-check: fmt-check lint test check-ui
+check: fmt-check lint test check-ui test-ui
 
 fmt:
     cargo fmt --all
@@ -53,6 +53,11 @@ test:
 
 check-ui:
     cd {{ui_dir}} && pnpm check
+
+# The frontend logic that is not a component: bubble grouping, group
+# membership, the vocabulary prompt.
+test-ui:
+    cd {{ui_dir}} && pnpm test
 
 # --- Build ---------------------------------------------------------------
 

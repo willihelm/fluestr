@@ -57,6 +57,10 @@ jobs:
         run: pnpm check
         working-directory: ui
 
+      - name: Frontend tests
+        run: pnpm test
+        working-directory: ui
+
       - name: Frontend build
         run: pnpm build
         working-directory: ui
