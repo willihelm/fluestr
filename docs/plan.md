@@ -10,7 +10,7 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-17, after P3.
+**Status of this document:** 2026-09-17, after the multi-stream session.
 
 ---
 
@@ -57,9 +57,9 @@ named below is missing. **Open** — not started.
 | P3 | VAD & segment scheduler | **Done** | — |
 | P3b | Language stabiliser | **Open** | — |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
-| P5 | Worker pool & backpressure | **Partial** | No reference load test; still fed by a single stream |
-| P6 | Tauri API | **Partial** | No generated shared types; level events not bundled across streams |
-| P7 | Chat UI | **Partial** | One stream, no virtualisation, no language picker from the sidecar's list |
+| P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
+| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, group CRUD or `search_session` |
+| P7 | Chat UI | **Partial** | No group sidebar, no Settings page, no virtualisation, no language picker from the sidecar's list |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Open** | — |
 | P10 | SQLite persistence | **Open** | — |
@@ -69,11 +69,12 @@ named below is missing. **Open** — not started.
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | A single text box, not stored, not named |
 
-**What runs today:** one channel end to end — microphone, ring buffer,
-resampling, Silero speech detection, segmentation, worker pool, chat list — at
-a measured ~330 ms from the end of a spoken segment to the text appearing. The
-pool behind the segmenter is already indifferent to how many streams feed it;
-what is still single-stream is everything in front of it.
+**What runs today:** up to eight channels of one multichannel device end to
+end — microphone, one ring buffer and segmenter per channel, Silero speech
+detection, the shared worker pool, one colour-coded chat — at a measured
+~330 ms on one stream from the end of a spoken segment to the text appearing.
+What the eight-channel case still lacks is a measurement of its own: the
+latency and CPU numbers were all taken with one stream running.
 
 ---
 
@@ -297,6 +298,23 @@ runs 10 minutes without memory growth; a `kill -9` on a worker is healed within
 ~2 s without a UI error. ✔ for the second — `tests/pool.rs` kills the pool's
 own sidecars mid-session and asserts that they come back and keep decoding.
 
+**Eight streams have now been through the queue**, in
+`eight_streams_share_the_queue_without_starving_each_other`: eight streams
+submitting interleaved into a queue deliberately smaller than the batch, with
+every `(stream, seq)` pair accounted for exactly once and no stream coming back
+empty. That is the fairness claim the oldest-first rule exists for, asserted
+rather than argued. It is seconds of synthetic segments, not the 10-minute
+reference load test, and it says nothing about memory or latency — but the
+pool's central arrangement is no longer only exercised by one stream.
+
+A detail found while writing it, and fixed: these tests had been skipping
+themselves. `find_binary` looked only next to the running binary, and cargo
+puts a test binary in `target/debug/deps` while the sidecar is in
+`target/debug` — so every one of them printed "no model — skipping" and passed
+without testing anything unless `INTERCOM2CHAT_WORKER` was set by hand. The
+search now also looks one directory up. A test that passes by not running is
+worse than a missing test, because the status table believes it.
+
 **The invariant everything else rests on:** every segment the pool accepts
 produces **exactly one** result, including the ones it gives up on. Without it
 the reorder buffer would stall on the missing sequence number and lose that
@@ -325,14 +343,22 @@ worker: a replacement can be killed while it is still loading its model, and
 treating that as permanent turns a passing problem into a permanently smaller
 pool.
 
-**Outstanding:** the reference load test, which belongs with P14 and needs the
-multi-stream session from P6/P7 to be worth running. Until then the pool size,
-the queue bound and the timeouts are reasoned defaults, not measured ones.
+**Outstanding:** the reference load test, which belongs with P14 and now has
+the multi-stream session it needed — what it still needs is live audio on eight
+channels rather than synthetic segments. Until then the pool size, the queue
+bound and the timeouts are reasoned defaults, not measured ones.
 
 ### P6 — Tauri API — **Partial**
 
 Commands `list_devices`, `start_session`, `stop_session` exist; events
-`transcript`, `level`, `overload` and `session-state` are emitted.
+`transcript`, `levels`, `overload` and `session-state` are emitted.
+
+`start_session` now takes a **list** of streams on one device, and the session
+builds one pipeline per channel — ring, resampler, speech detector, segmenter
+— all feeding the one shared queue. The stream id is the position in that list,
+assigned by the backend rather than by the UI, so two streams can never be
+given the same one; `SessionState::Running` echoes the mapping back as the
+authoritative answer to which channel ended up under which label.
 
 Two things learned here, both in the code as comments:
 
@@ -350,21 +376,44 @@ Two things learned here, both in the code as comments:
   history, if offered at all, is a separate explicit action and never a side
   effect of Start or Stop.
 
+Two more things worth knowing, both in the code:
+
+- **Levels are one event for all streams**, at 20 Hz — hence `levels` rather
+  than `level`. Eight separate events would be 160 bridge crossings a second,
+  each waking the WebView, to draw eight bars that were each measured at a
+  slightly different moment. Bundled, the cost no longer grows with the channel
+  count and the meters that are read side by side were also sampled side by
+  side.
+- **One processing thread serves every stream.** The work is small and bounded
+  — resampling at ~2200× realtime, Silero at ~1.3 % of a core per stream — so
+  eight streams are ~12 % of one core. What must not share a thread is
+  decoding, and it does not.
+
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
-`specta`) instead of hand-written TypeScript; level events bundled across all
-eight streams at 20 Hz rather than one event per stream; `update_stream_config`,
-group CRUD and channel-to-group assignment commands, and `search_session`.
+`specta`) instead of hand-written TypeScript; `update_stream_config`, group
+CRUD and channel-to-group assignment commands, and `search_session`.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
-load keep the WebView main thread under ~30 %.
+load keep the WebView main thread under ~30 %. The second half is unmeasured —
+it belongs with the P14 load test.
 
 ### P7 — Chat UI (Svelte) — **Partial**
 
-Today: one stream, a device and channel picker, a label, a language field, a
-vocabulary prompt, and a chat list with timestamp, language badge and measured
-latency per message. Follow behaviour with a "jump to latest" button. Channels
-are numbered from 1, the way they are numbered on an interface; the backend
-stays zero-based and the conversion happens at that one boundary.
+Today: a device picker and an editable list of channels — device channel,
+label, language, colour and vocabulary prompt per row, added and removed
+freely — one global Start/Stop for all of them, a meter per running stream, and
+one chat carrying every channel's lines with its colour down the left edge and
+its label, timestamp, language badge and measured latency on each. Follow
+behaviour with a "jump to latest" button. Editing the setup is locked while a
+session runs, because the channel map is fixed when capture opens.
+
+Channels are numbered from 1, the way they are numbered on an interface; the
+backend stays zero-based and the conversion happens at that one boundary.
+
+Each channel gets a palette colour when it is created and the operator can
+change it. The colour is configuration, not decoration: with eight channels
+interleaved in one list it is what makes a line's origin readable at a glance,
+faster than reading eight labels, and it is the same colour on the meter strip.
 
 **Target interaction model.** Channel configuration belongs on the dedicated
 Settings page, not in the live chat view: input mapping, label, language,
@@ -381,27 +430,33 @@ global Start/Stop control; there is deliberately no per-channel Start button.
 Start leaves the existing chat history visible and appends new transcripts to
 it; neither Start nor Stop clears the list.
 
-**Outstanding:** several streams side by side with their configured colours and
-free labels; group sidebar and membership management; **virtualised list** — an
-hour across eight streams is tens of thousands of nodes; Settings page for
-channel setup with per-stream language configuration from the sidecar's language
-list rather than a text field; one global session Start/Stop control; one-click
-language override.
+Two streams reading the *same* device channel is allowed — mirroring one
+channel into two views is unusual but not wrong — so it is a warning rather
+than an error. During setup it is nearly always a slip, and the symptom, every
+line appearing twice, does not point at its cause.
+
+**Outstanding:** group sidebar and membership management; **virtualised list**
+— an hour across eight streams is tens of thousands of nodes; Settings page for
+channel setup, which is where the channel list belongs rather than above the
+chat; per-stream language configuration from the sidecar's language list rather
+than a text field; one-click language override.
 
 **Accepted when:** eight streams run visibly live; scrolling stays smooth at
 10,000 segments; a third language can be chosen without a code change; a
-channel has a preselected but editable colour; a channel can appear in two
-groups and is visible in both; all configured channels start from one action.
+channel has a preselected but editable colour ✔; a channel can appear in two
+groups and is visible in both; all configured channels start from one action ✔.
 Starting again after a Stop retains the preceding chat history and appends new
-segments to it.
+segments to it ✔.
 
 ### P8 — Levels & stream health — **Partial**
 
-Today: one level meter (RMS and peak, computed in Rust), the per-stream
-overrun count from P2, and the per-stream count of segments the decode queue
-had to give up on (P5). The two counts are deliberately separate: one is audio
-lost on the way *into* the pipeline, the other is audio that was captured
-cleanly and then could not be kept up with, and they call for different fixes.
+Today: a level meter per running stream (RMS and peak, computed in Rust, all
+of them arriving in one event so the bars on screen are the same age), the
+per-stream overrun count from P2, and the per-stream count of segments the
+decode queue had to give up on (P5). The two counts are deliberately separate:
+one is audio lost on the way *into* the pipeline, the other is audio that was
+captured cleanly and then could not be kept up with, and they call for
+different fixes.
 
 **Outstanding:** peak hold, silence indicator, clipping warning, worker queue
 depth, and a global status bar with active workers, queue length and
@@ -504,6 +559,11 @@ latency budget held against the measurements, a repeatable "8 streams,
 reference transcripts for measuring word error rate separately over German and
 English passages.
 
+The load test is now unblocked and is the next thing to do. Eight streams run,
+and `tests/pool.rs` already puts eight of them through the queue with synthetic
+segments — what is missing is live audio, duration, and anything being
+*measured* rather than asserted.
+
 **Accepted when:** a reproducible benchmark shows p95 latency within the target
 on defined hardware; the WER baseline for mixed-language material is
 documented.
@@ -553,11 +613,13 @@ P0 Scaffolding
 ```
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. One channel, text
-in the log. *Reached, including the pool — what P5 still owes is a load test
-that cannot be run until several streams exist to load it with.*
+in the log. *Reached, including the pool — what P5 still owes is a load test on
+live audio.*
 
 **Milestone B (usable MVP):** + P6, P7, P11, P12. Eight channels, chat UI,
-model download. *P3 is done.*
+model download. *P3 is done, and eight channels now run: what is left is the
+model download, the saved presets, and the parts of the chat view (group
+sidebar, Settings page, virtualisation) that eight channels make necessary.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P3b, P8, P9, P10, P13.
@@ -568,20 +630,23 @@ P3b, P8, P9, P10, P13.
 
 In this order, with the reason each one comes where it does.
 
-1. **P6 → P7** — generated shared types, bundled level events, several streams
-   with a virtualised list, the group sidebar and the Settings page. The pool
-   is already indifferent to the stream count and the detector in front of it
-   is per-stream, so this is what finally puts more than one stream through
-   the pipeline. Everything below needs it.
-2. **P14 reference load test** — the numbers in measurements.md §8 and §10 were
+1. **P14 reference load test** — the numbers in measurements.md §8 and §10 were
    all taken on one stream. The 10 % CPU figure for eight streams' speech
-   detection is arithmetic, not a measurement, and the queue has never been
-   under real contention. Possible only once step 1 exists.
+   detection is arithmetic, not a measurement, and the queue has only been put
+   under contention by synthetic segments. Eight channels now run, so this is
+   finally possible — and it comes first because every number the remaining
+   decisions rest on is currently a single-stream number.
+2. **P7, the rest** — group sidebar, Settings page, virtualised list. The
+   virtualisation in particular is load-dependent: an hour across eight streams
+   is tens of thousands of nodes, and step 1 is what says how fast they
+   actually arrive.
 3. **P11 → P12** — model download and persisted presets, which together make
-   the app usable by someone who is not holding a terminal. P12 also takes the
+   the app usable by someone who is not holding a terminal. Eight channels make
+   presets stop being a convenience: nobody remaps eight channels, their
+   labels, colours and languages before every show. P12 also takes the
    constants P3 still owns: the Silero threshold, `silence_timeout`,
    `max_segment`.
-4. **P15** — develop vocabulary against the measurable baseline from step 2,
+4. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel.
 
 ## Whole-system verification

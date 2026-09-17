@@ -240,9 +240,15 @@ pub fn find_binary() -> Result<PathBuf> {
 
     let exe = std::env::current_exe().context("locating the app binary")?;
     let dir = exe.parent().context("app binary has no directory")?;
-    let candidate = dir.join("whisper-worker");
-    if candidate.is_file() {
-        return Ok(candidate);
+    // Next to the binary, then one level up. The second place is what makes
+    // the integration tests run: cargo puts a test binary in
+    // `target/debug/deps` while the sidecar it needs is in `target/debug`, and
+    // without this they find nothing, report "no model" and pass without
+    // having tested anything.
+    for candidate in [dir.join("whisper-worker"), dir.join("../whisper-worker")] {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
     }
 
     bail!(

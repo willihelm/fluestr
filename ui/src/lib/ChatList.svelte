@@ -3,15 +3,21 @@
 
   interface Props {
     messages: TranscriptEvent[];
+    /// Channel colour per stream id. A line belongs to a channel, and with
+    /// eight of them interleaved the colour is what makes that readable at a
+    /// glance — faster than reading eight labels.
+    colors: Map<number, string>;
   }
 
-  let { messages }: Props = $props();
+  let { messages, colors }: Props = $props();
+
+  const colorOf = (streamId: number) => colors.get(streamId) ?? "var(--accent)";
 
   let container: HTMLDivElement | undefined = $state();
   // Follow behaviour: stay pinned to the bottom, but not while the user is
-  // reading further up. P7 turns this into a proper "N new messages" button
-  // and puts a virtualised list underneath — an hour across eight streams is
-  // tens of thousands of nodes.
+  // reading further up. Still to come in P7: a proper "N new messages" button
+  // and a virtualised list underneath — an hour across eight streams is tens
+  // of thousands of nodes.
   let following = $state(true);
 
   const onScroll = () => {
@@ -39,11 +45,11 @@
 
 <div class="chat" bind:this={container} onscroll={onScroll}>
   {#if messages.length === 0}
-    <p class="empty">Nothing transcribed yet. Speak into the selected channel.</p>
+    <p class="empty">Nothing transcribed yet. Speak into one of the channels.</p>
   {/if}
 
   {#each messages as message (message.streamId + "-" + message.seq)}
-    <article>
+    <article style="--channel: {colorOf(message.streamId)}">
       <header>
         <span class="label">{message.label || "Stream " + message.streamId}</span>
         <span class="time">{clock(message.tStartMs)}</span>
@@ -89,6 +95,10 @@
   article {
     background: var(--surface);
     border: 1px solid var(--border);
+    /* The channel's colour down the left edge: with eight channels
+       interleaved this is what groups the lines, and it survives being read
+       out of the corner of an eye while doing something else. */
+    border-left: 3px solid var(--channel);
     border-radius: 0.5rem;
     padding: 0.5rem 0.75rem;
     max-width: 48rem;
@@ -104,7 +114,7 @@
   }
 
   .label {
-    color: var(--accent);
+    color: var(--channel);
     font-weight: 600;
   }
 

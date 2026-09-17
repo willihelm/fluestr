@@ -1,9 +1,10 @@
 // Typed view of the Tauri bridge.
 //
-// Hand-written for now. P6 generates these from the Rust structs with `ts-rs`
-// or `specta`, which is what stops the two sides drifting apart — until then
-// the types here have to be kept in step with `crates/app/src/session.rs`, and
-// the round-trip tests there pin down the field names.
+// Hand-written for now. P6 still owes types generated from the Rust structs
+// with `ts-rs` or `specta`, which is what stops the two sides drifting apart —
+// until then the types here have to be kept in step with
+// `crates/app/src/session.rs`, and the round-trip tests there pin down the
+// field names.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -15,12 +16,21 @@ export interface DeviceOption {
   isDefault: boolean;
 }
 
-export interface SessionConfig {
-  device: string;
+// One intercom channel. `channel` is zero-based, like the audio API — the UI
+// counts from 1 everywhere it is shown and converts at that one boundary.
+//
+// No stream id: the backend assigns it from the position in `streams`, so two
+// streams can never be given the same one.
+export interface StreamConfig {
   channel: number;
   label: string;
   language: string;
   initialPrompt: string | null;
+}
+
+export interface SessionConfig {
+  device: string;
+  streams: StreamConfig[];
 }
 
 export interface TranscriptEvent {
@@ -35,15 +45,23 @@ export interface TranscriptEvent {
   latencyMs: number;
 }
 
-export interface LevelEvent {
+export interface StreamLevel {
   streamId: number;
   rms: number;
   peak: number;
   dropped: number;
 }
 
+// Every stream's meter in one event, at 20 Hz. All of them together rather
+// than one event each: the meters are read side by side, so they are sampled
+// side by side, and the cost on the bridge does not grow with the channel
+// count.
+export interface LevelsEvent {
+  streams: StreamLevel[];
+}
+
 // A segment that was thrown away before it could be decoded, because the
-// decode queue was full. Distinct from `LevelEvent.dropped`, which counts
+// decode queue was full. Distinct from `StreamLevel.dropped`, which counts
 // audio lost on the way *into* the pipeline — this is audio that was captured
 // cleanly and then could not be kept up with.
 export interface OverloadEvent {
@@ -52,11 +70,19 @@ export interface OverloadEvent {
   dropped: number;
 }
 
+// How the backend actually mapped a stream. Authoritative: the stream ids the
+// events carry are defined here, not by the UI's own copy of the setup.
+export interface RunningStream {
+  streamId: number;
+  channel: number;
+  label: string;
+}
+
 export type SessionState =
   | {
       state: "running";
       device: string;
-      channel: number;
+      streams: RunningStream[];
       sampleRate: number;
       model: string;
       loadMs: number;
@@ -76,8 +102,8 @@ export const stopSession = () => invoke<void>("stop_session");
 export const onTranscript = (fn: (e: TranscriptEvent) => void): Promise<UnlistenFn> =>
   listen<TranscriptEvent>("transcript", (e) => fn(e.payload));
 
-export const onLevel = (fn: (e: LevelEvent) => void): Promise<UnlistenFn> =>
-  listen<LevelEvent>("level", (e) => fn(e.payload));
+export const onLevels = (fn: (e: LevelsEvent) => void): Promise<UnlistenFn> =>
+  listen<LevelsEvent>("levels", (e) => fn(e.payload));
 
 export const onOverload = (fn: (e: OverloadEvent) => void): Promise<UnlistenFn> =>
   listen<OverloadEvent>("overload", (e) => fn(e.payload));

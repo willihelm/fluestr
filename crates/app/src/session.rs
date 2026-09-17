@@ -1,24 +1,33 @@
-//! One channel, end to end: microphone → ring → 16 kHz → segments → pool →
-//! chat.
+//! Up to eight channels, end to end: microphone → rings → 16 kHz → segments →
+//! pool → chat.
 //!
-//! Still a **single** stream: the multichannel session is P6/P7. What is no
-//! longer provisional is everything behind the segmenter — segments go into
-//! the queue in [`crate::pool`], which is already indifferent to how many
-//! streams feed it.
+//! The pool behind the segmenters was always indifferent to how many streams
+//! fed it; what was single-stream was everything in front of it. Now the
+//! session builds one pipeline per configured channel — ring, resampler,
+//! speech detector, segmenter — over **one** capture of **one** multichannel
+//! device, and they all submit into the same prioritised queue.
 //!
 //! # Threads
 //!
 //! - the **capture thread** inside `audio-core`, because `cpal::Stream` is
-//!   `!Send` on macOS;
-//! - the **processing thread**, which drains the ring, resamples and segments;
+//!   `!Send` on macOS. One thread for the device, whatever the channel count:
+//!   the de-interleaver splits the interleaved buffer into the streams' rings
+//!   inside the callback;
+//! - **one processing thread for all streams**, which drains each ring in
+//!   turn, resamples and segments;
 //! - the pool's **decode threads**, one per sidecar, plus its watchdog;
-//! - the **aggregator thread**, which puts results back in order and turns
-//!   them into events.
+//! - the **aggregator thread**, which puts results back in order per stream
+//!   and turns them into events.
 //!
-//! The split between processing and decoding matters: a decode takes hundreds
-//! of milliseconds, and if the processing thread waited for one, the ring
-//! would overflow and audio would be lost while the app was busy transcribing
-//! the audio before it. That is also why [`WorkerPool::submit`] never blocks.
+//! One processing thread rather than one per stream is a deliberate choice.
+//! The work is small and bounded — resampling runs at ~2200× realtime and
+//! Silero costs ~1.3 % of a core per stream, so eight streams are ~12 % of one
+//! core — and a single thread means the level events for all streams are
+//! sampled over the same interval instead of eight slightly different ones.
+//! What must *not* share a thread is decoding, and it does not: a decode takes
+//! hundreds of milliseconds, and a processing thread waiting for one would let
+//! the rings overflow while the app was busy transcribing the audio before it.
+//! That is why [`WorkerPool::submit`] never blocks.
 
 use crate::pool::{Completed, Outcome, PoolConfig, PoolEvent, Reorder, WorkerPool};
 use anyhow::{bail, Context, Result};
@@ -35,19 +44,32 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-/// How long the ring holds audio before the processing thread has to have
-/// drained it. Four seconds is generous for one stream; it is the buffer that
-/// absorbs a decode that runs long.
+/// How long one stream's ring holds audio before the processing thread has to
+/// have drained it. Four seconds is the buffer that absorbs a decode that runs
+/// long; at 48 kHz it costs ~770 KB per stream, which is not worth economising
+/// on.
 const RING_SECONDS: f32 = 4.0;
 
-/// How often the processing thread wakes up. Short enough that the ring never
-/// fills, long enough not to spin.
+/// How often the processing thread wakes up and pumps every stream. Short
+/// enough that no ring fills, long enough not to spin.
 const PUMP_INTERVAL: Duration = Duration::from_millis(20);
 
-/// Level events per second. Anything faster is invisible to the eye and
-/// expensive across the IPC bridge — P6 bundles all eight streams into one
-/// event at this rate.
+/// Level events per second — one event carrying **all** streams, not one per
+/// stream.
+///
+/// Anything faster is invisible to the eye, and eight separate events at this
+/// rate is 160 crossings of the IPC bridge per second, each one waking the
+/// WebView. Bundling them makes the cost independent of the channel count.
 const LEVEL_HZ: u32 = 20;
+
+/// The channel count the queue bound, the worker count and the latency budget
+/// were reasoned for.
+///
+/// Not a limit: exceeding it is allowed and only warned about, because the
+/// numbers behind it are reasoned defaults rather than measured ones until the
+/// P14 reference load test exists. An operator who patches nine channels
+/// should find out from the queue-depth display, not from a refusal to start.
+const BUDGETED_STREAMS: usize = 8;
 
 /// Above this, whisper's own judgement that the audio held no speech is
 /// trusted and the segment is dropped.
@@ -65,13 +87,17 @@ const LEVEL_HZ: u32 = 20;
 /// the energy detector when the VAD model is missing.
 const NO_SPEECH_THRESHOLD: f32 = 0.6;
 
-/// What the UI sends to start a session.
+/// One intercom channel, as the UI configures it.
+///
+/// The stream id is *not* in here: it is the position in
+/// [`SessionConfig::streams`], assigned by the backend when the session
+/// starts, so the UI cannot hand out two streams with the same id. The channel
+/// index is zero-based, like the audio API; the UI converts at its own
+/// boundary and nowhere else.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionConfig {
-    /// Device name, as returned by `list_devices`.
-    pub device: String,
-    /// Channel index on that device.
+pub struct StreamConfig {
+    /// Channel index on the multichannel device.
     pub channel: u16,
     /// Free-form label: "Regie", "FOH", "Licht".
     pub label: String,
@@ -79,6 +105,20 @@ pub struct SessionConfig {
     pub language: String,
     /// Vocabulary prompt (P15 will manage named lists; here it is a text box).
     pub initial_prompt: Option<String>,
+}
+
+/// What the UI sends to start a session.
+///
+/// One device for all streams, which is the constraint the whole audio layer
+/// is built on: one multichannel interface, de-interleaved by the app. Two
+/// devices would mean two clocks drifting apart with no common timebase to
+/// order the chat by.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfig {
+    /// Device name, as returned by `list_devices`.
+    pub device: String,
+    pub streams: Vec<StreamConfig>,
 }
 
 /// A finished transcript on its way to the chat view.
@@ -101,16 +141,28 @@ pub struct TranscriptEvent {
     pub latency_ms: u32,
 }
 
-/// Level and health of one stream, emitted at [`LEVEL_HZ`].
+/// Level and health of one stream.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LevelEvent {
+pub struct StreamLevel {
     pub stream_id: u16,
     pub rms: f32,
     pub peak: f32,
-    /// Cumulative overrun count from the ring (P2). Non-zero means audio was
-    /// lost, which the operator has to be able to see.
+    /// Cumulative overrun count from that stream's ring (P2). Non-zero means
+    /// audio was lost, which the operator has to be able to see.
     pub dropped: u64,
+}
+
+/// Every stream's level, in one event at [`LEVEL_HZ`].
+///
+/// All streams together rather than one event each: the meters are read side
+/// by side, so they should also be *sampled* side by side — over the same
+/// interval, arriving in the same frame. Eight independent events cost eight
+/// bridge crossings to show eight bars that are each a different age.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LevelsEvent {
+    pub streams: Vec<StreamLevel>,
 }
 
 /// A segment that was thrown away before it could be decoded.
@@ -130,6 +182,20 @@ pub struct OverloadEvent {
     pub dropped: u64,
 }
 
+/// One running stream, as the backend actually mapped it.
+///
+/// Echoed back rather than left to the UI's own copy of the configuration:
+/// this is the authoritative answer to "which channel ended up under which
+/// label", and it is the only place the stream ids the events carry are
+/// defined.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningStream {
+    pub stream_id: u16,
+    pub channel: u16,
+    pub label: String,
+}
+
 /// Lifecycle of the session, as the UI needs to render it.
 #[derive(Debug, Clone, Serialize)]
 // `rename_all` covers the variant names, `rename_all_fields` their contents —
@@ -142,7 +208,7 @@ pub struct OverloadEvent {
 pub enum SessionState {
     Running {
         device: String,
-        channel: u16,
+        streams: Vec<RunningStream>,
         sample_rate: u32,
         model: String,
         /// Includes the one-off Metal shader compilation on a machine's first
@@ -160,9 +226,21 @@ pub enum SessionState {
 /// so the pipeline stays independent of the UI layer.
 pub trait EventSink: Send + Sync + 'static {
     fn transcript(&self, event: TranscriptEvent);
-    fn level(&self, event: LevelEvent);
+    fn levels(&self, event: LevelsEvent);
     fn overload(&self, event: OverloadEvent);
     fn state(&self, event: SessionState);
+}
+
+/// Everything one channel needs between the ring and the queue.
+///
+/// One per configured stream, all owned by the processing thread. The level
+/// window lives here too, because it has to be accumulated per stream and
+/// emptied when the bundled event goes out.
+struct Pipeline {
+    processor: StreamProcessor,
+    segmenter: Segmenter,
+    /// Audio since the last level event.
+    window: Vec<f32>,
 }
 
 /// A running session. Dropping it stops everything.
@@ -190,25 +268,41 @@ impl Session {
         config: SessionConfig,
         events: Arc<dyn EventSink>,
     ) -> Result<(Self, SessionState)> {
+        if config.streams.is_empty() {
+            bail!("no channels configured");
+        }
+        if config.streams.len() > BUDGETED_STREAMS {
+            tracing::warn!(
+                streams = config.streams.len(),
+                budgeted = BUDGETED_STREAMS,
+                "more streams than the queue bound and worker count were reasoned for"
+            );
+        }
+
         let backend = CpalBackend::new();
         let device_id = audio_core::DeviceId(config.device.clone());
         let info = backend.device(&device_id)?;
 
-        if config.channel >= info.channels {
-            // Numbered the way the UI shows it. The index is zero-based
-            // because the audio API is, but an error an operator reads has no
-            // business exposing that.
-            bail!(
-                "channel {} does not exist on '{}' — it has {} channels",
-                config.channel as u32 + 1,
-                info.name,
-                info.channels
-            );
+        for stream in &config.streams {
+            if stream.channel >= info.channels {
+                // Numbered and labelled the way the UI shows it. The index is
+                // zero-based because the audio API is, but an error an
+                // operator reads has no business exposing that — and with
+                // eight rows on screen it also has to say *which* one is
+                // wrong.
+                bail!(
+                    "'{}' is on channel {}, which does not exist on '{}' — it has {} channels",
+                    stream.label,
+                    stream.channel as u32 + 1,
+                    info.name,
+                    info.channels
+                );
+            }
         }
 
         // The sidecar comes up first. Loading the model can take seconds, and
         // capturing audio that nothing is ready to transcribe would only fill
-        // the ring with material that is stale by the time anyone looks at it.
+        // the rings with material that is stale by the time anyone looks at it.
         let binary = crate::worker::find_binary()?;
         let model = crate::worker::find_model()?;
         let vad_model = crate::worker::find_vad_model();
@@ -218,25 +312,40 @@ impl Session {
                  run `just vad-model`"
             );
         }
-        // The same model file serves both layers: the detector in front of the
-        // segmenter here, and the sidecar's backstop behind it.
-        let detector = speech_detector(vad_model.as_deref());
-        let (pool, results) = WorkerPool::spawn(PoolConfig::new(binary, model, vad_model))
+        let (pool, results) = WorkerPool::spawn(PoolConfig::new(binary, model, vad_model.clone()))
             .context("starting the sidecar")?;
         let pool = Arc::new(pool);
         let ready = pool.ready().clone();
 
         let rate = info.default_sample_rate;
-        let (sink, source) = ring::channel(rate, RING_SECONDS);
 
-        let stream_id = StreamId(0);
-        let channel_map = ChannelMap::new(
-            vec![ChannelAssignment {
+        // Built in one pass so the sinks stay index-aligned with the channel
+        // map — the de-interleaver pairs them by position, and a mismatch
+        // there puts the lighting desk's words under the sound engineer's
+        // label without anything crashing.
+        let mut assignments = Vec::with_capacity(config.streams.len());
+        let mut sinks: Vec<Box<dyn audio_core::SampleSink>> =
+            Vec::with_capacity(config.streams.len());
+        let mut sources = Vec::with_capacity(config.streams.len());
+        let mut running = Vec::with_capacity(config.streams.len());
+
+        for (index, stream) in config.streams.iter().enumerate() {
+            let stream_id = StreamId(index as u16);
+            let (sink, source) = ring::channel(rate, RING_SECONDS);
+            assignments.push(ChannelAssignment {
                 stream_id,
-                channel: config.channel,
-            }],
-            info.channels,
-        )?;
+                channel: stream.channel,
+            });
+            sinks.push(Box::new(sink));
+            sources.push(source);
+            running.push(RunningStream {
+                stream_id: stream_id.0,
+                channel: stream.channel,
+                label: stream.label.clone(),
+            });
+        }
+
+        let channel_map = ChannelMap::new(assignments, info.channels)?;
 
         let (capture_events, capture_event_rx) = mpsc::channel::<CaptureEvent>();
         let capture = backend.open(
@@ -245,7 +354,7 @@ impl Session {
                 channel_map,
                 sample_rate: Some(rate),
             },
-            vec![Box::new(sink)],
+            sinks,
             capture_events,
         )?;
 
@@ -254,24 +363,41 @@ impl Session {
             bail!("device granted {granted} Hz instead of the requested {rate} Hz");
         }
 
-        let processor = StreamProcessor::new(source, granted)?;
-        let segmenter = Segmenter::new(
-            stream_id,
-            detector,
-            SegmenterConfig {
-                language_mode: LanguageMode::Fixed {
-                    language: LanguageCode::new(&config.language),
-                },
-                initial_prompt: config.initial_prompt.clone(),
-                ..Default::default()
-            },
-        );
+        // Only once the device has actually opened: a detector per stream
+        // means a whisper.cpp VAD context per stream, and there is no point
+        // paying for eight of them for a device that was going to refuse.
+        let mut pipelines = Vec::with_capacity(config.streams.len());
+        for (index, (stream, source)) in config.streams.iter().zip(sources).enumerate() {
+            pipelines.push(Pipeline {
+                processor: StreamProcessor::new(source, granted)?,
+                segmenter: Segmenter::new(
+                    StreamId(index as u16),
+                    // The same model file serves both layers: the detector in
+                    // front of this segmenter and the sidecar's backstop
+                    // behind it. Each stream needs its own instance — the
+                    // detector carries per-stream state.
+                    speech_detector(vad_model.as_deref()),
+                    SegmenterConfig {
+                        language_mode: LanguageMode::Fixed {
+                            language: LanguageCode::new(&stream.language),
+                        },
+                        initial_prompt: stream.initial_prompt.clone(),
+                        ..Default::default()
+                    },
+                ),
+                window: Vec::new(),
+            });
+        }
+
+        let labels: HashMap<u16, String> = running
+            .iter()
+            .map(|s| (s.stream_id, s.label.clone()))
+            .collect();
 
         let stop = Arc::new(AtomicBool::new(false));
-        let aggregating = spawn_aggregator(results, config.label.clone(), events.clone());
+        let aggregating = spawn_aggregator(results, labels, events.clone());
         let processing = spawn_processor(
-            processor,
-            segmenter,
+            pipelines,
             pool.clone(),
             capture_event_rx,
             stop.clone(),
@@ -280,17 +406,16 @@ impl Session {
 
         tracing::info!(
             device = %info.name,
-            channel = config.channel,
+            streams = config.streams.len(),
             sample_rate = granted,
-            language = %config.language,
-            prompt = config.initial_prompt.is_some(),
+            detector = if vad_model.is_some() { "silero" } else { "energy" },
             workers = pool.workers(),
             "session running"
         );
 
         let state = SessionState::Running {
             device: info.name,
-            channel: config.channel,
+            streams: running,
             sample_rate: granted,
             model: ready.model,
             load_ms: ready.load_ms,
@@ -322,8 +447,9 @@ impl Session {
                 tracing::warn!(error = %err, "stopping the capture");
             }
         }
-        // The processing thread flushes whatever was still being spoken into
-        // the queue as it leaves, so the pool must outlive it.
+        // The processing thread flushes whatever was still being spoken on
+        // every stream into the queue as it leaves, so the pool must outlive
+        // it.
         if let Some(handle) = self.processing.take() {
             let _ = handle.join();
         }
@@ -350,6 +476,9 @@ impl Drop for Session {
 /// bell and a chair scrape, but it does hear speech, and the sidecar's gate
 /// still stands behind it. A session that runs badly is recoverable; one that
 /// refuses to start because a 0.9 MB file is missing is not.
+///
+/// Called once per stream — the detector holds per-stream state, so eight
+/// channels mean eight instances of it.
 pub fn speech_detector(vad_model: Option<&std::path::Path>) -> Box<dyn Vad> {
     let Some(path) = vad_model else {
         return Box::new(EnergyVad::new(SAMPLE_RATE));
@@ -357,7 +486,9 @@ pub fn speech_detector(vad_model: Option<&std::path::Path>) -> Box<dyn Vad> {
 
     match SileroVad::new(path) {
         Ok(vad) => {
-            tracing::info!(
+            // Per stream, so at debug: the session logs once which detector it
+            // ended up with.
+            tracing::debug!(
                 model = %path.display(),
                 frame_samples = vad.frame_samples(),
                 "speech detection in front of the segmenter"
@@ -378,8 +509,7 @@ pub fn speech_detector(vad_model: Option<&std::path::Path>) -> Box<dyn Vad> {
 }
 
 fn spawn_processor(
-    mut processor: StreamProcessor,
-    mut segmenter: Segmenter,
+    mut pipelines: Vec<Pipeline>,
     pool: Arc<WorkerPool>,
     capture_events: mpsc::Receiver<CaptureEvent>,
     stop: Arc<AtomicBool>,
@@ -391,11 +521,11 @@ fn spawn_processor(
             let mut buffer: Vec<f32> = Vec::with_capacity(SAMPLE_RATE as usize);
             let level_interval = Duration::from_millis(1000 / LEVEL_HZ as u64);
             let mut last_level = Instant::now();
-            let mut window: Vec<f32> = Vec::new();
 
             while !stop.load(Ordering::Relaxed) {
                 // A device that disappeared ends the session; reporting it is
                 // the difference between "nothing happens" and an explanation.
+                // It takes every stream with it — there is one device.
                 if let Ok(event) = capture_events.try_recv() {
                     match event {
                         CaptureEvent::Disconnected { device, reason } => {
@@ -410,36 +540,52 @@ fn spawn_processor(
                     }
                 }
 
-                buffer.clear();
-                if let Err(err) = processor.pump(&mut buffer) {
-                    events.state(SessionState::Failed {
-                        message: err.to_string(),
-                    });
+                let mut failed = None;
+                for pipeline in &mut pipelines {
+                    buffer.clear();
+                    if let Err(err) = pipeline.processor.pump(&mut buffer) {
+                        failed = Some(err.to_string());
+                        break;
+                    }
+
+                    pipeline.window.extend_from_slice(&buffer);
+                    for segment in pipeline.segmenter.push(&buffer) {
+                        pool.submit(segment, Instant::now());
+                    }
+                }
+                if let Some(message) = failed {
+                    events.state(SessionState::Failed { message });
                     break;
                 }
 
-                window.extend_from_slice(&buffer);
-                for segment in segmenter.push(&buffer) {
-                    pool.submit(segment, Instant::now());
-                }
-
                 if last_level.elapsed() >= level_interval {
-                    events.level(LevelEvent {
-                        stream_id: segmenter.stream_id().0,
-                        rms: vad::rms(&window),
-                        peak: vad::peak(&window),
-                        dropped: processor.source().stats().samples_dropped(),
+                    events.levels(LevelsEvent {
+                        streams: pipelines
+                            .iter_mut()
+                            .map(|pipeline| {
+                                let level = StreamLevel {
+                                    stream_id: pipeline.segmenter.stream_id().0,
+                                    rms: vad::rms(&pipeline.window),
+                                    peak: vad::peak(&pipeline.window),
+                                    dropped: pipeline.processor.source().stats().samples_dropped(),
+                                };
+                                pipeline.window.clear();
+                                level
+                            })
+                            .collect(),
                     });
-                    window.clear();
                     last_level = Instant::now();
                 }
 
                 std::thread::sleep(PUMP_INTERVAL);
             }
 
-            // Whatever was still being spoken when stop was pressed.
-            if let Some(segment) = segmenter.finish() {
-                pool.submit(segment, Instant::now());
+            // Whatever was still being spoken on any channel when stop was
+            // pressed.
+            for pipeline in &mut pipelines {
+                if let Some(segment) = pipeline.segmenter.finish() {
+                    pool.submit(segment, Instant::now());
+                }
             }
         })
         .expect("spawning the processing thread")
@@ -474,12 +620,14 @@ pub fn discard_reason(text: &str, no_speech_probability: f32) -> Option<&'static
 ///
 /// Two jobs the single worker did not have. It puts results back in order —
 /// several workers decode at once and a short segment overtakes a long one,
-/// and a chat log read out of order is actively misleading. And it owns the
-/// end of the session: the pool closing its results channel is what tells the
-/// UI that everything spoken has been accounted for.
+/// and a chat log read out of order is actively misleading. Ordering is *per
+/// stream*: results from different channels are independent and must never
+/// wait for each other, or one busy channel would hold up every quiet one.
+/// And it owns the end of the session: the pool closing its results channel is
+/// what tells the UI that everything spoken has been accounted for.
 fn spawn_aggregator(
     results: Receiver<PoolEvent>,
-    label: String,
+    labels: HashMap<u16, String>,
     events: Arc<dyn EventSink>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
@@ -493,7 +641,7 @@ fn spawn_aggregator(
                 match event {
                     PoolEvent::Completed(completed) => {
                         for ready in reorder.accept(completed) {
-                            emit(&events, &label, ready, &mut dropped);
+                            emit(&events, &labels, ready, &mut dropped);
                         }
                     }
                     // Not a session error: the pool healed itself, and the
@@ -514,7 +662,7 @@ fn spawn_aggregator(
             // to arrive. Holding its successors back now would lose the last
             // words spoken rather than the one segment that went astray.
             for ready in reorder.drain() {
-                emit(&events, &label, ready, &mut dropped);
+                emit(&events, &labels, ready, &mut dropped);
             }
 
             match fatal {
@@ -527,7 +675,7 @@ fn spawn_aggregator(
 
 fn emit(
     events: &Arc<dyn EventSink>,
-    label: &str,
+    labels: &HashMap<u16, String>,
     completed: Completed,
     dropped: &mut HashMap<u16, u64>,
 ) {
@@ -580,8 +728,14 @@ fn emit(
 
             events.transcript(TranscriptEvent {
                 stream_id,
+                // A result for a stream that was never configured cannot
+                // happen, and an empty label in the chat would be a puzzle
+                // rather than a clue — so it says which id it was.
+                label: labels
+                    .get(&stream_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("stream {stream_id}")),
                 seq,
-                label: label.to_string(),
                 t_start_ms: t_start.as_millis() as u64,
                 t_end_ms: t_end.as_millis() as u64,
                 text,
@@ -650,7 +804,7 @@ mod tests {
         fn transcript(&self, event: TranscriptEvent) {
             self.transcripts.lock().unwrap().push(event);
         }
-        fn level(&self, _: LevelEvent) {}
+        fn levels(&self, _: LevelsEvent) {}
         fn overload(&self, event: OverloadEvent) {
             self.overloads.lock().unwrap().push(event);
         }
@@ -659,9 +813,9 @@ mod tests {
         }
     }
 
-    fn completed(seq: u64, outcome: Outcome) -> PoolEvent {
+    fn completed(stream: u16, seq: u64, outcome: Outcome) -> PoolEvent {
         PoolEvent::Completed(Completed {
-            stream_id: StreamId(0),
+            stream_id: StreamId(stream),
             seq,
             t_start: Duration::from_millis(seq * 500),
             t_end: Duration::from_millis(seq * 500 + 500),
@@ -670,8 +824,9 @@ mod tests {
         })
     }
 
-    fn spoken(seq: u64, text: &str) -> PoolEvent {
+    fn spoken_on(stream: u16, seq: u64, text: &str) -> PoolEvent {
         completed(
+            stream,
             seq,
             Outcome::Text {
                 text: text.into(),
@@ -682,13 +837,28 @@ mod tests {
         )
     }
 
+    fn spoken(seq: u64, text: &str) -> PoolEvent {
+        spoken_on(0, seq, text)
+    }
+
     /// Runs the aggregator over a fixed sequence of pool events and returns
     /// everything the UI saw.
     fn aggregate(events: Vec<PoolEvent>) -> Arc<Recorder> {
+        aggregate_for([(0, "Regie"), (1, "FOH"), (2, "Licht")], events)
+    }
+
+    fn aggregate_for(
+        labels: impl IntoIterator<Item = (u16, &'static str)>,
+        events: Vec<PoolEvent>,
+    ) -> Arc<Recorder> {
         let recorder = Arc::new(Recorder::default());
         let sink: Arc<dyn EventSink> = recorder.clone();
         let (tx, rx) = mpsc::channel();
-        let handle = spawn_aggregator(rx, "Regie".into(), sink);
+        let labels = labels
+            .into_iter()
+            .map(|(id, label)| (id, label.to_string()))
+            .collect();
+        let handle = spawn_aggregator(rx, labels, sink);
         for event in events {
             tx.send(event).unwrap();
         }
@@ -719,12 +889,55 @@ mod tests {
     }
 
     #[test]
+    fn one_channel_waiting_for_a_result_does_not_hold_up_another() {
+        // The reason ordering is per stream and not global. Channel 0's
+        // segment 0 is still decoding; channel 1 has no reason to wait for it,
+        // and if it did, one busy channel would stall every quiet one.
+        let recorder = aggregate(vec![
+            spoken_on(1, 0, "FOH eins"),
+            spoken_on(1, 1, "FOH zwei"),
+            spoken_on(0, 0, "Regie eins"),
+        ]);
+
+        let seen: Vec<(u16, String)> = recorder
+            .transcripts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| (t.stream_id, t.text.clone()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (1, "FOH eins".to_string()),
+                (1, "FOH zwei".to_string()),
+                (0, "Regie eins".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_transcript_carries_its_own_streams_label() {
+        // One label for the whole session was fine with one channel. With
+        // eight it is the only thing that says who spoke.
+        let recorder = aggregate(vec![spoken_on(0, 0, "eins"), spoken_on(2, 0, "zwei")]);
+        let seen: Vec<String> = recorder
+            .transcripts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| t.label.clone())
+            .collect();
+        assert_eq!(seen, ["Regie", "Licht"]);
+    }
+
+    #[test]
     fn a_dropped_segment_does_not_hold_back_the_words_after_it() {
         // The reason the pool reports segments it gave up on rather than
         // staying quiet about them: the ones behind it would never appear.
         let recorder = aggregate(vec![
             spoken(1, "zwei"),
-            completed(0, Outcome::Overloaded),
+            completed(0, 0, Outcome::Overloaded),
             spoken(2, "drei"),
         ]);
 
@@ -742,6 +955,20 @@ mod tests {
         assert_eq!(overloads.len(), 1);
         assert_eq!(overloads[0].seq, 0);
         assert_eq!(overloads[0].dropped, 1);
+    }
+
+    #[test]
+    fn overload_is_counted_per_stream() {
+        // A running total across all channels would tell an operator the app
+        // is behind but not on which channel they lost words.
+        let recorder = aggregate(vec![
+            completed(0, 0, Outcome::Overloaded),
+            completed(1, 0, Outcome::Overloaded),
+            completed(0, 1, Outcome::Overloaded),
+        ]);
+        let overloads = recorder.overloads.lock().unwrap();
+        let counts: Vec<(u16, u64)> = overloads.iter().map(|o| (o.stream_id, o.dropped)).collect();
+        assert_eq!(counts, [(0, 1), (1, 1), (0, 2)]);
     }
 
     #[test]
@@ -813,10 +1040,39 @@ mod tests {
     }
 
     #[test]
+    fn levels_cross_the_bridge_as_one_event_for_all_streams() {
+        // Eight meters, one event: the shape the UI indexes by `streamId`.
+        let json = serde_json::to_value(LevelsEvent {
+            streams: vec![
+                StreamLevel {
+                    stream_id: 0,
+                    rms: 0.1,
+                    peak: 0.4,
+                    dropped: 0,
+                },
+                StreamLevel {
+                    stream_id: 1,
+                    rms: 0.0,
+                    peak: 0.0,
+                    dropped: 128,
+                },
+            ],
+        })
+        .unwrap();
+
+        assert_eq!(json["streams"][0]["streamId"], 0);
+        assert_eq!(json["streams"][1]["dropped"], 128);
+    }
+
+    #[test]
     fn session_state_is_tagged_for_the_ui() {
         let running = serde_json::to_value(SessionState::Running {
             device: "MacBook Pro Microphone".into(),
-            channel: 0,
+            streams: vec![RunningStream {
+                stream_id: 0,
+                channel: 2,
+                label: "Regie".into(),
+            }],
             sample_rate: 48_000,
             model: "ggml-small-q5_1.bin".into(),
             load_ms: 140,
@@ -825,6 +1081,8 @@ mod tests {
         .unwrap();
         assert_eq!(running["state"], "running");
         assert_eq!(running["sampleRate"], 48_000);
+        assert_eq!(running["streams"][0]["streamId"], 0);
+        assert_eq!(running["streams"][0]["channel"], 2);
 
         let failed = serde_json::to_value(SessionState::Failed {
             message: "no model".into(),
@@ -870,12 +1128,23 @@ mod tests {
     #[test]
     fn the_session_config_is_read_as_the_ui_writes_it() {
         let config: SessionConfig = serde_json::from_str(
-            r#"{"device":"MacBook Pro Microphone","channel":0,"label":"Regie",
-                "language":"de","initialPrompt":"Standby, Cue, Go"}"#,
+            r#"{"device":"Scarlett 18i20","streams":[
+                {"channel":0,"label":"Regie","language":"de",
+                 "initialPrompt":"Standby, Cue, Go"},
+                {"channel":5,"label":"FOH","language":"en","initialPrompt":null}
+            ]}"#,
         )
         .unwrap();
-        assert_eq!(config.channel, 0);
-        assert_eq!(config.language, "de");
-        assert_eq!(config.initial_prompt.as_deref(), Some("Standby, Cue, Go"));
+        assert_eq!(config.streams.len(), 2);
+        assert_eq!(config.streams[0].channel, 0);
+        assert_eq!(
+            config.streams[0].initial_prompt.as_deref(),
+            Some("Standby, Cue, Go")
+        );
+        // Not contiguous and not ordered: an engineer patches the channels
+        // they have, not the first N.
+        assert_eq!(config.streams[1].channel, 5);
+        assert_eq!(config.streams[1].language, "en");
+        assert_eq!(config.streams[1].initial_prompt, None);
     }
 }

@@ -1,50 +1,48 @@
 <script lang="ts">
   import ChatList from "./lib/ChatList.svelte";
-  import LevelMeter from "./lib/LevelMeter.svelte";
+  import StreamMeters from "./lib/StreamMeters.svelte";
+  import StreamSetup from "./lib/StreamSetup.svelte";
+  import { newChannel, toConfig, validate, type Channel } from "./lib/streams";
   import {
     listDevices,
-    onLevel,
+    onLevels,
     onOverload,
     onSessionState,
     onTranscript,
     startSession,
     stopSession,
     type DeviceOption,
-    type LevelEvent,
     type SessionState,
+    type StreamLevel,
     type TranscriptEvent,
   } from "./lib/bridge";
 
-  // The narrow vertical slice: one device, one channel, one chat list. The
-  // session setup screen with eight streams, labels and per-stream language
-  // configuration is P7.
+  // Several channels of one multichannel device, one chat. Still to come in
+  // P7: the group sidebar, the virtualised list, and moving the channel setup
+  // onto its own Settings page.
 
   let devices = $state<DeviceOption[]>([]);
   let device = $state("");
-  // Counted from 1, the way channels are numbered on an interface and in a
-  // patch list. The backend stays zero-based because that is what the audio
-  // API uses; the conversion happens at this boundary and nowhere else.
-  let channelNumber = $state(1);
-  let label = $state("Regie");
-  let language = $state("de");
-  // The vocabulary prompt is the single strongest lever on code-switching
-  // quality (P15). Here it is a plain text box so its effect is visible from
-  // the first run — measured at "Q5" becoming "Cue".
-  let prompt = $state("Intercom-Kommandos: Standby, Cue, Go, Fade out, Blackout, Talkback, Regie.");
+  let channels = $state<Channel[]>([]);
 
   let status = $state<SessionState | { state: "starting" } | { state: "idle" }>({
     state: "idle",
   });
   let messages = $state<TranscriptEvent[]>([]);
-  let level = $state<LevelEvent>({ streamId: 0, rms: 0, peak: 0, dropped: 0 });
-  // Segments the decode queue had to give up on. Shown rather than only
-  // logged: an operator who spoke and saw no text needs to be able to tell
-  // "the app fell behind" from "the channel was not listening".
-  let overloaded = $state(0);
+  let levels = $state(new Map<number, StreamLevel>());
+  // Segments the decode queue had to give up on, per stream. Shown rather than
+  // only logged: an operator who spoke and saw no text needs to be able to
+  // tell "the app fell behind" from "the channel was not listening".
+  let overloaded = $state(new Map<number, number>());
 
   let running = $derived(status.state === "running");
   let busy = $derived(status.state === "starting");
   let selected = $derived(devices.find((d) => d.name === device));
+  let deviceChannels = $derived(selected?.channels ?? 0);
+  // The stream id is the row's position, which is exactly how the backend
+  // assigns it — see `SessionConfig::streams`.
+  let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
+  let problem = $derived(validate(channels, device, deviceChannels));
 
   $effect(() => {
     listDevices()
@@ -55,13 +53,26 @@
       .catch((e) => (status = { state: "failed", message: String(e) }));
   });
 
+  // One channel to begin with, so the app is usable without first having to
+  // work out that a channel has to be added. Only when there are none at all:
+  // switching devices must never throw away a setup the operator typed in.
+  $effect(() => {
+    if (deviceChannels > 0 && channels.length === 0) {
+      channels = [newChannel([], deviceChannels)];
+    }
+  });
+
   $effect(() => {
     const subscriptions = [
       onTranscript((event) => {
         messages = [...messages, event];
       }),
-      onLevel((event) => (level = event)),
-      onOverload((event) => (overloaded = event.dropped)),
+      onLevels((event) => {
+        levels = new Map(event.streams.map((s) => [s.streamId, s]));
+      }),
+      onOverload((event) => {
+        overloaded = new Map(overloaded).set(event.streamId, event.dropped);
+      }),
       onSessionState((event) => (status = event)),
     ];
 
@@ -80,25 +91,21 @@
     };
   });
 
+  // One global Start for every configured channel — there is deliberately no
+  // per-channel Start button. And it is non-destructive: the chat keeps what
+  // is already in it and new transcripts are appended. Clearing history, if it
+  // is ever offered, is a separate explicit action.
   const start = async () => {
-    messages = [];
-    // Keep the number inside what the device offers. The backend rejects an
-    // out-of-range channel with a precise message, but that message counts
-    // from zero and would contradict the field the operator just typed into.
-    const channels = selected?.channels ?? 1;
-    channelNumber = Math.min(Math.max(1, Math.round(channelNumber)), channels);
+    if (problem) {
+      status = { state: "failed", message: problem };
+      return;
+    }
 
     // The model load happens inside `start_session` and can take seconds on a
     // machine's first ever start — the UI has to say so rather than look hung.
     status = { state: "starting" };
     try {
-      status = await startSession({
-        device,
-        channel: channelNumber - 1,
-        label,
-        language,
-        initialPrompt: prompt.trim() === "" ? null : prompt,
-      });
+      status = await startSession({ device, streams: toConfig(channels) });
     } catch (e) {
       status = { state: "failed", message: String(e) };
     }
@@ -107,8 +114,8 @@
   const stop = async () => {
     await stopSession();
     status = { state: "idle" };
-    level = { streamId: 0, rms: 0, peak: 0, dropped: 0 };
-    overloaded = 0;
+    levels = new Map();
+    overloaded = new Map();
   };
 </script>
 
@@ -127,75 +134,44 @@
       </select>
     </label>
 
-    <label>
-      Channel
-      <input
-        type="number"
-        min="1"
-        max={selected?.channels ?? 1}
-        bind:value={channelNumber}
-        disabled={running || busy}
-      />
-    </label>
-
-    <label>
-      Label
-      <input type="text" bind:value={label} disabled={running || busy} />
-    </label>
-
-    <label>
-      Language
-      <input
-        type="text"
-        size="3"
-        bind:value={language}
-        disabled={running || busy}
-        title="ISO 639-1 code. The full list comes from whisper.cpp in P7 — nothing is hard-coded to de/en."
-      />
-    </label>
-
     {#if running}
       <button onclick={stop}>Stop</button>
     {:else}
-      <button onclick={start} disabled={busy || device === ""}>
+      <button onclick={start} disabled={busy || device === "" || problem !== null}>
         {busy ? "Starting …" : "Start"}
       </button>
     {/if}
   </header>
 
-  <div class="bar vocabulary">
-    <label class="grow">
-      Vocabulary prompt
-      <input type="text" bind:value={prompt} disabled={running || busy} />
-    </label>
-  </div>
+  <StreamSetup bind:channels {deviceChannels} locked={running || busy} />
 
   <div class="bar status">
     {#if status.state === "running"}
       <span class="ok">●</span>
       <span>
-        {status.device} · channel {status.channel + 1} · {status.sampleRate} Hz ·
+        {status.device} · {status.streams.length}
+        {status.streams.length === 1 ? "channel" : "channels"} · {status.sampleRate} Hz ·
         {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
         {(status.loadMs / 1000).toFixed(1)} s
       </span>
-      <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
-      {#if overloaded > 0}
-        <span class="error" title="The decode queue was full and the oldest segments were dropped">
-          {overloaded} not transcribed
-        </span>
-      {/if}
     {:else if status.state === "starting"}
       <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
     {:else if status.state === "failed"}
       <span class="error">{status.message}</span>
     {:else if status.state === "stopped"}
       <span class="dim">Session ended.</span>
+    {:else if problem}
+      <span class="dim">{problem}</span>
     {:else}
-      <span class="dim">Pick a device and press Start.</span>
+      <span class="dim">Press Start to transcribe all configured channels.</span>
     {/if}
   </div>
 
-  <ChatList {messages} />
+  {#if running}
+    <StreamMeters {channels} {levels} {overloaded} />
+  {/if}
+
+  <ChatList {messages} {colors} />
 </main>
 
 <style>
@@ -216,7 +192,6 @@
     flex-wrap: wrap;
   }
 
-  .vocabulary,
   .status {
     align-items: center;
   }
@@ -236,12 +211,7 @@
     color: var(--text-dim);
   }
 
-  .grow {
-    flex: 1;
-  }
-
-  select,
-  input {
+  select {
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
@@ -249,10 +219,6 @@
     padding: 0.3rem 0.45rem;
     font: inherit;
     font-size: 0.9rem;
-  }
-
-  input[type="number"] {
-    width: 4.5rem;
   }
 
   button {
@@ -264,6 +230,7 @@
     font: inherit;
     font-weight: 600;
     cursor: pointer;
+    margin-left: auto;
   }
 
   button:disabled {

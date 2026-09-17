@@ -6,6 +6,12 @@
 //! whole pipeline rests on — that every segment handed to the pool produces
 //! exactly one result, however badly the run goes.
 //!
+//! Since P6 there is also a test for eight streams feeding the queue at once,
+//! which is the part the pool was designed for and had never actually been
+//! done to it. It is not yet the P14 reference load test — it runs for seconds
+//! rather than thirty minutes and measures nothing — but it is what that test
+//! grows out of.
+//!
 //! Ignored by default: needs a model, which CI does not have.
 //!
 //! ```sh
@@ -15,7 +21,7 @@
 
 use app_lib::pool::{Completed, Outcome, PoolConfig, PoolEvent, WorkerPool};
 use audio_core::{LanguageCode, LanguageMode, Segment, StreamId, SAMPLE_RATE};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -26,12 +32,16 @@ use std::time::{Duration, Instant};
 /// the pool rather than about whisper. A rejected segment still travels the
 /// complete request/response path, which is the part under test.
 fn segment(seq: u64) -> Segment {
+    segment_on(0, seq)
+}
+
+fn segment_on(stream: u16, seq: u64) -> Segment {
     let samples = (SAMPLE_RATE / 2) as usize;
     let pcm = (0..samples)
         .map(|i| ((i * 2654435761) % 2003) as f32 / 2003.0 * 0.002 - 0.001)
         .collect();
     Segment {
-        stream_id: StreamId(0),
+        stream_id: StreamId(stream),
         seq,
         t_start: Duration::from_millis(seq * 500),
         t_end: Duration::from_millis(seq * 500 + 500),
@@ -141,6 +151,65 @@ fn a_killed_sidecar_is_replaced_and_nothing_goes_missing() {
     // kill was decoded by a replacement.
     for seq in FIRST..COUNT {
         assert!(decoded.contains(&seq), "segment {seq} was not decoded");
+    }
+}
+
+/// Eight streams into one queue, which is the arrangement the pool exists for.
+///
+/// The accounting invariant is the same as for one stream and is asserted the
+/// same way, now per `(stream, seq)` pair. What is new is the fairness claim
+/// the design rests on: workers take the *oldest* segment so that a busy
+/// channel cannot starve a quiet one. With every stream submitting the same
+/// number of segments, no stream may come back empty — and none may be
+/// silently dropped either, since the queue bound is deliberately smaller than
+/// the batch.
+#[test]
+#[ignore = "needs a model"]
+fn eight_streams_share_the_queue_without_starving_each_other() {
+    let Some(mut config) = config() else {
+        eprintln!("no model — skipping");
+        return;
+    };
+    config.queue_capacity = 8;
+
+    let (pool, results) = WorkerPool::spawn(config).expect("pool");
+    const STREAMS: u16 = 8;
+    const PER_STREAM: u64 = 6;
+
+    // Interleaved rather than stream by stream: eight people do not take turns
+    // speaking, and submitting one stream at a time would never put two of
+    // them in the queue together.
+    for seq in 0..PER_STREAM {
+        for stream in 0..STREAMS {
+            pool.submit(segment_on(stream, seq), Instant::now());
+        }
+    }
+    pool.shutdown();
+
+    let mut per_stream: HashMap<u16, HashSet<u64>> = HashMap::new();
+    let mut total = 0usize;
+    for event in results {
+        if let PoolEvent::Completed(Completed { stream_id, seq, .. }) = event {
+            total += 1;
+            assert!(
+                per_stream.entry(stream_id.0).or_default().insert(seq),
+                "segment {seq} of stream {} was reported twice",
+                stream_id.0
+            );
+        }
+    }
+
+    assert_eq!(
+        total,
+        (STREAMS as u64 * PER_STREAM) as usize,
+        "every segment must be accounted for exactly once"
+    );
+    for stream in 0..STREAMS {
+        assert_eq!(
+            per_stream.get(&stream).map(HashSet::len),
+            Some(PER_STREAM as usize),
+            "stream {stream} lost segments the others kept"
+        );
     }
 }
 

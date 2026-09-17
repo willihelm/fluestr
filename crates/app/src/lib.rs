@@ -1,52 +1,28 @@
 //! Tauri backend.
 //!
 //! Holds the capture session and the worker pool, and forwards their output to
-//! the UI as events. The full command surface (P6) and the SQLite persistence
-//! (P10) are still to come — what is here carries one channel through the
-//! pipeline into one chat list.
+//! the UI as events. The rest of the command surface (`update_stream_config`,
+//! group CRUD, `search_session`) and the SQLite persistence (P10) are still to
+//! come — what is here carries up to eight channels of one multichannel device
+//! through the pipeline into the chat.
 
 pub mod pool;
 pub mod session;
 pub mod worker;
 
-use audio_core::{LanguageCode, LanguageMode};
-use serde::{Deserialize, Serialize};
 use session::{
-    DeviceOption, EventSink, LevelEvent, OverloadEvent, Session, SessionConfig, SessionState,
+    DeviceOption, EventSink, LevelsEvent, OverloadEvent, Session, SessionConfig, SessionState,
     TranscriptEvent,
 };
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
-/// Configuration of a single stream (= one intercom channel).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamConfig {
-    /// Channel index on the multichannel interface.
-    pub channel: u16,
-    /// Free-form label: "Regie", "FOH", "Licht".
-    pub label: String,
-    pub language_mode: LanguageMode,
-    /// Name of the assigned vocabulary list (P15).
-    pub vocabulary: Option<String>,
-}
-
-impl Default for StreamConfig {
-    fn default() -> Self {
-        Self {
-            channel: 0,
-            label: String::new(),
-            language_mode: LanguageMode::Fixed {
-                language: LanguageCode::german(),
-            },
-            vocabulary: None,
-        }
-    }
-}
-
 /// Event names on the bridge. Constants because the UI subscribes by string
 /// and a typo there fails silently — nothing arrives, nothing complains.
 pub const EVENT_TRANSCRIPT: &str = "transcript";
-pub const EVENT_LEVEL: &str = "level";
+/// Plural: one event carries every stream's meter, so the cost of the meters
+/// does not grow with the channel count.
+pub const EVENT_LEVELS: &str = "levels";
 pub const EVENT_OVERLOAD: &str = "overload";
 pub const EVENT_SESSION_STATE: &str = "session-state";
 
@@ -58,8 +34,8 @@ impl EventSink for TauriEvents {
         let _ = self.0.emit(EVENT_TRANSCRIPT, event);
     }
 
-    fn level(&self, event: LevelEvent) {
-        let _ = self.0.emit(EVENT_LEVEL, event);
+    fn levels(&self, event: LevelsEvent) {
+        let _ = self.0.emit(EVENT_LEVELS, event);
     }
 
     fn overload(&self, event: OverloadEvent) {
@@ -150,33 +126,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Tauri application");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stream_config_defaults_to_fixed_german() {
-        let cfg = StreamConfig::default();
-        assert_eq!(cfg.language_mode.whisper_language(), Some("de"));
-        assert!(!cfg.language_mode.is_auto());
-    }
-
-    #[test]
-    fn stream_config_serialises_for_the_ui() {
-        let cfg = StreamConfig {
-            channel: 2,
-            label: "Regie".into(),
-            language_mode: LanguageMode::Auto {
-                candidates: vec![LanguageCode::german(), LanguageCode::english()],
-            },
-            vocabulary: Some("Broadcast".into()),
-        };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: StreamConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.label, "Regie");
-        assert_eq!(back.channel, 2);
-        assert!(back.language_mode.is_auto());
-    }
 }
