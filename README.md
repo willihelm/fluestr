@@ -16,9 +16,9 @@ stream with a single worker and a provisional voice detector.
 [docs/measurements.md](docs/measurements.md) lists what is provisional and
 which work package replaces it.
 
-In place: P0 (scaffolding), P1 (capture), P2 (ring buffers and resampling),
-P4 (sidecar). Still to come: P3 (a real VAD), P5 (worker pool), P6/P7 (the
-full command surface and chat UI), P11 (model manager).
+The sixteen work packages and where each one stands are in
+[docs/plan.md](docs/plan.md) — plan and progress in one file, so they cannot
+drift apart.
 
 ---
 
@@ -70,6 +70,7 @@ crates/
   app/               Tauri backend: session, worker pool, events
 ui/src/lib/          bridge types, chat list, level meter
 ui/                  Svelte + TypeScript
+docs/plan.md         the sixteen work packages and their current status
 docs/measurements.md measured evidence behind the architecture decisions
 ```
 
