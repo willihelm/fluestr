@@ -48,7 +48,11 @@
     <p class="empty">Nothing transcribed yet. Speak into one of the channels.</p>
   {/if}
 
-  {#each messages as message (message.streamId + "-" + message.seq)}
+  <!-- Keyed on all three, not on `streamId + seq`: those repeat across
+       sessions, and a duplicate key throws and stops the list rendering
+       entirely — which is what "nothing appears after Stop and Start" looked
+       like. -->
+  {#each messages as message (message.sessionId + "-" + message.streamId + "-" + message.seq)}
     <article style="--channel: {colorOf(message.streamId)}">
       <header>
         <span class="label">{message.label || "Stream " + message.streamId}</span>

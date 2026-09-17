@@ -34,6 +34,11 @@ export interface SessionConfig {
 }
 
 export interface TranscriptEvent {
+  // Sequence numbers are per stream and start again at zero with every
+  // session, so `(streamId, seq)` repeats as soon as a second session runs —
+  // and Start is non-destructive, so the chat holds lines from several of them
+  // at once. `(sessionId, streamId, seq)` is what identifies a line.
+  sessionId: number;
   streamId: number;
   seq: number;
   label: string;
@@ -65,6 +70,7 @@ export interface LevelsEvent {
 // audio lost on the way *into* the pipeline — this is audio that was captured
 // cleanly and then could not be kept up with.
 export interface OverloadEvent {
+  sessionId: number;
   streamId: number;
   seq: number;
   dropped: number;
@@ -81,6 +87,7 @@ export interface RunningStream {
 export type SessionState =
   | {
       state: "running";
+      sessionId: number;
       device: string;
       streams: RunningStream[];
       sampleRate: number;

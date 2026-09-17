@@ -388,6 +388,16 @@ Two more things worth knowing, both in the code:
   — resampling at ~2200× realtime, Silero at ~1.3 % of a core per stream — so
   eight streams are ~12 % of one core. What must not share a thread is
   decoding, and it does not.
+- **Every event carries a session id, because `seq` does not identify a
+  segment.** Sequence numbers are per stream and start again at zero each time
+  a session starts, so `(stream, seq)` repeats as soon as a second one runs —
+  and Start is deliberately non-destructive, so the chat holds lines from
+  several sessions at once. `(session, stream, seq)` is the identity, here and
+  in the P10 schema. Found the hard way: the chat list keyed on `(stream, seq)`
+  and the duplicate key threw, so after a Stop and a Start nothing appeared at
+  all. The id is counted per process, which is as long as the in-memory chat
+  lives; persistence needs one that survives a restart, and that belongs with
+  P10.
 
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
 `specta`) instead of hand-written TypeScript; `update_stream_config`, group
@@ -478,7 +488,10 @@ not disturb ongoing writes (WAL mode).
 ### P10 — SQLite persistence — **Open**
 
 Schema: `sessions`, `streams`, `segments`, `segments_fts`, `vocabularies`,
-`devices`. Language fields are written **from day one**, including for streams
+`devices`. A segment is keyed by `(session, stream, seq)` — see P6: the
+sequence number restarts with every session and does not identify anything on
+its own. The session id the events carry today is counted per process and has
+to become one that survives a restart here. Language fields are written **from day one**, including for streams
 with a fixed language — it costs nothing and makes misdetections analysable
 later. WAL mode with batched writes, not one commit per segment. Versioned
 migrations. Crash recovery marks an incomplete session as ended and keeps the

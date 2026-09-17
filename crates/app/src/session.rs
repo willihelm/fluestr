@@ -38,7 +38,7 @@ use audio_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -121,10 +121,26 @@ pub struct SessionConfig {
     pub streams: Vec<StreamConfig>,
 }
 
+/// Identifies one run of the pipeline.
+///
+/// Sequence numbers are per stream and start again at zero every time a
+/// session starts, because each stream gets a fresh segmenter. That makes
+/// `(stream, seq)` ambiguous the moment a second session runs — and Start is
+/// deliberately non-destructive, so the chat holds lines from several sessions
+/// at once. `(session, stream, seq)` is what actually identifies a segment,
+/// here and in the P10 schema.
+///
+/// Counted per process, which is as long as the in-memory chat lives.
+/// Persistence will need an id that survives a restart; that belongs with P10,
+/// not here.
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
 /// A finished transcript on its way to the chat view.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptEvent {
+    /// See [`NEXT_SESSION_ID`]: `seq` alone does not identify a segment.
+    pub session_id: u64,
     pub stream_id: u16,
     pub seq: u64,
     pub label: String,
@@ -174,6 +190,8 @@ pub struct LevelsEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverloadEvent {
+    /// See [`NEXT_SESSION_ID`]: `seq` alone does not identify a segment.
+    pub session_id: u64,
     pub stream_id: u16,
     /// Sequence number of the segment that was dropped.
     pub seq: u64,
@@ -207,6 +225,8 @@ pub struct RunningStream {
 )]
 pub enum SessionState {
     Running {
+        /// What the transcripts arriving from now on are tagged with.
+        session_id: u64,
         device: String,
         streams: Vec<RunningStream>,
         sample_rate: u32,
@@ -394,8 +414,9 @@ impl Session {
             .map(|s| (s.stream_id, s.label.clone()))
             .collect();
 
+        let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
         let stop = Arc::new(AtomicBool::new(false));
-        let aggregating = spawn_aggregator(results, labels, events.clone());
+        let aggregating = spawn_aggregator(session_id, results, labels, events.clone());
         let processing = spawn_processor(
             pipelines,
             pool.clone(),
@@ -405,6 +426,7 @@ impl Session {
         );
 
         tracing::info!(
+            session_id,
             device = %info.name,
             streams = config.streams.len(),
             sample_rate = granted,
@@ -414,6 +436,7 @@ impl Session {
         );
 
         let state = SessionState::Running {
+            session_id,
             device: info.name,
             streams: running,
             sample_rate: granted,
@@ -626,6 +649,7 @@ pub fn discard_reason(text: &str, no_speech_probability: f32) -> Option<&'static
 /// And it owns the end of the session: the pool closing its results channel is
 /// what tells the UI that everything spoken has been accounted for.
 fn spawn_aggregator(
+    session_id: u64,
     results: Receiver<PoolEvent>,
     labels: HashMap<u16, String>,
     events: Arc<dyn EventSink>,
@@ -641,7 +665,7 @@ fn spawn_aggregator(
                 match event {
                     PoolEvent::Completed(completed) => {
                         for ready in reorder.accept(completed) {
-                            emit(&events, &labels, ready, &mut dropped);
+                            emit(session_id, &events, &labels, ready, &mut dropped);
                         }
                     }
                     // Not a session error: the pool healed itself, and the
@@ -662,7 +686,7 @@ fn spawn_aggregator(
             // to arrive. Holding its successors back now would lose the last
             // words spoken rather than the one segment that went astray.
             for ready in reorder.drain() {
-                emit(&events, &labels, ready, &mut dropped);
+                emit(session_id, &events, &labels, ready, &mut dropped);
             }
 
             match fatal {
@@ -674,6 +698,7 @@ fn spawn_aggregator(
 }
 
 fn emit(
+    session_id: u64,
     events: &Arc<dyn EventSink>,
     labels: &HashMap<u16, String>,
     completed: Completed,
@@ -727,6 +752,7 @@ fn emit(
             tracing::debug!(stream_id, seq, text = %text, "transcript text");
 
             events.transcript(TranscriptEvent {
+                session_id,
                 stream_id,
                 // A result for a stream that was never configured cannot
                 // happen, and an empty label in the chat would be a puzzle
@@ -754,6 +780,7 @@ fn emit(
             *total += 1;
             tracing::warn!(stream_id, seq, total, "segment dropped, queue full");
             events.overload(OverloadEvent {
+                session_id,
                 stream_id,
                 seq,
                 dropped: *total,
@@ -851,6 +878,14 @@ mod tests {
         labels: impl IntoIterator<Item = (u16, &'static str)>,
         events: Vec<PoolEvent>,
     ) -> Arc<Recorder> {
+        aggregate_as(1, labels, events)
+    }
+
+    fn aggregate_as(
+        session_id: u64,
+        labels: impl IntoIterator<Item = (u16, &'static str)>,
+        events: Vec<PoolEvent>,
+    ) -> Arc<Recorder> {
         let recorder = Arc::new(Recorder::default());
         let sink: Arc<dyn EventSink> = recorder.clone();
         let (tx, rx) = mpsc::channel();
@@ -858,7 +893,7 @@ mod tests {
             .into_iter()
             .map(|(id, label)| (id, label.to_string()))
             .collect();
-        let handle = spawn_aggregator(rx, labels, sink);
+        let handle = spawn_aggregator(session_id, rx, labels, sink);
         for event in events {
             tx.send(event).unwrap();
         }
@@ -1016,10 +1051,42 @@ mod tests {
     }
 
     #[test]
+    fn a_second_session_does_not_collide_with_the_first() {
+        // Start is deliberately non-destructive, so the chat still holds the
+        // previous session's lines — and every stream gets a fresh segmenter,
+        // so sequence numbers begin again at zero. `(stream, seq)` therefore
+        // repeats across sessions, and the chat list keys on it: the second
+        // session's first line arrived with the same identity as the first
+        // session's and the keyed list threw, which stopped the chat
+        // rendering altogether. What identifies a segment is
+        // `(session, stream, seq)`.
+        let first = aggregate_as(1, [(0, "Regie")], vec![spoken(0, "eins")]);
+        let second = aggregate_as(2, [(0, "Regie")], vec![spoken(0, "zwei")]);
+
+        let id = |r: &Arc<Recorder>| {
+            let t = r.transcripts.lock().unwrap();
+            (t[0].session_id, t[0].stream_id, t[0].seq)
+        };
+        assert_eq!(id(&first), (1, 0, 0));
+        assert_eq!(id(&second), (2, 0, 0));
+        assert_ne!(id(&first), id(&second));
+    }
+
+    #[test]
+    fn every_session_gets_its_own_id() {
+        // Two sessions in one process must never be handed the same id, or
+        // the collision above comes back with a longer key.
+        let first = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+        let second = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(first, second);
+    }
+
+    #[test]
     fn the_transcript_event_matches_what_the_ui_reads() {
         // The field names cross the IPC bridge, so they are pinned down here
         // rather than discovered by a blank chat view.
         let json = serde_json::to_value(TranscriptEvent {
+            session_id: 3,
             stream_id: 0,
             seq: 4,
             label: "Regie".into(),
@@ -1033,6 +1100,7 @@ mod tests {
         })
         .unwrap();
 
+        assert_eq!(json["sessionId"], 3);
         assert_eq!(json["streamId"], 0);
         assert_eq!(json["tStartMs"], 1_200);
         assert_eq!(json["detectedLanguage"], "de");
@@ -1067,6 +1135,7 @@ mod tests {
     #[test]
     fn session_state_is_tagged_for_the_ui() {
         let running = serde_json::to_value(SessionState::Running {
+            session_id: 7,
             device: "MacBook Pro Microphone".into(),
             streams: vec![RunningStream {
                 stream_id: 0,
@@ -1080,6 +1149,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(running["state"], "running");
+        assert_eq!(running["sessionId"], 7);
         assert_eq!(running["sampleRate"], 48_000);
         assert_eq!(running["streams"][0]["streamId"], 0);
         assert_eq!(running["streams"][0]["channel"], 2);
