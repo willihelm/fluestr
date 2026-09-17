@@ -9,9 +9,10 @@ parallel, and what was said is gone. This app makes what you missed readable
 and searchable, locally and without any cloud service.
 
 **Status:** one channel runs end to end — microphone, ring buffer, resampling,
-segmentation, sidecar, chat list. That is a deliberately narrow vertical slice
-to make the real latency measurable, not the MVP: it handles a single stream
-with a single worker and a provisional voice detector.
+segmentation, sidecar, chat list — at a measured **~330 ms** from the end of a
+spoken segment to the text appearing. That is a deliberately narrow vertical
+slice to make the real latency measurable, not the MVP: it handles a single
+stream with a single worker and a provisional voice detector.
 [docs/measurements.md](docs/measurements.md) lists what is provisional and
 which work package replaces it.
 

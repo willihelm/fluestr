@@ -57,8 +57,10 @@ export type SessionState =
 
 export const appVersion = () => invoke<string>("app_version");
 export const listDevices = () => invoke<DeviceOption[]>("list_devices");
+/// Resolves with the running state, so the UI does not have to wait for an
+/// event to learn that the session it just asked for actually started.
 export const startSession = (config: SessionConfig) =>
-  invoke<void>("start_session", { config });
+  invoke<SessionState>("start_session", { config });
 export const stopSession = () => invoke<void>("stop_session");
 
 export const onTranscript = (fn: (e: TranscriptEvent) => void): Promise<UnlistenFn> =>

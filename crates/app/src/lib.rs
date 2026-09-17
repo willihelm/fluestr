@@ -79,14 +79,18 @@ fn list_devices() -> Result<Vec<DeviceOption>, String> {
     session::list_devices().map_err(|e| e.to_string())
 }
 
-/// Starts a session. Blocks until the model is loaded, which on a machine's
-/// very first start includes the one-off Metal shader compilation (~8 s).
+/// Starts a session and returns its running state.
+///
+/// Blocks until the model is loaded, which on a machine's very first start
+/// includes the one-off Metal shader compilation (~8 s). Returning the state
+/// rather than only emitting it means the button the operator pressed gets its
+/// own answer; the events carry what happens after that.
 #[tauri::command]
 fn start_session(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     config: SessionConfig,
-) -> Result<(), String> {
+) -> Result<SessionState, String> {
     let mut slot = state.session.lock().map_err(|_| "session state poisoned")?;
     if slot.is_some() {
         return Err("a session is already running".into());
@@ -94,9 +98,9 @@ fn start_session(
 
     let events: Arc<dyn EventSink> = Arc::new(TauriEvents(app));
     match Session::start(config, events.clone()) {
-        Ok(session) => {
+        Ok((session, running)) => {
             *slot = Some(session);
-            Ok(())
+            Ok(running)
         }
         Err(err) => {
             // With the chain of causes, which the UI string flattens away.

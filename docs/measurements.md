@@ -244,8 +244,39 @@ ended. That waiting time is therefore a latency setting, not only a quality
 one — which is why it belongs in P12 next to the model choice rather than
 buried in P3.
 
-**Still unmeasured:** latency from a live microphone, where capture buffering
-and the pump interval add to the above. That needs the GUI and someone talking.
+### Live from the microphone
+
+First run of the assembled app against the built-in microphone, one channel at
+48 kHz, model `small-q5_1` on the GPU. Six consecutive segments, sequence
+numbers 0-5 with no gaps and none discarded:
+
+| Segment | Decode | End to end |
+|---|---|---|
+| 0 | 342 ms | 344 ms |
+| 1 | 329 ms | 330 ms |
+| 2 | 300 ms | 301 ms |
+| 3 | 322 ms | 322 ms |
+| 4 | 306 ms | 307 ms |
+| 5 | 319 ms | 320 ms |
+
+"End to end" is measured from the moment the segmenter closes a segment to the
+transcript being ready for the UI.
+
+**Everything except the decode costs 1-2 ms.** Ring buffer, resampling,
+segmentation and the sidecar round trip together disappear next to whisper
+itself. That settles where tuning is worth doing and where it is not: model
+size and segment length are the only levers on latency that matter, which is
+what P14 should spend its time on.
+
+Counted from the last spoken word, add the `silence_timeout` the segmenter
+waits out before it can know the segment ended — about 850 ms in total, well
+inside the 1-2 s target on a single stream. Eight streams through one worker
+will not hold that; the queue and pool in P5 is what the figure has to be
+re-measured against.
+
+**Still unmeasured:** real intercom material. These are short utterances from a
+laptop microphone in a quiet room — the easiest possible case, and an upper
+bound rather than a promise.
 
 ### What the slice does provisionally
 
@@ -261,6 +292,40 @@ decision:
   with its own signature is P13.
 - **Chat list is unvirtualised.** Fine for minutes, not for an hour across
   eight streams. P7.
+
+### What the first launch cost, and why
+
+Two failures that were both invisible rather than hard, which is the part worth
+remembering.
+
+The model lookup resolved `.scratch/models` against the working directory.
+`tauri dev` runs the binary with the crate as its working directory rather than
+the repository root, so the app reported "no model configured" to someone who
+had just downloaded one — a wrong-directory problem wearing a missing-file
+message. The search now walks up from both the working directory and the
+binary's own location.
+
+Then the UI sat at "loading the model" while the backend was, in fact, running
+the whole pipeline — a process sample showed the processing thread resampling
+and segmenting and the decode thread waiting for work. The cause was Tauri v2's
+permission system: commands defined by the app need no permission, but the core
+event plugin does, and there was no capability file at all. So `invoke`
+succeeded and `listen` was rejected. Because the rejected promise was never
+caught, the failure was completely silent, and a backend whose events go
+nowhere looks exactly like a backend that hangs.
+
+**Consequences kept in the code:**
+
+- `crates/app/capabilities/default.json` grants `core:event:default`, and
+  nothing else — a future need should fail loudly, not be silently pre-granted.
+- A refused subscription now surfaces in the UI.
+- `start_session` **returns** the running state instead of only emitting it, so
+  the transition the operator is waiting for after pressing Start arrives as
+  the answer to that click. Events carry only what happens afterwards.
+- Transcripts are logged with their timings — lengths and milliseconds, never
+  the words. Intercom traffic is the operator's communication and does not
+  belong in a terminal log by default; the text sits at `debug` for when a run
+  has to be traced deliberately (`RUST_LOG=app_lib=debug just dev`).
 
 ---
 

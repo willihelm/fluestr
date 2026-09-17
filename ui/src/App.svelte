@@ -55,9 +55,18 @@
       onLevel((event) => (level = event)),
       onSessionState((event) => (status = event)),
     ];
+
+    // Subscribing can be refused — `listen` needs the `core:event` capability,
+    // and without it the promise rejects. Unhandled, that failure is completely
+    // silent: the backend runs, the events go nowhere, and the UI looks like it
+    // is waiting on a hung session. It has to be visible.
+    Promise.all(subscriptions).catch((e) => {
+      status = { state: "failed", message: `event bridge unavailable: ${e}` };
+    });
+
     return () => {
       for (const subscription of subscriptions) {
-        subscription.then((unlisten) => unlisten());
+        subscription.then((unlisten) => unlisten()).catch(() => {});
       }
     };
   });
@@ -68,7 +77,7 @@
     // machine's first ever start — the UI has to say so rather than look hung.
     status = { state: "starting" };
     try {
-      await startSession({
+      status = await startSession({
         device,
         channel,
         label,

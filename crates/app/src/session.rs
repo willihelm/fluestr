@@ -140,7 +140,19 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn start(config: SessionConfig, events: Arc<dyn EventSink>) -> Result<Self> {
+    /// Returns the running state alongside the session rather than only
+    /// emitting it.
+    ///
+    /// The initial transition is what the operator is waiting on after
+    /// pressing Start, so it travels back as the command's own reply. Events
+    /// then carry everything that happens *later* — a device unplugged, the
+    /// sidecar lost, the session stopped. Making the first state depend on the
+    /// event channel too would mean a broken bridge looks like a backend that
+    /// hangs, which is exactly the failure this arrangement avoids.
+    pub fn start(
+        config: SessionConfig,
+        events: Arc<dyn EventSink>,
+    ) -> Result<(Self, SessionState)> {
         let backend = CpalBackend::new();
         let device_id = audio_core::DeviceId(config.device.clone());
         let info = backend.device(&device_id)?;
@@ -216,22 +228,34 @@ impl Session {
             events.clone(),
         );
 
-        events.state(SessionState::Running {
+        tracing::info!(
+            device = %info.name,
+            channel = config.channel,
+            sample_rate = granted,
+            language = %config.language,
+            prompt = config.initial_prompt.is_some(),
+            "session running"
+        );
+
+        let state = SessionState::Running {
             device: info.name,
             channel: config.channel,
             sample_rate: granted,
             model: ready.model,
             load_ms: ready.load_ms,
             gpu: ready.gpu,
-        });
+        };
 
-        Ok(Self {
-            stop,
-            capture: Some(capture),
-            processing: Some(processing),
-            decoding: Some(decoding),
-            sample_rate: granted,
-        })
+        Ok((
+            Self {
+                stop,
+                capture: Some(capture),
+                processing: Some(processing),
+                decoding: Some(decoding),
+                sample_rate: granted,
+            },
+            state,
+        ))
     }
 
     /// Stops in the order the data flows, so nothing is left half-processed:
@@ -356,9 +380,26 @@ fn spawn_decoder(
                         // turned out to be noise. Showing it as an empty bubble
                         // would be worse than showing nothing.
                         if text.is_empty() {
-                            tracing::debug!(stream_id, seq, "empty transcript, dropped");
+                            tracing::info!(stream_id, seq, decode_ms, "empty transcript, dropped");
                             continue;
                         }
+
+                        let latency_ms = closed_at.elapsed().as_millis() as u32;
+                        // Length and timings, not the words: this is an
+                        // operator's intercom traffic, and a terminal log is
+                        // not where it belongs by default. The text itself
+                        // sits one level lower, for when a run has to be
+                        // debugged deliberately.
+                        tracing::info!(
+                            stream_id,
+                            seq,
+                            decode_ms,
+                            latency_ms,
+                            chars = text.chars().count(),
+                            "transcript"
+                        );
+                        tracing::debug!(stream_id, seq, text = %text, "transcript text");
+
                         events.transcript(TranscriptEvent {
                             stream_id,
                             seq,
@@ -368,7 +409,7 @@ fn spawn_decoder(
                             text,
                             detected_language,
                             decode_ms,
-                            latency_ms: closed_at.elapsed().as_millis() as u32,
+                            latency_ms,
                         });
                     }
                     Ok(Response::Error { message, .. }) => {
