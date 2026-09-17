@@ -187,7 +187,15 @@ impl Session {
         // the ring with material that is stale by the time anyone looks at it.
         let binary = crate::worker::find_binary()?;
         let model = crate::worker::find_model()?;
-        let worker = Worker::spawn(&binary, &model, 4).context("starting the sidecar")?;
+        let vad_model = crate::worker::find_vad_model();
+        if vad_model.is_none() {
+            tracing::warn!(
+                "no Silero VAD model found — noise and silence will be transcribed; \
+                 run `just vad-model`"
+            );
+        }
+        let worker = Worker::spawn(&binary, &model, vad_model.as_deref(), 4)
+            .context("starting the sidecar")?;
         let ready = worker.ready().clone();
 
         let rate = info.default_sample_rate;
@@ -375,10 +383,13 @@ fn spawn_processor(
 
 /// Why a decoded segment does not belong in the chat, or `None` if it does.
 ///
+/// Public so the integration test can assert the whole rule rather than
+/// re-implement it.
+///
 /// Returns the reason rather than a bool so the rejection can be logged.
 /// Nothing here may drop anything quietly: an operator who spoke and saw no
 /// text needs to be able to find out which of these fired.
-fn discard_reason(text: &str, no_speech_probability: f32) -> Option<&'static str> {
+pub fn discard_reason(text: &str, no_speech_probability: f32) -> Option<&'static str> {
     if text.is_empty() {
         return Some("empty");
     }

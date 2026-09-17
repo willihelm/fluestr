@@ -294,30 +294,70 @@ and whisper annotates what it hears rather than staying quiet. The energy VAD
 opened segments for a bell and for background sound because it measures
 loudness, and loudness is all it can measure.
 
-**Three layers, in the order they take effect:**
+Two attempts failed first, and both failures are worth keeping written down
+because each one *looked* like protection.
 
-1. **`suppress_nst`** in the sidecar — whisper is told not to emit sound-event
-   tokens at all. Together with `suppress_blank` this removes the ordinary
-   case.
-2. **`no_speech_probability`** per segment, now carried in the protocol. This
-   is the only value in the whole chain that comes from something which
-   actually models the difference between speech and other sound. Segments
-   above 0.6 (whisper.cpp's own default) are dropped. It also catches the
-   dangerous case the text filter cannot: plausible words hallucinated over
-   silence, which look entirely fine in the chat.
-3. **`is_only_non_speech`** on the text — the backstop for what still gets
-   through. Fails *safe*: unbalanced delimiters mean "keep it", because a
-   stray `(music` is a much smaller harm than silently swallowing a sentence
-   that happened to contain a bracket.
+**Failure 1: suppressing the annotations made it worse.** Setting
+`suppress_nst` stopped `[BREAK]` and `(music)` — and whisper started producing
+ordinary-looking German sentences for the same noise instead. It still has to
+emit something; forbidding the annotation tokens only pushes it towards words.
+That is strictly worse: an annotation is a *labelled* non-speech marker that
+can be filtered with certainty, while a plausible sentence carries nothing that
+tells an operator it was invented. The flag is now explicitly set to `false`.
+
+**Failure 2: `params.vad` did nothing at all.** whisper.cpp applies the flag in
+`whisper_full` (and `whisper_full_parallel`) but **not** in
+`whisper_full_with_state`, which is what the sidecar calls. Setting it compiled,
+logged nothing, and changed nothing — verified by reading `whisper.cpp` after
+the noise test kept failing.
+
+**Failure 3: `no_speech_probability` is inert under these parameters.** It
+reads exactly 0.000 for digital silence, room tone, hiss and loud noise alike.
+With greedy decoding at temperature 0 and `single_segment`, whisper.cpp never
+fills it in. The check against it remains in the code because it is free and
+correct if the value ever becomes meaningful, but it is **not** a defence
+today, and describing it as one would be wrong.
+
+**What actually works — Silero, run directly, before any decoding:**
+
+`WhisperVadContext` from whisper-rs is driven explicitly rather than through
+the parameter flag. If it reports no speech segments, the sidecar returns empty
+text and never calls the decoder.
+
+| Input, 3 s each | Result | 
+|---|---|
+| digital silence | no segments, no decode |
+| quiet room tone (0.005) | no segments, no decode |
+| audible hiss (0.05) | no segments, no decode |
+| loud noise (0.3) | no segments, no decode |
+| German speech fixture | passes through, 437 ms decode, full sentence |
+
+The loud case is the one that matters: at 0.3 amplitude an energy VAD calls it
+speech without hesitation. Loudness was never the question.
+
+**It is also faster, not slower.** Four non-speech segments took 2.10 s when
+they were decoded and discarded, and 0.89 s once the gate skipped the decode.
+The VAD model is 0.88 MB and runs in single-digit milliseconds.
+
+**On CPU, deliberately.** With `use_gpu(true)` ggml aborts the whole process:
+it reports "no GPU found" for the VAD backend while the model is already
+allocated in a Metal buffer, then trips its own assertion in
+`ggml-backend.cpp`. Beyond that, a second Metal user would contend with whisper
+for the same queue — the same reason the worker pool is kept small.
+
+**The text filter stays** as a backstop for whatever still gets through
+(`is_only_non_speech`). It fails *safe*: unbalanced delimiters mean "keep it",
+because a stray `(music` is a much smaller harm than silently swallowing a
+sentence that happened to contain a bracket.
 
 Every rejection is logged with its reason. An operator who spoke and saw no
 text has to be able to find out which layer fired — silent loss is the one
 failure this project does not accept.
 
-**Where the cost falls:** the segment is decoded and *then* discarded, so this
-buys correctness, not time. Not spending the decode at all needs a VAD that
-models speech rather than loudness — the Silero VAD that ships with whisper-rs
-(see below), which is P3.
+**Consequence for P3:** the segmenter's energy VAD stays as the cheap first
+cut, but the authority on "is this speech" now sits in the sidecar. Moving
+Silero in front of the segmenter would additionally save the IPC round trip,
+which is the remaining argument for doing P3 properly.
 
 ### What the slice does provisionally
 

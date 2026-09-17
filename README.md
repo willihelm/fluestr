@@ -37,10 +37,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ```sh
 just setup              # frontend dependencies
-just model small-q5_1   # a model, until the model manager exists (P11)
+just model small-q5_1   # a speech model, until the model manager exists (P11)
+just vad-model          # Silero, so noise and silence are not transcribed
 just dev                # run the app
 just check              # everything CI runs as well
 ```
+
+Without the VAD model the app still runs, but whisper captions room noise and
+silence as well — as `[BREAK]`, `(music)`, or as plausible sentences that were
+never spoken. The sidecar warns when it starts without one.
 
 In the app: pick a device, pick a channel, press Start. The first start on a
 machine takes about eight seconds because macOS compiles the Metal shaders
@@ -51,7 +56,8 @@ exist yet:
 
 | Variable | Replaces | Default |
 |---|---|---|
-| `INTERCOM2CHAT_MODEL` | the model manager (P11) | first `.bin` in `.scratch/models` |
+| `INTERCOM2CHAT_MODEL` | the model manager (P11) | largest non-Silero `.bin` in `.scratch/models` |
+| `INTERCOM2CHAT_VAD_MODEL` | the model manager (P11) | newest `ggml-silero-*.bin` in `.scratch/models` |
 | `INTERCOM2CHAT_WORKER` | the bundled sidecar (P13) | `whisper-worker` next to the app binary |
 
 ## Layout

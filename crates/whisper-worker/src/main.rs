@@ -16,16 +16,21 @@ use whisper_protocol as protocol;
 use whisper_protocol::{Language, Request, Response};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+    WhisperVadContext, WhisperVadContextParams, WhisperVadParams,
 };
 
 struct Args {
     model: String,
+    /// Silero VAD model. Optional, but without it whisper transcribes whatever
+    /// it is handed — see [`transcribe`].
+    vad_model: Option<String>,
     threads: usize,
     gpu: bool,
 }
 
 fn parse_args() -> Result<Args> {
     let mut model = None;
+    let mut vad_model = None;
     let mut threads = 4usize;
     let mut gpu = true;
 
@@ -33,6 +38,7 @@ fn parse_args() -> Result<Args> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--model" => model = it.next(),
+            "--vad-model" => vad_model = it.next(),
             "--threads" => {
                 threads = it
                     .next()
@@ -47,6 +53,7 @@ fn parse_args() -> Result<Args> {
 
     Ok(Args {
         model: model.context("--model <path> is required")?,
+        vad_model,
         threads: threads.max(1),
         gpu,
     })
@@ -74,7 +81,42 @@ fn main() -> Result<()> {
     let ctx = WhisperContext::new_with_params(&args.model, ctx_params)
         .with_context(|| format!("loading model: {}", args.model))?;
     let load_ms = t0.elapsed().as_millis() as u32;
-    tracing::info!(model = %args.model, load_ms, gpu = args.gpu, "model loaded");
+    // Whether the VAD is armed decides what reaches the chat on a quiet
+    // channel, so it belongs in the log rather than being inferred.
+    tracing::info!(
+        model = %args.model,
+        load_ms,
+        gpu = args.gpu,
+        vad = args.vad_model.as_deref().unwrap_or("none"),
+        "model loaded"
+    );
+    // The speech gate. Loaded once and kept warm like the speech model — it is
+    // tiny (under a megabyte), so this costs nothing worth measuring.
+    let mut vad = match args.vad_model.as_deref() {
+        Some(path) => {
+            let mut vad_ctx_params = WhisperVadContextParams::default();
+            vad_ctx_params.set_n_threads(args.threads as i32);
+            // CPU, deliberately. On GPU, ggml aborts the process outright —
+            // it reports "no GPU found" for the VAD backend while the model is
+            // already allocated in a Metal buffer, and then trips its own
+            // assertion. Beyond that a second Metal user would contend with
+            // whisper for the same queue, which is the reason the worker pool
+            // is kept small in the first place. The model is under a megabyte;
+            // the CPU handles it in single-digit milliseconds.
+            vad_ctx_params.set_use_gpu(false);
+            Some(
+                WhisperVadContext::new(path, vad_ctx_params)
+                    .map_err(|e| anyhow::anyhow!("loading the VAD model {path}: {e:?}"))?,
+            )
+        }
+        None => {
+            tracing::warn!(
+                "no VAD model: whisper will transcribe noise and silence as well — \
+                 pass --vad-model, or run `just vad-model`"
+            );
+            None
+        }
+    };
 
     let mut state = ctx.create_state().context("creating whisper state")?;
 
@@ -120,6 +162,7 @@ fn main() -> Result<()> {
                     &language_mode,
                     initial_prompt.as_deref(),
                     args.threads,
+                    vad.as_mut(),
                 ) {
                     Ok(decoded) => Response::Transcript {
                         stream_id,
@@ -169,7 +212,34 @@ fn transcribe(
     language_mode: &LanguageMode,
     initial_prompt: Option<&str>,
     threads: usize,
+    vad: Option<&mut WhisperVadContext>,
 ) -> Result<Decoded> {
+    // The gate, before any decoding happens.
+    //
+    // Note this is *not* whisper's `params.vad` flag. That one is only honoured
+    // by `whisper_full`; the sidecar uses `whisper_full_with_state`, which
+    // skips it entirely — setting the flag there looks like protection and
+    // provides none. Running Silero directly is both explicit and cheaper: a
+    // stretch of noise costs a few milliseconds of VAD instead of a few
+    // hundred of transcription.
+    if let Some(vad) = vad {
+        let t0 = Instant::now();
+        let segments = vad
+            .segments_from_samples(vad_params(), pcm)
+            .map_err(|e| anyhow::anyhow!("VAD: {e:?}"))?;
+        let vad_ms = t0.elapsed().as_millis() as u32;
+
+        if segments.num_segments() == 0 {
+            tracing::debug!(vad_ms, samples = pcm.len(), "no speech, not decoded");
+            return Ok(Decoded {
+                text: String::new(),
+                detected_language: None,
+                no_speech_probability: 1.0,
+                decode_ms: vad_ms,
+            });
+        }
+    }
+
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(threads as i32);
 
@@ -188,13 +258,17 @@ fn transcribe(
     // because the output looks plausible.
     params.set_translate(false);
 
-    // No sound-event annotations. An intercom channel is silent or carries
-    // only room noise for long stretches, and whisper's habit of captioning
-    // that as "[BREAK]", "(music)" or "(Bell)" fills the chat with entries
-    // that are not communication. The operator wants what was *said*.
-    params.set_suppress_nst(true);
     // Nothing at all rather than an invented blank line.
     params.set_suppress_blank(true);
+
+    // Sound-event annotations are deliberately *left on*.
+    //
+    // Suppressing them was tried and made things worse. Whisper still has to
+    // emit something for a stretch of noise; forbidding "[BREAK]" only pushes
+    // it towards plausible words instead. An annotation is a non-speech marker
+    // the app can filter with certainty — a hallucinated sentence is not. The
+    // suppression removed the label, not the problem.
+    params.set_suppress_nst(false);
 
     // One stream's context must not contaminate another — the state is shared
     // per worker, the streams are not.
@@ -241,6 +315,20 @@ fn transcribe(
         no_speech_probability: no_speech,
         decode_ms,
     })
+}
+
+/// Thresholds for the speech gate.
+///
+/// Only has to answer "speech or not" — the segmenter (P3) has already applied
+/// its own minimum length and pre-roll, and the audio it sends is at most a few
+/// seconds long.
+fn vad_params() -> WhisperVadParams {
+    let mut params = WhisperVadParams::default();
+    params.set_threshold(0.5);
+    // Shorter than the default 250 ms: a single "Go." is a legitimate intercom
+    // call and must not be filtered out as too brief.
+    params.set_min_speech_duration(150);
+    params
 }
 
 /// What one decode produced.

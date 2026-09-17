@@ -38,12 +38,26 @@ pub struct Worker {
 
 impl Worker {
     /// Starts the sidecar and waits for it to report a loaded model.
-    pub fn spawn(binary: &Path, model: &Path, threads: usize) -> Result<Self> {
-        let mut child = Command::new(binary)
+    ///
+    /// `vad_model` is what keeps noise and silence out of the transcript. It is
+    /// optional so a missing download degrades to "transcribes everything"
+    /// rather than to "does not start", but the sidecar warns loudly about it.
+    pub fn spawn(
+        binary: &Path,
+        model: &Path,
+        vad_model: Option<&Path>,
+        threads: usize,
+    ) -> Result<Self> {
+        let mut command = Command::new(binary);
+        command
             .arg("--model")
             .arg(model)
             .arg("--threads")
-            .arg(threads.to_string())
+            .arg(threads.to_string());
+        if let Some(vad) = vad_model {
+            command.arg("--vad-model").arg(vad);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // stderr stays attached: the worker logs there, and during
@@ -279,14 +293,67 @@ fn search_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Picks one model out of a directory, largest first.
+/// Locates the Silero VAD model that keeps noise out of the transcript.
+///
+/// `None` rather than an error: a missing VAD degrades the result, it does not
+/// prevent a session. The sidecar warns about running without one.
+pub fn find_vad_model() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("INTERCOM2CHAT_VAD_MODEL") {
+        let path = PathBuf::from(path);
+        return path.is_file().then_some(path);
+    }
+
+    for start in search_roots() {
+        for ancestor in start.ancestors() {
+            let dir = ancestor.join(SCRATCH_MODELS);
+            if !dir.is_dir() {
+                continue;
+            }
+            let mut found: Vec<PathBuf> = model_files(&dir)
+                .into_iter()
+                .map(|(_, path)| path)
+                .filter(|path| is_vad_model(path))
+                .collect();
+            // Newest Silero version wins, by name.
+            found.sort();
+            if let Some(path) = found.pop() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// The VAD model lives in the same directory as the speech models and has the
+/// same extension, so the two are told apart by name.
+fn is_vad_model(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains("silero"))
+}
+
+/// Picks one speech model out of a directory, largest first.
 ///
 /// Size is a rough stand-in for quality: `small-q5_1` beats `tiny`, and this
 /// crude rule means downloading a better model is enough to use it. P11 makes
 /// it an explicit choice instead of a guess.
+///
+/// The VAD model is excluded — it sits in the same directory, is also a `.bin`,
+/// and handing it to whisper as a speech model would fail in a thoroughly
+/// confusing way.
 fn newest_model(dir: &Path) -> Option<PathBuf> {
-    let mut candidates: Vec<(u64, PathBuf)> = std::fs::read_dir(dir)
-        .ok()?
+    let mut candidates = model_files(dir);
+    candidates.retain(|(_, path)| !is_vad_model(path));
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    candidates.into_iter().next().map(|(_, path)| path)
+}
+
+/// Every `.bin` in `dir`, with its size.
+fn model_files(dir: &Path) -> Vec<(u64, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
@@ -296,9 +363,7 @@ fn newest_model(dir: &Path) -> Option<PathBuf> {
                 None
             }
         })
-        .collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    candidates.into_iter().next().map(|(_, path)| path)
+        .collect()
 }
 
 fn describe(paths: Vec<PathBuf>) -> String {
@@ -322,6 +387,7 @@ mod tests {
         let result = Worker::spawn(
             Path::new("/nonexistent/whisper-worker"),
             Path::new("/nonexistent/model.bin"),
+            None,
             2,
         );
         let Err(err) = result else {
@@ -365,6 +431,13 @@ mod tests {
         let found = newest_model(&models).expect("a model in the directory");
         assert_eq!(found.file_name().unwrap(), "ggml-small-q5_1.bin");
 
+        // The VAD model shares the directory and the extension. Handing it to
+        // whisper as a speech model would fail in a thoroughly confusing way,
+        // so it must never be picked — not even when it is the biggest file.
+        std::fs::write(models.join("ggml-silero-v5.1.2.bin"), vec![0u8; 4096]).unwrap();
+        let still = newest_model(&models).expect("a speech model");
+        assert_eq!(still.file_name().unwrap(), "ggml-small-q5_1.bin");
+
         // The upward walk from a nested directory reaches the same place.
         let via_ancestors = deep
             .ancestors()
@@ -373,6 +446,14 @@ mod tests {
         assert_eq!(via_ancestors.as_deref(), Some(models.as_path()));
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_vad_model_is_told_apart_by_name() {
+        assert!(is_vad_model(Path::new("/m/ggml-silero-v5.1.2.bin")));
+        assert!(is_vad_model(Path::new("/m/GGML-Silero-v6.2.0.bin")));
+        assert!(!is_vad_model(Path::new("/m/ggml-small-q5_1.bin")));
+        assert!(!is_vad_model(Path::new("/m/ggml-large-v3-turbo-q5_0.bin")));
     }
 
     #[test]

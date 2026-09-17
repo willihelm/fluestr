@@ -69,6 +69,15 @@ model name="small-q5_1":
         https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{{name}}.bin
     @ls -lh {{scratch}}/models/ggml-{{name}}.bin
 
+# Download the Silero VAD model. Without it whisper transcribes noise and
+# silence too — it is what decides whether a stretch of audio is speech at all.
+vad-model name="v5.1.2":
+    mkdir -p {{scratch}}/models
+    curl -fL --progress-bar \
+        -o {{scratch}}/models/ggml-silero-{{name}}.bin \
+        https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-{{name}}.bin
+    @ls -lh {{scratch}}/models/ggml-silero-{{name}}.bin
+
 # Generate a code-switching test fixture via macOS text-to-speech (P14).
 # The spoken text is German on purpose — it is speech data, not code.
 fixture name text:
