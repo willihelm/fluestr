@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/audio-core",
+    "crates/whisper-protocol",
+    "crates/whisper-worker",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal
+audio-core = { path = "crates/audio-core" }
+whisper-protocol = { path = "crates/whisper-protocol" }
+
+# Errors & logging
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Audio (P1/P2)
+cpal = "0.16"
+ringbuf = "0.4"
+rubato = "0.16"
+hound = "3.5"
+
+# Transcription (P4)
+# tracing_backend: routes whisper.cpp/ggml logs into `tracing`. Without it the
+# C++ side writes on its own — and anything that accidentally lands on stdout
+# corrupts the sidecar's frame protocol.
+whisper-rs = { version = "0.16", features = ["metal", "tracing_backend"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# Audio processing is realtime-critical even in debug builds: without
+# optimised dependencies, resampling and whisper are unusably slow.
+[profile.dev.package."*"]
+opt-level = 3

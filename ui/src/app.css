@@ -1,0 +1,27 @@
+:root {
+  /* Dark by default: the app runs in a dimmed control room. */
+  --bg: #12141a;
+  --surface: #1b1e27;
+  --border: #2b3040;
+  --text: #e6e8ee;
+  --text-dim: #9aa1b4;
+  --accent: #6ea8fe;
+
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  /* The chat view scrolls inside its own containers (P7), not the body. */
+  overflow: hidden;
+  height: 100vh;
+}

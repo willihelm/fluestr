@@ -1,0 +1,7 @@
+# pnpm >= 10 blocks postinstall scripts and otherwise aborts the install with
+# ERR_PNPM_IGNORED_BUILDS (and with it, CI). esbuild needs its install.js to
+# link the platform-specific binary.
+# Note: the key is called `allowBuilds` from pnpm 12 onwards, previously
+# `onlyBuiltDependencies`.
+allowBuilds:
+  esbuild: true

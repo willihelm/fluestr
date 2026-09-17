@@ -1,0 +1,13 @@
+[package]
+name = "whisper-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Frame format between the app and the whisper sidecar — shared by both sides"
+
+[dependencies]
+audio-core = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

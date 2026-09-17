@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug symbols are not needed in CI and only eat cache space.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  check:
+    # arm64 runner: the target platform is Apple Silicon, and whisper.cpp with
+    # Metal should be built on the same architecture it ships on.
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show # reads rust-toolchain.toml
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # whisper-rs-sys builds whisper.cpp through cmake — that build output
+          # has to be cached, otherwise every run takes several minutes.
+          cache-all-crates: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ui
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: TypeScript and Svelte checks
+        run: pnpm check
+        working-directory: ui
+
+      - name: Frontend build
+        run: pnpm build
+        working-directory: ui
+
+      - name: Release build
+        run: cargo build --workspace --release

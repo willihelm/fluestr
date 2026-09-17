@@ -1,0 +1,25 @@
+# Rust
+/target
+**/target
+
+# Node
+node_modules
+ui/dist
+.pnpm-store
+
+# Tauri
+crates/app/gen
+
+# Local workspace: models and generated fixtures (see justfile)
+.scratch/
+
+# Whisper models: large, loaded at runtime (P11)
+*.bin
+models/
+
+# Audio fixtures: only the generating code belongs in the repo (P14)
+*.aiff
+fixtures/generated/
+
+# macOS
+.DS_Store

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Intercom2Chat",
+  "version": "0.1.0",
+  "identifier": "io.github.willihelm.intercom2chat",
+  "build": {
+    "beforeDevCommand": {
+      "script": "pnpm dev",
+      "cwd": "../../ui"
+    },
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": {
+      "script": "pnpm build",
+      "cwd": "../../ui"
+    },
+    "frontendDist": "../../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Intercom2Chat",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

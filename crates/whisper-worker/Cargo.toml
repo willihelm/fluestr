@@ -1,0 +1,23 @@
+[package]
+name = "whisper-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sidecar process: keeps a whisper model warm and transcribes segments"
+
+[[bin]]
+name = "whisper-worker"
+path = "src/main.rs"
+
+[dependencies]
+audio-core = { workspace = true }
+whisper-protocol = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+whisper-rs = { workspace = true }
+
+[dev-dependencies]
+hound = { workspace = true }
+whisper-protocol = { workspace = true }
