@@ -10,6 +10,7 @@
     fromStoredConfig,
     newProfile,
     toStoredConfig,
+    type ModelChoice,
     type Profile,
   } from "./lib/profiles";
   import { DEFAULT_VOCABULARY, toConfig as vocabularyConfig } from "./lib/vocabulary";
@@ -55,6 +56,10 @@
   let profiles = $state<Profile[]>([]);
   let activeKey = $state<number | null>(null);
   let vocabulary = $state(DEFAULT_VOCABULARY);
+  // Which model transcribes (P11). Empty is "never chose", which resolves to
+  // the recommended one — so a fresh machine is not asked a question it has no
+  // way to answer yet.
+  let models = $state<ModelChoice>({});
   // Nothing is saved before the configuration has been read: an empty UI
   // saving itself over a file it has not seen yet is how a setup is lost.
   let loaded = $state(false);
@@ -137,7 +142,7 @@
 
       const restored = stored
         ? fromStoredConfig(stored)
-        : { profiles: [], activeKey: null, vocabulary: null };
+        : { profiles: [], activeKey: null, vocabulary: null, models: {} };
 
       if (restored.profiles.length === 0) {
         // First start: one profile on the default device, with one channel, so
@@ -156,6 +161,7 @@
       // cleared — refilling it would turn the prompt back on behind their
       // back.
       if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
+      models = restored.models;
 
       loaded = true;
     };
@@ -174,7 +180,7 @@
     // Built here rather than in the timer: this is what reads every field, and
     // reading them is what makes this effect run again when one of them
     // changes.
-    const config = toStoredConfig(profiles, activeKey, vocabulary);
+    const config = toStoredConfig(profiles, activeKey, vocabulary, models);
 
     const timer = setTimeout(() => {
       saveConfig(config)
@@ -282,8 +288,9 @@
   // the rest would make the chat depend on which group was selected when the
   // button was pressed.
   //
-  // P10 adds the other half: the same action has to delete the stored
-  // transcripts and the FTS index, and nothing else in the database.
+  // This used to be half the action, with P10 deleting the stored transcripts
+  // and the FTS index. P10 was set aside on 2026-09-18 — the chat lives in the
+  // window — so this is the whole of it.
   const clearCommunication = () => {
     messages = [];
     overloaded = new Map();
@@ -360,6 +367,7 @@
       bind:profiles
       bind:activeKey
       bind:vocabulary
+      bind:models
       {deviceChannels}
       locked={running || busy}
       {saveError}

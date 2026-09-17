@@ -127,7 +127,39 @@ pub struct Config {
     /// start, which is also how the effect of the vocabulary stops being
     /// measurable (P14).
     pub vocabulary: Option<String>,
+    /// Catalogue id of the speech model (P11), e.g. `small-q5_1`.
+    ///
+    /// Beside the profiles rather than inside one, for the same reason the
+    /// vocabulary is: which model a machine can run is a property of the
+    /// machine — its memory, its GPU, how much latency it can afford — and not
+    /// of the production. Carrying a profile to a laptop must not carry a
+    /// model choice that laptop cannot serve.
+    ///
+    /// `None` means the operator never chose, and the default is used.
+    /// `#[serde(default)]` throughout this block: a file written before P11 has
+    /// none of these fields and must keep loading as "never chose", not fail.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Catalogue id of the speech-detection model.
+    #[serde(default)]
+    pub vad_model: Option<String>,
+    /// A `.bin` outside the catalogue. The fallback for a machine that will
+    /// never reach the internet: the operator carries the file in and says
+    /// where it is. Outranks [`Config::model`] when set.
+    #[serde(default)]
+    pub model_path: Option<String>,
     pub profiles: Vec<Profile>,
+}
+
+impl Config {
+    /// The model manager's view of this file.
+    pub fn selection(&self) -> crate::models::Selection {
+        crate::models::Selection {
+            speech: self.model.clone(),
+            vad: self.vad_model.clone(),
+            path: self.model_path.clone(),
+        }
+    }
 }
 
 impl Default for Config {
@@ -139,6 +171,9 @@ impl Default for Config {
             version: VERSION,
             active: 0,
             vocabulary: None,
+            model: None,
+            vad_model: None,
+            model_path: None,
             profiles: Vec::new(),
         }
     }
@@ -282,6 +317,9 @@ mod tests {
             version: VERSION,
             active: 1,
             vocabulary: Some("Standby, Cue, Go.".into()),
+            model: Some("small-q5_1".into()),
+            vad_model: Some("silero-v5.1.2".into()),
+            model_path: None,
             profiles: vec![
                 Profile {
                     name: "Probebühne".into(),
@@ -420,6 +458,35 @@ mod tests {
 
         save(&path, &a_config()).expect("saving into a directory that does not exist");
         assert_eq!(load(&path), a_config());
+    }
+
+    #[test]
+    fn a_file_written_before_the_model_manager_still_loads() {
+        // P11 added three fields. An operator upgrading has a file without
+        // them, and losing their whole setup to a schema addition — profiles,
+        // groups, colours — would be the worst possible trade for a picker.
+        let dir = temp_dir();
+        let path = dir.join(FILE_NAME);
+        fs::write(
+            &path,
+            r##"{"version":1,"active":0,"vocabulary":"Standby, Cue, Go.",
+                "profiles":[{"name":"Probebühne","device":"Scarlett 2i2",
+                  "channels":[{"channel":0,"label":"Regie","language":"de","color":"#6ea8fe"}],
+                  "groups":[]}]}"##,
+        )
+        .expect("writing the old file");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.profiles.len(), 1, "the setup survived");
+        assert_eq!(loaded.profiles[0].channels[0].label, "Regie");
+        // "never chose", which resolves to the default rather than to nothing.
+        assert_eq!(loaded.model, None);
+        assert_eq!(loaded.vad_model, None);
+        assert_eq!(loaded.model_path, None);
+        assert!(
+            !dir.join("config.bad.json").exists(),
+            "nothing was quarantined"
+        );
     }
 
     #[test]

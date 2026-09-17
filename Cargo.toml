@@ -28,6 +28,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Model downloads (P11)
+# rustls rather than the system TLS: the app has to be notarised and shipped to
+# machines it has never seen, and a self-contained TLS stack is one fewer thing
+# that can differ there.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "stream",
+    "http2",
+    # A house network is not always a direct route to the internet, and a
+    # download that fails behind a proxy looks like a broken URL.
+    "system-proxy",
+] }
+futures-util = { version = "0.3", default-features = false }
+sha2 = "0.10"
+hex = "0.4"
+
 # Audio (P1/P2)
 cpal = "0.16"
 ringbuf = "0.4"

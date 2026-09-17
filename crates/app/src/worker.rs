@@ -261,11 +261,13 @@ pub fn find_binary() -> Result<PathBuf> {
 /// Where `just model` puts its downloads, relative to the repository root.
 const SCRATCH_MODELS: &str = ".scratch/models";
 
-/// Locates a model file.
+/// Locates a model file the development way.
 ///
-/// A stand-in for the model manager (P11), which will download models into the
-/// app data directory and let the user pick one. Until then: the environment
-/// variable, or whatever `just model` left in `.scratch/models`.
+/// The model manager ([`crate::models`]) is what the app resolves through now;
+/// this is the last entry in its order and the only one available to code with
+/// no app directory to look in — the integration tests and `just slice`. It
+/// reads the environment variable, then whatever `just model` left in
+/// `.scratch/models`.
 ///
 /// The directory is **not** resolved against the working directory. `tauri dev`
 /// runs the binary with the crate as its working directory, not the repository

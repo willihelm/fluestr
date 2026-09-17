@@ -117,6 +117,7 @@ export const toStoredConfig = (
   profiles: Profile[],
   activeKey: number,
   vocabulary: string,
+  models: ModelChoice = {},
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -126,8 +127,25 @@ export const toStoredConfig = (
     profiles.findIndex((p) => p.key === activeKey),
   ),
   vocabulary,
+  // `??` and not `||`: an empty manual path is a box the operator cleared,
+  // which has to be stored as "no manual path" rather than as an empty string
+  // the backend would then have to decide about.
+  model: models.model ?? null,
+  vadModel: models.vadModel ?? null,
+  modelPath: models.modelPath?.trim() ? models.modelPath.trim() : null,
   profiles: profiles.map(toStored),
 });
+
+/// Which models the machine is set to use (P11).
+///
+/// Its own type rather than three loose arguments: it travels from the model
+/// picker through `App.svelte` to the save, and three optional strings in a row
+/// is how two of them end up swapped.
+export interface ModelChoice {
+  model?: string | null;
+  vadModel?: string | null;
+  modelPath?: string | null;
+}
 
 /// What `load_config` returned, as the UI holds it.
 ///
@@ -136,7 +154,12 @@ export const toStoredConfig = (
 /// turns the prompt off and has to stay off.
 export const fromStoredConfig = (
   stored: StoredConfig,
-): { profiles: Profile[]; activeKey: number | null; vocabulary: string | null } => {
+): {
+  profiles: Profile[];
+  activeKey: number | null;
+  vocabulary: string | null;
+  models: ModelChoice;
+} => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
 
@@ -144,5 +167,13 @@ export const fromStoredConfig = (
     profiles,
     activeKey: active?.key ?? null,
     vocabulary: stored.vocabulary,
+    // A file written before P11 has none of these, and `?? null` is what makes
+    // that "never chose" — which resolves to the recommended model — rather
+    // than `undefined` travelling back into the next save.
+    models: {
+      model: stored.model ?? null,
+      vadModel: stored.vadModel ?? null,
+      modelPath: stored.modelPath ?? null,
+    },
   };
 };

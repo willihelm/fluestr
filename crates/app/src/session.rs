@@ -302,9 +302,15 @@ impl Session {
     /// sidecar lost, the session stopped. Making the first state depend on the
     /// event channel too would mean a broken bridge looks like a backend that
     /// hangs, which is exactly the failure this arrangement avoids.
+    /// `models` is what the model manager (P11) resolved. `None` falls back to
+    /// the development search in [`crate::worker`] — the tests and `just
+    /// slice` have no app directory and no configuration file to resolve
+    /// against, and giving them a stub configuration would only mean the path
+    /// they exercise is not the one the app runs.
     pub fn start(
         config: SessionConfig,
         events: Arc<dyn EventSink>,
+        models: Option<crate::models::Resolved>,
     ) -> Result<(Self, SessionState)> {
         if config.streams.is_empty() {
             bail!("no channels configured");
@@ -375,8 +381,22 @@ impl Session {
         // capturing audio that nothing is ready to transcribe would only fill
         // the rings with material that is stale by the time anyone looks at it.
         let binary = crate::worker::find_binary()?;
-        let model = crate::worker::find_model()?;
-        let vad_model = crate::worker::find_vad_model();
+        let (model, vad_model) = match models {
+            Some(resolved) => {
+                tracing::info!(
+                    model = %resolved.speech.display(),
+                    source = ?resolved.source,
+                    "model"
+                );
+                (resolved.speech, resolved.vad)
+            }
+            // No model manager in the picture: the development search, which
+            // is what the integration tests and `just slice` run on.
+            None => (
+                crate::worker::find_model()?,
+                crate::worker::find_vad_model(),
+            ),
+        };
         if vad_model.is_none() {
             tracing::warn!(
                 "no Silero VAD model found — noise and silence will be transcribed; \

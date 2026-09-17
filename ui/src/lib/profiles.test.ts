@@ -186,6 +186,59 @@ describe("the configuration as a whole", () => {
     expect(cleared.vocabulary).toBe("");
   });
 
+  it("keeps a file written before the model manager readable", () => {
+    // P11 added three fields to the file. An operator upgrading has one
+    // without them, and losing their profiles to a schema addition would be
+    // the worst possible trade for a model picker.
+    const restored = fromStoredConfig({
+      version: 1,
+      active: 0,
+      vocabulary: "Standby.",
+      profiles: [stored],
+    });
+
+    expect(restored.profiles).toHaveLength(1);
+    // "Never chose", which resolves to the recommended model — not
+    // `undefined`, which would travel straight back into the next save.
+    expect(restored.models).toEqual({ model: null, vadModel: null, modelPath: null });
+  });
+
+  it("stores a cleared model path as nothing rather than as an empty string", () => {
+    // The backend treats an empty manual path as "not set", and storing `""`
+    // would leave it deciding that on every read instead of once here.
+    const config = toStoredConfig([aProfile()], 1, "", {
+      model: "small-q5_1",
+      modelPath: "   ",
+    });
+
+    expect(config.model).toBe("small-q5_1");
+    expect(config.modelPath).toBeNull();
+    // Never chosen is stored as such, not dropped.
+    expect(config.vadModel).toBeNull();
+  });
+
+  it("keeps the model choice out of the profiles", () => {
+    // Which model a machine can run depends on the machine — its memory, its
+    // GPU, the latency it can afford — not on the production. Carrying a
+    // profile to a laptop must not carry a model that laptop cannot serve.
+    const config = toStoredConfig([aProfile()], 1, "", { model: "large-v3-turbo-q5_0" });
+
+    expect(config.model).toBe("large-v3-turbo-q5_0");
+    for (const profile of config.profiles) {
+      expect(profile).not.toHaveProperty("model");
+    }
+  });
+
+  it("trims a pasted model path", () => {
+    // Paths arrive from a Finder drag or a copy out of a terminal, and both
+    // bring whitespace that turns a working path into a missing file.
+    const config = toStoredConfig([aProfile()], 1, "", {
+      modelPath: "  /Volumes/Stick/ggml-small-q5_1.bin\n",
+    });
+
+    expect(config.modelPath).toBe("/Volumes/Stick/ggml-small-q5_1.bin");
+  });
+
   it("has no active profile when there are none at all", () => {
     // The first start, before the UI creates one.
     const empty = fromStoredConfig({ version: 1, active: 0, vocabulary: null, profiles: [] });

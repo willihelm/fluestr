@@ -10,9 +10,10 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-17, after the Settings page, the group
-sidebar, muting the channels the device does not have, and the stored
-configuration with its profiles.
+**Status of this document:** 2026-09-18, after the model manager — the app now
+downloads, verifies and selects its own models, so a fresh machine no longer
+needs a terminal to reach its first transcription. P10 was set aside on the
+same day; see the package for what that costs and what it changes.
 
 ---
 
@@ -41,15 +42,16 @@ architectural decisions look arbitrary without them.
 | Frontend | **Svelte + TypeScript** |
 | Whisper | **Sidecar process** (crash-isolated), pool of workers |
 | Models | **Downloaded on first start**, selectable in settings |
-| UI scope, MVP | Chat view with a group sidebar, live search and filter, levels and stream health, vocabulary editor, and a separate Settings page for channel setup |
-| Not in the MVP | Export, markers, diarisation, cloud, multi-user |
+| UI scope, MVP | Chat view with a group sidebar, live search and filter, levels and stream health, vocabulary editor, a separate Settings page for channel setup, and an optional read-only LAN viewer in a browser |
+| Not in the MVP | Export, markers, diarisation, cloud, interactive multi-user control |
 
 ---
 
 ## Status at a glance
 
 **Done** — meets its acceptance criteria. **Partial** — usable, but something
-named below is missing. **Open** — not started.
+named below is missing. **Open** — not started. **Deferred** — decided against
+for now, with the reason recorded in the package.
 
 | | Package | Status | What is missing |
 |---|---|---|---|
@@ -63,13 +65,14 @@ named below is missing. **Open** — not started.
 | P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no `clear_communication` in the backend, no `search_session` |
 | P7 | Chat UI | **Partial** | No language picker from the sidecar's list; the window is a window, not a jump to an arbitrary position |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
-| P9 | Live search & filter | **Open** | — |
-| P10 | SQLite persistence | **Open** | — |
-| P11 | Model manager | **Open** | Models discovered from `.scratch/models` or environment variables |
+| P9 | Live search & filter | **Open** | Was specified on P10's FTS index, which is not coming — needs a decision on what it searches instead |
+| P10 | SQLite persistence | **Deferred** | Set aside by the user on 2026-09-18: this is about live communication, not persistence |
+| P11 | Model manager | **Done** | — |
 | P12 | Settings & presets | **Partial** | Profiles are stored and read back; every threshold is still a constant in the code, and the device is recognised by its display name |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
+| P16 | Read-only LAN viewer | **Open** | — |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
@@ -80,9 +83,12 @@ vocabulary and the groups; a channel map that may reach past the device, whose
 surplus channels start muted instead of blocking Start; a chat page with a
 group sidebar that narrows the view to a group's channels; consecutive segments merged into one bubble per
 utterance; Clear all communication as the only action that empties the
-chat; and all of that setup stored as named profiles that come back at the next
-start. What the eight-channel case still lacks is a measurement of its own: the
-latency and CPU numbers were all taken with one stream running.
+chat; all of that setup stored as named profiles that come back at the next
+start; and a model manager that fetches, checksums and selects the models the
+whole thing runs on, so a machine that has never seen this repository can be
+brought to its first transcription from inside the window. What the
+eight-channel case still lacks is a measurement of its own: the latency and CPU
+numbers were all taken with one stream running.
 
 ---
 
@@ -406,11 +412,11 @@ Two more things worth knowing, both in the code:
   a session starts, so `(stream, seq)` repeats as soon as a second one runs —
   and Start is deliberately non-destructive, so the chat holds lines from
   several sessions at once. `(session, stream, seq)` is the identity, here and
-  in the P10 schema. Found the hard way: the chat list keyed on `(stream, seq)`
-  and the duplicate key threw, so after a Stop and a Start nothing appeared at
-  all. The id is counted per process, which is as long as the in-memory chat
-  lives; persistence needs one that survives a restart, and that belongs with
-  P10.
+  in the P10 schema that is no longer coming. Found the hard way: the chat list
+  keyed on `(stream, seq)` and the duplicate key threw, so after a Stop and a
+  Start nothing appeared at all. The id is counted per process, which is
+  exactly as long as the in-memory chat lives — with P10 set aside that is no
+  longer a stand-in for something better, it is the whole lifetime.
 
 **A failed session has to be cleared, or Start never works again.** The
 failure — the device unplugged, the sidecar lost — is discovered on the
@@ -441,8 +447,12 @@ stored with everything else. See P12.
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
 `specta`) instead of hand-written TypeScript; `update_stream_config`,
 `clear_communication` (atomic deletion of transcript data only), and
-`search_session`. `clear_communication` clears what exists today, which is the
-in-memory chat; the stored half arrives with P10.
+`search_session`; and `open_group_window(group_id)`. A group window is a second
+Tauri WebView backed by the same session state, not a second capture or worker
+pool. With P10 set aside, `clear_communication` has only the in-memory chat to clear,
+which makes it a frontend action — whether it needs to be a backend command at
+all is now an open question rather than a settled one, and the same goes for
+`search_session`.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
@@ -535,6 +545,13 @@ from both the visible chat and persistent storage. It does not change channel,
 group or Settings configuration. Because this is irreversible, it requires a
 confirmation dialog and is available only after capture has been stopped.
 
+Every group can be opened in its own window from the sidebar. This window is a
+live view of that group's channels: it receives existing history, incoming
+transcripts, meters and session state from the shared backend, and reflects
+later membership changes. It does not own or create a capture session, so
+Start/Stop remains global. Closing the window closes only that view, never the
+group or its history.
+
 Two streams reading the *same* device channel is allowed — mirroring one
 channel into two views is unusual but not wrong — so it is a warning rather
 than an error. During setup it is nearly always a slip, and the symptom, every
@@ -557,6 +574,9 @@ history and appends new segments to it ✔. Clear all communication requires
 confirmation ✔, removes every displayed transcript across all groups and
 sessions ✔ and leaves the channel, group and vocabulary configuration intact ✔;
 removing the *stored* transcripts waits on P10, because there is no store yet.
+Opening a group in its own window shows the same existing and incoming messages
+as the main window, limited to that group's channels, without starting another
+capture session.
 
 ### P8 — Levels & stream health — **Partial**
 
@@ -585,7 +605,38 @@ streams and time range.
 **Accepted when:** search over a two-hour session answers in <100 ms and does
 not disturb ongoing writes (WAL mode).
 
-### P10 — SQLite persistence — **Open**
+### P10 — SQLite persistence — **Deferred**
+
+**Set aside by the user on 2026-09-18**, with the reason: *this is about live
+communication, not about persistence.* That is a scope decision rather than a
+postponement, and it is worth writing down here because several packages were
+specified against a database that is now not coming.
+
+What it costs, stated plainly rather than left to be discovered: a session
+lives in the window and dies with it. Kill the app and the chat is gone. The
+configuration is unaffected — profiles, groups, colours and the model choice
+are in `config.json` and were never P10's business (see P12), so an operator
+loses the record of what was said, never their setup.
+
+What it changes elsewhere:
+
+- **P9** was specified as SQLite FTS5 over the stored session. Without a
+  database it becomes a search over the messages the window is holding, which
+  is a different and much smaller job — and it interacts with the chat window
+  from the DOM work, since a hit may be outside the rendered range.
+- **Clear all communication** is already only the in-memory half, and that half
+  is now the whole action rather than the first of two.
+- **P6's `search_session`** was a database command. It may not need to exist at
+  all if search is a frontend concern.
+- The **whole-system verification** below loses its "restart and the session
+  loads" step.
+
+The original specification is kept below, unedited, because reversing this
+decision should not mean designing it again.
+
+---
+
+**Original specification:**
 
 Schema: `sessions`, `streams`, `segments`, `segments_fts`, `vocabularies`,
 `devices`. A segment is keyed by `(session, stream, seq)` — see P6: the
@@ -602,25 +653,72 @@ configuration.
 **Accepted when:** a hard-killed app loses at most the last write batch and the
 session loads completely afterwards.
 
-### P11 — Model manager — **Open**
+### P11 — Model manager — **Done**
 
 Curated model list with URL, SHA256, size and expected latency. Download with
 progress, resume and **checksum verification** into the app data directory.
-Settings UI for selection; switching restarts the workers. A clear "no model"
-state instead of silent malfunction. Manual path to a `.bin` as an offline
-fallback.
+Settings UI for selection; a clear "no model" state instead of silent
+malfunction. Manual path to a `.bin` as an offline fallback.
 
 **Recommendation matching "latency first": `ggml-small-q5_1` as the default**,
-`base` as the faster and `large-v3-turbo` as the more accurate option.
+`base` as the faster and `large-v3-turbo` as the more accurate option — which
+is what shipped.
 
-**Today:** `just model` and `just vad-model` download into `.scratch/models`;
-the app searches upward from both the working directory and its own binary,
-picks the largest non-Silero `.bin` as the speech model and the newest
-`ggml-silero-*.bin` as the VAD model. `INTERCOM2CHAT_MODEL`,
-`INTERCOM2CHAT_VAD_MODEL` and `INTERCOM2CHAT_WORKER` override each.
+**Done:** `crates/app/src/models.rs` holds the catalogue — four entries, each
+with the published SHA256 and size — and `ModelPicker.svelte` is the section on
+the Settings page. Downloads go to `models/` inside the app's *data* directory,
+not the configuration one: they are hundreds of megabytes that can always be
+fetched again, which on macOS is the difference between something the user's
+backup carries forever and something it can skip. The choice is stored beside
+the profiles rather than inside one, for the same reason the vocabulary is —
+which model a machine can run depends on its memory, its GPU and the latency it
+can afford, not on the production, and carrying a profile to a laptop must not
+carry a model that laptop cannot serve.
+
+Four decisions worth keeping in view:
+
+- **The checksum decides, and a failure discards.** A damaged model does not
+  announce itself: whisper.cpp either refuses it with a message about magic
+  numbers or loads it and transcribes noise. So nothing is renamed into place
+  before it hashes correctly, and a file that fails is *deleted* rather than
+  kept — keeping it would leave a corrupt model one resume away from being
+  installed, surviving every later attempt.
+- **Downloads resume.** 600 MB on a venue's network is not one uninterrupted
+  transfer, and restarting from zero after each failure is how somebody gives
+  up and goes back to the terminal. The partial file is kept as `.bin.part` and
+  continued with a range request; cancelling deliberately leaves it alone, and
+  the button then says "Resume" with the amount already there. A server that
+  ignores the range header is detected and the write starts from the front,
+  because appending in that case would splice two copies together and only the
+  checksum at the end would notice.
+- **Resolution has one order and it is written down** ([`models::resolve`]):
+  the environment variable, then the manual path, then the selected catalogue
+  model, then the default one if it happens to be installed, then the old
+  `.scratch/models` search. The manual path beats the picker on purpose —
+  somebody who typed a path meant it — and a typed path that is not there is an
+  error rather than a quiet fall-through, because falling back would run a
+  different model than the operator chose and never say so.
+- **"Not downloaded yet" is a different sentence from "no model at all".** The
+  first is what a cancelled download leaves behind, and collapsing the two
+  would send an operator looking for a problem they do not have.
+
+The four network tests in `crates/app/tests/models.rs` (`just models`) run
+against the real host rather than a mock: the two things most likely to be
+wrong here are the URL and the checksum, and those are exactly the two a mock
+replaces. They cover a fresh download, a resumed one, a cancelled one, and the
+tampered file — one byte short of full size, so the download resumes, arrives
+at the right size with the wrong contents, and only the hash can tell.
+
+**Outstanding, and deliberately so:** switching the model while a session runs
+does not restart the workers — the picker is locked instead, like the channel
+map, because a model swap under a running show is not something to do quietly.
+`just model` and `just vad-model` are kept for the integration tests and
+`just slice`, which have no app directory to resolve against.
 
 **Accepted when:** a fresh machine without a model is guided through the
 download to the first transcription; a tampered file is rejected by checksum.
+The second half is tested. The first needs a machine that has never run this,
+which is a P13 concern as much as a P11 one.
 
 ### P12 — Settings & configuration persistence — **Partial**
 
@@ -761,6 +859,36 @@ to show.
 measurably improves the word error rate of the technical terms against the
 baseline on every applicable channel.
 
+### P16 — Read-only LAN viewer — **Open**
+
+The operator can optionally enable a local-network viewer from Settings. The
+app then serves a browser view on the selected LAN interface; there is no cloud
+service and no data leaves the local network. Settings show a shareable viewer
+URL and a revocable, high-entropy access token. The listener is off by default,
+binds only to the explicitly selected interface, and requires the token for
+both the initial snapshot and the live event stream.
+
+The browser receives the complete operational view: all chat history and new
+transcripts, every channel and group, levels, stream health, session state and
+the Settings configuration in read-only form (but never the access token
+itself). It may locally search, filter and choose groups because those actions
+only change its own view. It has no controls for Start/Stop, clearing
+communication, editing channels, groups, vocabulary, profiles or any other
+setting. This is enforced twice: the viewer build renders no mutation controls,
+and the LAN server exposes no mutation endpoint or Tauri command, so hiding a
+button is never the security boundary.
+
+Initial state is sent as a snapshot, followed by ordered incremental events;
+reconnecting repeats the snapshot so a viewer that slept does not silently
+miss communication. A group opened in a local app window and a browser viewer
+are independent views of the same backend state, not separate sessions.
+
+**Accepted when:** a second device on the chosen LAN can open the authenticated
+viewer and see the same existing and incoming communication, levels and group
+views as the operator; attempts to invoke a mutation endpoint or control action
+are rejected; disabling the viewer or rotating its token immediately revokes
+existing browser access.
+
 ---
 
 ## Dependencies
@@ -778,10 +906,11 @@ P0 Scaffolding
                                        │                 │
                                        v                 v
                             P6 Tauri API (commands/events)
-                                       v
-        P7 Chat UI ──> P8 Health/levels ──> P9 Search/filter
+                              ├─> P7 Chat UI ──> P8 Health/levels ──> P9 Search/filter
+                              │
+                              └─> P16 LAN viewer      (P10 SQLite: deferred)
                                        │
-                            P10 SQLite │  P12 Settings
+                                       └── P12 Settings
                                        v
                                  P13 Packaging
 ```
@@ -790,15 +919,16 @@ P0 Scaffolding
 in the log. *Reached, including the pool — what P5 still owes is a load test on
 live audio.*
 
-**Milestone B (usable MVP):** + P6, P7, P11, P12. Eight channels, chat UI,
-model download. *P3 is done, eight channels run, the chat view the eight make
-necessary — Settings page, group sidebar, bounded list — is in place, and the
-setup now survives the window as a profile. What is left for this milestone is
-the model download, and the settings proper: every threshold is still a
-constant in the code.*
+**Milestone B (usable MVP):** + P6, P7, P11, P12, P16. Eight channels, chat
+UI, model download and optional read-only LAN viewer. *P3 is done, eight
+channels run, the chat view the eight make necessary — Settings page, group
+sidebar, bounded list — is in place, and the setup now survives the window as
+a profile, and the model download is done. What is left for this milestone is
+the settings proper (every threshold is still a constant in the code) and the
+viewer.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
-P3b, P8, P9, P10, P13.
+P3b, P8, P9, P13. *P10 left it on 2026-09-18.*
 
 ---
 
@@ -813,20 +943,28 @@ In this order, with the reason each one comes where it does.
    finally possible — and it comes first because every number the remaining
    decisions rest on is currently a single-stream number. The chat's window
    bounds the DOM, which removes the frontend from the list of things that
-   could explain a bad result.
-2. **P11** — the model download, which is what is left between the app and
-   somebody who is not holding a terminal: today a model is found in
-   `.scratch/models` or named by an environment variable, and a fresh machine
-   gets neither. P12's presets are done — the channel map, the colours, the
-   groups and the vocabulary are stored as profiles and read back — so what
-   remains of P12 is the settings proper, and those are worth doing *after*
-   step 1: the constants P3 owns (the Silero threshold, `silence_timeout`,
-   `max_segment`) should be exposed against measured numbers rather than
-   guessed ones.
+   could explain a bad result. It is also the one step here that cannot be
+   written: it needs the interface and somebody to talk into it.
+2. **The rest of P12 — the settings proper.** The presets are done and the
+   model choice has joined them, so what is left is the thresholds: the Silero
+   threshold and the segmenter's `silence_timeout` and `max_segment` are still
+   constants in the code. They come *after* step 1 on purpose — exposing a
+   number as a setting fixes the default somebody will keep, and the current
+   defaults are single-stream guesses. Device recognition by a stable id
+   belongs here too, and depends on no measurement.
 3. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel. The control exists and is global; what is missing is the
    evidence that any particular list is better than another.
-4. **P7's language picker** — `list_languages` through the Tauri API and a
+4. **P9, respecified.** It was FTS5 over the stored session, and with P10 set
+   aside there is no stored session to search. What it becomes is a search over
+   what the window holds — smaller, and it runs into the chat's DOM window,
+   since a hit may lie outside the rendered range. Worth deciding before it is
+   built.
+5. **P16** — the optional LAN viewer. It must use the same event and snapshot
+   model as the app, but it introduces an access boundary the desktop app does
+   not have: implement the revocable token and server-side read-only contract
+   before exposing any browser URL.
+6. **P7's language picker** — `list_languages` through the Tauri API and a
    picker in place of the free-text field. Small, and last of these, because a
    typed `de` works today; it is discoverability that is missing, not
    capability.
@@ -848,17 +986,30 @@ In this order, with the reason each one comes where it does.
 4. Overdrive one channel and leave another silent → P8 shows both.
 5. Enter a search term → hits across all streams, jumping works.
 6. `kill -9` a sidecar → the app keeps running, the worker comes back.
-7. Kill the app hard, restart → the session loads completely from SQLite.
+7. On a machine that has never run this: no model, and the Settings page says
+   so and offers the download. Fetch it, interrupt it, resume it, then
+   transcribe — the first transcription without ever opening a terminal (P11).
 8. Stop capture, press **Clear all communication**, confirm → all chat lines
-   and search hits are gone after restart, while channels, groups and Settings
-   remain.
-9. Run the P14 reference load test, record p95 latency.
+   and search hits are gone, while channels, groups, the model choice and
+   Settings remain.
+9. Open a group in its own window, then speak on one member and one non-member
+   channel → only the member transcript appears in that window; global
+   Start/Stop is reflected there without creating another capture session.
+10. Enable the LAN viewer and open its URL from a second device → it sees the
+    same history, incoming lines, groups, meters and session state; no control
+    can be invoked, and rotating the token disconnects it.
+11. Run the P14 reference load test, record p95 latency.
+
+Step 7 used to read "kill the app hard, restart → the session loads completely
+from SQLite". That goes with P10: the chat lives in the window, and killing the
+app loses it by design.
 
 ---
 
 ## Deliberately out of scope
 
-- Export (TXT/SRT/JSON) — the P10 schema is already prepared for it.
+- Export (TXT/SRT/JSON). The P10 schema was prepared for it, and with P10 set
+  aside an export would have to read the window's own messages instead.
 - Markers and bookmarks.
 - Windows port: only P1 needs reimplementing, provided the `AudioBackend` trait
   is respected; plus the GPU backend choice in P4.

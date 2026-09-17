@@ -2,22 +2,26 @@
 //!
 //! Holds the capture session and the worker pool, and forwards their output to
 //! the UI as events, and owns the configuration file the Settings page is
-//! saved to (P12). The rest of the command surface (`update_stream_config`,
-//! group CRUD, `search_session`) and the SQLite persistence of *transcripts*
-//! (P10) are still to come — what is here carries up to eight channels of one
+//! saved to (P12), and the model manager's downloads (P11). The rest of the
+//! command surface (`update_stream_config`, group CRUD, `search_session`) is
+//! still to come — what is here carries up to eight channels of one
 //! multichannel device through the pipeline into the chat.
 
 pub mod config;
+pub mod models;
 pub mod pool;
 pub mod session;
 pub mod worker;
 
 use config::Config;
+use models::{ModelsView, Progress};
 use session::{
     DeviceOption, EventSink, LevelsEvent, OverloadEvent, Session, SessionConfig, SessionState,
     TranscriptEvent,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -29,6 +33,8 @@ pub const EVENT_TRANSCRIPT: &str = "transcript";
 pub const EVENT_LEVELS: &str = "levels";
 pub const EVENT_OVERLOAD: &str = "overload";
 pub const EVENT_SESSION_STATE: &str = "session-state";
+/// How far a model download has got (P11).
+pub const EVENT_MODEL_PROGRESS: &str = "model-progress";
 
 /// Sends session output over the Tauri bridge.
 struct TauriEvents(AppHandle);
@@ -62,6 +68,17 @@ struct AppState {
     /// resolver refused — see [`run`]: the app still starts, and saving says
     /// why it cannot.
     config_path: Mutex<Option<PathBuf>>,
+    /// Where downloaded models go. Resolved once at setup, like the
+    /// configuration path and for the same reason. `None` means the platform
+    /// would not say where the app may keep data, which makes downloading
+    /// impossible and has to be said out loud rather than failing per click.
+    models_dir: Mutex<Option<PathBuf>>,
+    /// The cancel flag of each download in flight, by model id.
+    ///
+    /// Keyed by id rather than being a single flag because the speech model
+    /// and the VAD are two different downloads an operator may reasonably
+    /// start together — and cancelling one of them must not stop the other.
+    downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -72,6 +89,24 @@ impl AppState {
             .map_err(|_| "configuration path poisoned".to_string())?
             .clone()
             .ok_or_else(|| "no configuration directory on this system".to_string())
+    }
+
+    fn models_dir(&self) -> Result<PathBuf, String> {
+        self.models_dir
+            .lock()
+            .map_err(|_| "model directory poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "no application data directory on this system".to_string())
+    }
+
+    /// The stored model choice. A configuration that cannot be read resolves
+    /// as "nothing chosen", which lands on the default — the model picker is
+    /// not the place to surface a broken configuration file, and `load_config`
+    /// already did.
+    fn selection(&self) -> models::Selection {
+        self.config_path()
+            .map(|path| config::load(&path).selection())
+            .unwrap_or_default()
     }
 }
 
@@ -105,6 +140,114 @@ fn save_config(state: tauri::State<'_, AppState>, config: Config) -> Result<(), 
     config::save(&path, &config).map_err(|err| {
         // With the chain of causes, which the UI string flattens away.
         tracing::error!(error = ?err, "saving the configuration failed");
+        err.to_string()
+    })
+}
+
+// --- The model manager (P11) ---------------------------------------------
+
+/// The catalogue, what of it is installed, and which model a session would
+/// actually start with.
+///
+/// One command rather than three, because the three answers are only useful
+/// together: "small is installed" means nothing without "and it is the one in
+/// use", and the page would otherwise render a picker and its active state
+/// from two round trips that can disagree.
+#[tauri::command]
+fn list_models(state: tauri::State<'_, AppState>) -> Result<ModelsView, String> {
+    Ok(models::view(&state.models_dir()?, &state.selection()))
+}
+
+/// Fetches one catalogue model, resuming an interrupted attempt.
+///
+/// Returns as soon as the download is *running*, not when it finishes: this is
+/// minutes of work, and a command that blocked for it would freeze the window
+/// and hit Tauri's own timeouts. Progress arrives as `model-progress` events,
+/// which is also what a resumed or cancelled download reports through.
+#[tauri::command]
+async fn download_model(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let dir = state.models_dir()?;
+    let entry = models::entry(&id).ok_or_else(|| format!("no such model: {id}"))?;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut downloads = state
+            .downloads
+            .lock()
+            .map_err(|_| "download state poisoned".to_string())?;
+        // Pressing the button twice must not start two writers on one part
+        // file. They would interleave, and only the checksum at the end would
+        // notice — after both had run to completion.
+        if downloads.contains_key(&id) {
+            return Err(format!("{id} is already downloading"));
+        }
+        downloads.insert(id.clone(), Arc::clone(&cancel));
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let progress_app = app.clone();
+        let result = models::download(entry, &dir, cancel, move |progress| {
+            let _ = progress_app.emit(EVENT_MODEL_PROGRESS, progress);
+        })
+        .await;
+
+        // Cleared before the failure is reported, so that the retry the
+        // operator is about to press is not refused as "already downloading".
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Ok(mut downloads) = state.downloads.lock() {
+                downloads.remove(&id);
+            }
+        }
+
+        if let Err(err) = result {
+            // Cancelling is not a failure and has already reported itself.
+            if err.to_string() == "cancelled" {
+                tracing::info!(id, "download cancelled");
+                return;
+            }
+            tracing::error!(id, error = ?err, "downloading a model failed");
+            let _ = app.emit(
+                EVENT_MODEL_PROGRESS,
+                Progress {
+                    id,
+                    received: 0,
+                    total: entry.bytes,
+                    stage: models::Stage::Failed,
+                    message: Some(err.to_string()),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+/// Stops a download in flight. What has arrived is kept, so pressing download
+/// again continues rather than starts over.
+#[tauri::command]
+fn cancel_download(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let downloads = state
+        .downloads
+        .lock()
+        .map_err(|_| "download state poisoned".to_string())?;
+    if let Some(cancel) = downloads.get(&id) {
+        cancel.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Deletes an installed model, and any half-finished download of it.
+///
+/// Worth having rather than leaving to the Finder: these are the largest files
+/// the app ever writes, in a directory macOS does its best to hide.
+#[tauri::command]
+fn remove_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    models::remove(&state.models_dir()?, &id).map_err(|err| {
+        tracing::error!(error = ?err, "removing a model failed");
         err.to_string()
     })
 }
@@ -146,8 +289,25 @@ fn start_session(
         return Err("a session is already running".into());
     }
 
+    // Which model, decided before anything is opened. A session that starts,
+    // captures audio and only then discovers it has nothing to transcribe with
+    // is the silent malfunction P11 exists to remove — and the message has to
+    // name the fix, because "no model" is not something an operator can act on.
+    let models = match state.models_dir() {
+        Ok(dir) => Some(models::resolve(&dir, &state.selection()).map_err(|err| {
+            tracing::error!(error = ?err, "no usable model");
+            err.to_string()
+        })?),
+        // No app directory: the model manager cannot work here, but the
+        // development search still can, so this is not fatal on its own.
+        Err(err) => {
+            tracing::warn!(error = %err, "no model directory — falling back to the local search");
+            None
+        }
+    };
+
     let events: Arc<dyn EventSink> = Arc::new(TauriEvents(app));
-    match Session::start(config, events.clone()) {
+    match Session::start(config, events.clone(), models) {
         Ok((session, running)) => {
             *slot = Some(session);
             Ok(running)
@@ -198,6 +358,21 @@ pub fn run() {
                     tracing::error!(error = %err, "no configuration directory — nothing will be saved");
                 }
             }
+            // Models go under the app's *data* directory, not its
+            // configuration one: they are hundreds of megabytes of cache that
+            // can always be fetched again, and on macOS that is the difference
+            // between something the user's backup carries around forever and
+            // something it can skip.
+            match app.path().app_data_dir() {
+                Ok(dir) => {
+                    let dir = dir.join(models::DIR_NAME);
+                    tracing::info!(path = %dir.display(), "model directory");
+                    *state.models_dir.lock().expect("fresh state") = Some(dir);
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "no data directory — models cannot be downloaded");
+                }
+            }
             app.manage(state);
             Ok(())
         })
@@ -205,6 +380,10 @@ pub fn run() {
             app_version,
             load_config,
             save_config,
+            list_models,
+            download_model,
+            cancel_download,
+            remove_model,
             list_devices,
             start_session,
             stop_session

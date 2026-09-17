@@ -149,7 +149,78 @@ export interface StoredConfig {
   /// `null` is "never set", and the UI fills in its default; an empty string is
   /// a box the operator cleared, which turns the prompt off and stays off.
   vocabulary: string | null;
+  /// Catalogue id of the speech model (P11), or `null` for "never chose",
+  /// which resolves to the recommended one. Beside the profiles rather than
+  /// inside one: which model a machine can run is a property of the machine,
+  /// not of the production.
+  ///
+  /// Optional, not because the backend ever omits it — it serialises `null` —
+  /// but because a *file* written before P11 has none of these three, and the
+  /// translation in `profiles.ts` is what has to survive reading one.
+  model?: string | null;
+  vadModel?: string | null;
+  /// A `.bin` outside the catalogue — the fallback for a machine that will
+  /// never reach the internet. Outranks `model` when set.
+  modelPath?: string | null;
   profiles: StoredProfile[];
+}
+
+// --- The model manager (P11) ----------------------------------------------
+//
+// Mirrors `crates/app/src/models.rs`.
+
+export type ModelKind = "speech" | "vad";
+
+/// One catalogue entry and what the machine has of it.
+export interface ModelStatus {
+  id: string;
+  kind: ModelKind;
+  label: string;
+  /// One line on when to choose this one, written for an audio engineer.
+  note: string;
+  bytes: number;
+  installed: boolean;
+  /// Bytes of an interrupted download waiting to be continued, so the button
+  /// can honestly offer to resume rather than to start over.
+  partial: number;
+  recommended: boolean;
+}
+
+/// Where the model in use came from. `development` is the `.scratch/models`
+/// search that predates this package and only ever fires in a checkout.
+export type ModelSource = "managed" | "manual" | "environment" | "development";
+
+export interface ModelsView {
+  /// Shown on the page: nobody can be expected to know where macOS puts this.
+  dir: string;
+  models: ModelStatus[];
+  /// The speech model a session would start with, or `null` for the "no model"
+  /// state — in which case `problem` says what to do about it.
+  active: string | null;
+  source: ModelSource | null;
+  problem: string | null;
+  /// Whether speech detection would be running. Without it the app transcribes
+  /// noise and silence, which is worth saying rather than leaving to be found.
+  vad: boolean;
+}
+
+export type DownloadStage =
+  | "downloading"
+  /// Hashing 600 MB is not instant, and a bar stuck at 100 % looks like a hang.
+  | "verifying"
+  | "done"
+  | "cancelled"
+  | "failed";
+
+export interface ModelProgress {
+  id: string;
+  /// Resumed bytes included, so a continued download picks the bar up where it
+  /// left it.
+  received: number;
+  total: number;
+  stage: DownloadStage;
+  /// Set when `stage` is `failed`.
+  message: string | null;
 }
 
 export const appVersion = () => invoke<string>("app_version");
@@ -159,6 +230,16 @@ export const appVersion = () => invoke<string>("app_version");
 export const loadConfig = () => invoke<StoredConfig>("load_config");
 /// Writes the whole configuration, atomically on the other side.
 export const saveConfig = (config: StoredConfig) => invoke<void>("save_config", { config });
+/// The catalogue, what is installed, and which model is actually in use — one
+/// call, because the answers are only useful together.
+export const listModels = () => invoke<ModelsView>("list_models");
+/// Starts (or resumes) a download. Resolves as soon as it is *running*; the
+/// `model-progress` events carry the rest, including its failure.
+export const downloadModel = (id: string) => invoke<void>("download_model", { id });
+/// Stops a download and keeps what arrived, so pressing download again
+/// continues instead of starting over.
+export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
+export const removeModel = (id: string) => invoke<void>("remove_model", { id });
 export const listDevices = () => invoke<DeviceOption[]>("list_devices");
 /// Resolves with the running state, so the UI does not have to wait for an
 /// event to learn that the session it just asked for actually started.
@@ -177,3 +258,6 @@ export const onOverload = (fn: (e: OverloadEvent) => void): Promise<UnlistenFn> 
 
 export const onSessionState = (fn: (e: SessionState) => void): Promise<UnlistenFn> =>
   listen<SessionState>("session-state", (e) => fn(e.payload));
+
+export const onModelProgress = (fn: (e: ModelProgress) => void): Promise<UnlistenFn> =>
+  listen<ModelProgress>("model-progress", (e) => fn(e.payload));

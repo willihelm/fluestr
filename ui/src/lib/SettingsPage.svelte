@@ -16,7 +16,8 @@
   import StreamSetup from "./StreamSetup.svelte";
   import VocabularyEditor from "./VocabularyEditor.svelte";
   import GroupMembership from "./GroupMembership.svelte";
-  import type { Profile } from "./profiles";
+  import ModelPicker from "./ModelPicker.svelte";
+  import type { ModelChoice, Profile } from "./profiles";
   import type { DeviceOption } from "./bridge";
 
   interface Props {
@@ -24,6 +25,10 @@
     profiles: Profile[];
     activeKey: number | null;
     vocabulary: string;
+    /// Which model the machine transcribes with (P11). Beside the profiles
+    /// rather than inside one: what a machine can run depends on the machine,
+    /// not on the production being carried to it.
+    models: ModelChoice;
     deviceChannels: number;
     locked: boolean;
     saveError: string | null;
@@ -34,6 +39,7 @@
     profiles = $bindable(),
     activeKey = $bindable(),
     vocabulary = $bindable(),
+    models = $bindable(),
     deviceChannels,
     locked,
     saveError,
@@ -81,6 +87,7 @@
       </p>
     </section>
 
+    <ModelPicker bind:models {locked} />
     <StreamSetup bind:channels={active.channels} {deviceChannels} {locked} />
     <VocabularyEditor bind:vocabulary {locked} />
     <GroupMembership bind:groups={active.groups} channels={active.channels} />

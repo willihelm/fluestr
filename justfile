@@ -66,7 +66,19 @@ build:
 
 # --- Whisper tooling (P4/P14) --------------------------------------------
 
+# The model download, against the real host. Needs a network; fetches the
+# 885 KB VAD model several times, which is why it is that one and not `small`.
+# These are what check the URLs and the checksums in the catalogue — the two
+# things a mocked server would replace and therefore never test.
+models:
+    cargo test -p app --test models -- --ignored --nocapture
+
 # Download a model into .scratch/models. Example: just model small-q5_1
+#
+# Superseded by the model manager in the app (P11), which downloads into the
+# app's own directory with a checksum and a progress bar. Kept because it is
+# what the integration tests and `just slice` find — they have no app
+# directory to resolve against.
 model name="small-q5_1":
     mkdir -p {{scratch}}/models
     curl -fL --progress-bar \
