@@ -67,7 +67,7 @@ named below is missing. **Open** — not started.
 | P12 | Settings & presets | **Open** | Every threshold is a constant in the code |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
-| P15 | Vocabulary & prompt management | **Partial** | A single text box, not stored, not named |
+| P15 | Vocabulary & prompt management | **Partial** | Per-channel text boxes, not stored or named; must become one global Settings control |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
@@ -147,8 +147,10 @@ but how well the chosen mode carries foreign-language inserts.
    is then translated or mangled.
 2. **Force `translate = false`.** Silent translation is the most dangerous
    failure mode, because the output looks plausible.
-3. **Vocabulary prompt per stream.** The strongest quality lever for code
-   switching — measured, see measurements.md §4. Package P15.
+3. **One global vocabulary prompt.** The strongest quality lever for code
+   switching — measured, see measurements.md §4. The same active vocabulary is
+   applied to every channel, so terms used across a production are maintained
+   once rather than drifting between channel-specific prompts. Package P15.
 4. **Auto-detect as opt-in, restricted to a candidate list.** Not free
    detection across all ~99 whisper languages, but argmax over the probability
    vector restricted to the languages declared for that stream. Package P3b.
@@ -350,7 +352,7 @@ bound and the timeouts are reasoned defaults, not measured ones.
 
 ### P6 — Tauri API — **Partial**
 
-Commands `list_devices`, `start_session`, `stop_session` exist; events
+Commands `list_devices`, `start_session` and `stop_session` exist; events
 `transcript`, `levels`, `overload` and `session-state` are emitted.
 
 `start_session` now takes a **list** of streams on one device, and the session
@@ -373,8 +375,8 @@ Two things learned here, both in the code as comments:
   happens afterwards.
 - **Start is non-destructive.** It starts or resumes capture without clearing
   the transcripts already displayed or stored for the current session. Clearing
-  history, if offered at all, is a separate explicit action and never a side
-  effect of Start or Stop.
+  communication is the separate, explicit `clear_communication` action and is
+  never a side effect of Start or Stop.
 
 Two more things worth knowing, both in the code:
 
@@ -401,7 +403,8 @@ Two more things worth knowing, both in the code:
 
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
 `specta`) instead of hand-written TypeScript; `update_stream_config`, group
-CRUD and channel-to-group assignment commands, and `search_session`.
+CRUD and channel-to-group assignment commands, `clear_communication` (atomic
+deletion of transcript data only), and `search_session`.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
@@ -410,11 +413,18 @@ it belongs with the P14 load test.
 ### P7 — Chat UI (Svelte) — **Partial**
 
 Today: a device picker and an editable list of channels — device channel,
-label, language, colour and vocabulary prompt per row, added and removed
-freely — one global Start/Stop for all of them, a meter per running stream, and
+label, language, colour and (currently) a vocabulary prompt per row, added and
+removed freely — one global Start/Stop for all of them, a meter per running stream, and
 one chat carrying every channel's lines with its colour down the left edge and
 its label, timestamp, language badge and measured latency on each. Follow
-behaviour with a "jump to latest" button. Editing the setup is locked while a
+behaviour with a "jump to latest" button.
+
+A bubble is an utterance, not a segment: consecutive segments of the same
+channel are merged into one, up to a silence of 1.5 s between them and ceilings
+on length and duration, and a merged bubble carries every language its parts
+were detected as. Merging only ever appends to the *last* bubble in the list —
+a channel that has meanwhile been interrupted by another one starts a new
+bubble rather than growing upwards, because the list is read as a chronology. Editing the setup is locked while a
 session runs, because the channel map is fixed when capture opens.
 
 Channels are numbered from 1, the way they are numbered on an interface; the
@@ -426,10 +436,12 @@ interleaved in one list it is what makes a line's origin readable at a glance,
 faster than reading eight labels, and it is the same colour on the meter strip.
 
 **Target interaction model.** Channel configuration belongs on the dedicated
-Settings page, not in the live chat view: input mapping, label, language,
-vocabulary assignment and channel colour are edited there. Each channel has a
-user-editable colour; a deterministic palette colour is preselected when the
-channel is created, with enough contrast for labels, badges and level meters.
+Settings page, not in the live chat view: input mapping, label, language and
+channel colour are edited there. Vocabulary is likewise managed on Settings,
+but globally: one active vocabulary/prompt applies to all channels and has no
+per-channel assignment. Each channel has a user-editable colour; a deterministic
+palette colour is preselected when the channel is created, with enough contrast
+for labels, badges and level meters.
 
 The chat page has a left sidebar for groups. An operator can create, rename and
 delete groups, and select a group to focus the chat on its member channels.
@@ -438,7 +450,11 @@ and removing it from a group never removes the channel itself. The sidebar also
 offers an all-channels view. Starting and stopping is session-wide, through one
 global Start/Stop control; there is deliberately no per-channel Start button.
 Start leaves the existing chat history visible and appends new transcripts to
-it; neither Start nor Stop clears the list.
+it; neither Start nor Stop clears the list. A global **Clear all
+communication** button clears every transcript, across every group and session,
+from both the visible chat and persistent storage. It does not change channel,
+group or Settings configuration. Because this is irreversible, it requires a
+confirmation dialog and is available only after capture has been stopped.
 
 Two streams reading the *same* device channel is allowed — mirroring one
 channel into two views is unusual but not wrong — so it is a warning rather
@@ -451,12 +467,14 @@ channel setup, which is where the channel list belongs rather than above the
 chat; per-stream language configuration from the sidecar's language list rather
 than a text field; one-click language override.
 
-**Accepted when:** eight streams run visibly live; scrolling stays smooth at
-10,000 segments; a third language can be chosen without a code change; a
+**Accepted when:** eight streams run visibly live; speech that runs on is one
+bubble rather than one per segment ✔; scrolling stays smooth at 10,000 segments; a third language can be chosen without a code change; a
 channel has a preselected but editable colour ✔; a channel can appear in two
 groups and is visible in both; all configured channels start from one action ✔.
 Starting again after a Stop retains the preceding chat history and appends new
-segments to it ✔.
+segments to it ✔. Clear all communication requires confirmation, removes every
+displayed and stored transcript, and leaves the channel and group configuration
+intact.
 
 ### P8 — Levels & stream health — **Partial**
 
@@ -495,7 +513,9 @@ to become one that survives a restart here. Language fields are written **from d
 with a fixed language — it costs nothing and makes misdetections analysable
 later. WAL mode with batched writes, not one commit per segment. Versioned
 migrations. Crash recovery marks an incomplete session as ended and keeps the
-data.
+data. `clear_communication` deletes transcript data for all sessions, including
+the FTS index, but preserves device, channel, group, model and vocabulary
+configuration.
 
 **Accepted when:** a hard-killed app loses at most the last write batch and the
 session loads completely afterwards.
@@ -524,13 +544,14 @@ download to the first transcription; a tampered file is rejected by checksum.
 
 Persistent settings: worker count, model choice, VAD thresholds, maximum
 segment length, hysteresis parameters from P3b, theme. Session presets: a named
-channel mapping including labels, colours, language configuration and assigned
-vocabulary, plus named groups and their channel memberships — an engineer does
-not want to remap eight channels or rebuild their working views before every
-show. Channel colours are automatically assigned from a deterministic palette
-when no saved choice exists, then persist as explicit user-editable values.
-The Settings page is the home for this configuration. Device recognition via a
-stable id, not the display name.
+channel mapping including labels, colours and language configuration, plus named
+groups and their channel memberships — an engineer does not want to remap eight
+channels or rebuild their working views before every show. Vocabulary lists and
+the active vocabulary are global settings, not part of a channel mapping.
+Channel colours are automatically assigned from a deterministic palette when no
+saved choice exists, then persist as explicit user-editable values. The Settings
+page is the home for all of this configuration. Device recognition via a stable
+id, not the display name.
 
 **Accepted when:** a preset, including channel colours and non-exclusive group
 memberships, survives a restart and a reconnect of the interface.
@@ -587,18 +608,21 @@ worse. The numbers are an upper bound, not a promise.
 
 ### P15 — Vocabulary & prompt management — **Partial**
 
-Today: one free-text prompt field in the UI, passed through to the sidecar's
-`initial_prompt`. Its effect is measured — `Q5` becomes `Cue`, `Fadeout`
-becomes `Fade out` (measurements.md §4).
+Today: one free-text prompt field per channel in the UI, passed through to the
+sidecar's `initial_prompt`. Its effect is measured — `Q5` becomes `Cue`,
+`Fadeout` becomes `Fade out` (measurements.md §4). This is transitional: it
+must move to Settings and become one global prompt for all channels.
 
-**Outstanding:** named vocabulary lists assignable to one or more streams and
-stored in SQLite; assembly into the prompt with **whisper's ~224 token limit**
-handled by sensible shortening rather than silent truncation, with the UI
-showing the usage; a warning that over-long or unsuitable prompts encourage
-hallucination; a shipped starter list.
+**Outstanding:** global named vocabulary lists stored in SQLite, with exactly
+one active list (or assembled global prompt) used for every stream; a Settings
+UI rather than channel controls; assembly into the prompt with **whisper's ~224
+token limit** handled by sensible shortening rather than silent truncation,
+with the UI showing the usage; a warning that over-long or unsuitable prompts
+encourage hallucination; a shipped starter list.
 
-**Accepted when:** on the P14 fixture set an enabled vocabulary list measurably
-improves the word error rate of the technical terms against the baseline.
+**Accepted when:** on the P14 fixture set the enabled global vocabulary list
+measurably improves the word error rate of the technical terms against the
+baseline on every applicable channel.
 
 ---
 
@@ -671,15 +695,19 @@ In this order, with the reason each one comes where it does.
    within target.
    1. Speak mixed-language ("standby für Cue fünf, dann fade out") — the
       English terms stand verbatim in the German text, nothing was translated.
-   2. Disable the vocabulary list and repeat the same passage — the difference
-      must be visible, otherwise P15 is not working.
+   2. Disable the global vocabulary list and repeat the same passage — the
+      difference must be visible on every channel, otherwise P15 is not
+      working.
    3. Select a third language in the setup and put a stream on it — possible
       without a code change.
 4. Overdrive one channel and leave another silent → P8 shows both.
 5. Enter a search term → hits across all streams, jumping works.
 6. `kill -9` a sidecar → the app keeps running, the worker comes back.
 7. Kill the app hard, restart → the session loads completely from SQLite.
-8. Run the P14 reference load test, record p95 latency.
+8. Stop capture, press **Clear all communication**, confirm → all chat lines
+   and search hits are gone after restart, while channels, groups and Settings
+   remain.
+9. Run the P14 reference load test, record p95 latency.
 
 ---
 

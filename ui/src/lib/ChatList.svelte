@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { TranscriptEvent } from "./bridge";
+  import { toBubbles, type Bubble } from "./bubbles";
 
   interface Props {
     messages: TranscriptEvent[];
@@ -10,6 +11,10 @@
   }
 
   let { messages, colors }: Props = $props();
+
+  // Consecutive segments of the same channel are one bubble; see
+  // [`toBubbles`] for where a bubble ends.
+  let bubbles = $derived(toBubbles(messages));
 
   const colorOf = (streamId: number) => colors.get(streamId) ?? "var(--accent)";
 
@@ -28,12 +33,19 @@
   };
 
   $effect(() => {
-    // Touch the length so the effect re-runs on every new message.
+    // Touch the message count, not the bubble count: a segment appended to
+    // the last bubble leaves the number of bubbles unchanged while the box
+    // still grows, and the view has to follow that too.
     messages.length;
     if (following && container) {
       container.scrollTop = container.scrollHeight;
     }
   });
+
+  const latencyTitle = (bubble: Bubble) =>
+    bubble.parts === 1
+      ? `Decode ${bubble.decodeMs} ms of ${bubble.latencyMs} ms total`
+      : `Decode ${bubble.decodeMs} ms of ${bubble.latencyMs} ms total, last of ${bubble.parts} segments`;
 
   const clock = (ms: number) => {
     const total = Math.floor(ms / 1000);
@@ -48,23 +60,23 @@
     <p class="empty">Nothing transcribed yet. Speak into one of the channels.</p>
   {/if}
 
-  <!-- Keyed on all three, not on `streamId + seq`: those repeat across
-       sessions, and a duplicate key throws and stops the list rendering
-       entirely — which is what "nothing appears after Stop and Start" looked
-       like. -->
-  {#each messages as message (message.sessionId + "-" + message.streamId + "-" + message.seq)}
-    <article style="--channel: {colorOf(message.streamId)}">
+  <!-- Keyed on the identity of the segment that opened the bubble. On all
+       three parts, not on `streamId + seq`: those repeat across sessions, and
+       a duplicate key throws and stops the list rendering entirely — which is
+       what "nothing appears after Stop and Start" looked like. -->
+  {#each bubbles as bubble (bubble.key)}
+    <article style="--channel: {colorOf(bubble.streamId)}">
       <header>
-        <span class="label">{message.label || "Stream " + message.streamId}</span>
-        <span class="time">{clock(message.tStartMs)}</span>
-        {#if message.detectedLanguage}
-          <span class="lang">{message.detectedLanguage}</span>
-        {/if}
-        <span class="latency" title="Decode {message.decodeMs} ms of {message.latencyMs} ms total">
-          {(message.latencyMs / 1000).toFixed(1)} s
+        <span class="label">{bubble.label || "Stream " + bubble.streamId}</span>
+        <span class="time">{clock(bubble.tStartMs)}</span>
+        {#each bubble.languages as language}
+          <span class="lang">{language}</span>
+        {/each}
+        <span class="latency" title={latencyTitle(bubble)}>
+          {(bubble.latencyMs / 1000).toFixed(1)} s
         </span>
       </header>
-      <p>{message.text}</p>
+      <p>{bubble.text}</p>
     </article>
   {/each}
 </div>
