@@ -96,7 +96,12 @@ const append = (bubble: Bubble, e: TranscriptEvent): Bubble => {
 /// is one definition of what a bubble is and no way for an incrementally
 /// maintained copy to disagree with it. The cost is a pass over the session's
 /// events per new event — the same order as the append the chat already does,
-/// and it goes away with the virtualised list that P7 still owes.
+/// and unaffected by the chat rendering only a window of the result: the
+/// grouping has to see the events before it can know which of them are the
+/// last two hundred bubbles. Segments arrive at a speaking pace, so a pass
+/// over an hour of them is still far below what one event's budget allows;
+/// what would change that is loading a session from disk (P10), and the fix
+/// there is to group once on load rather than to abandon recomputing.
 export const toBubbles = (messages: TranscriptEvent[]): Bubble[] => {
   const bubbles: Bubble[] = [];
 

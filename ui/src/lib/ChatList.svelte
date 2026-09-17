@@ -1,6 +1,23 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type { TranscriptEvent } from "./bridge";
   import { toBubbles, type Bubble } from "./bubbles";
+
+  /// How many bubbles are in the DOM at once, and how many more each step back
+  /// through the history adds.
+  ///
+  /// An hour across eight streams is tens of thousands of nodes, and a browser
+  /// that holds all of them scrolls in steps. So the list renders a window at
+  /// the end of the chat — which is where a live view is read — and extends it
+  /// backwards when the operator scrolls up to the top of it.
+  ///
+  /// A window, not a virtual scroller with estimated heights: a bubble's
+  /// height depends on how its text wraps, so estimating it means a scrollbar
+  /// that lies and jumps as the estimates are corrected. What a window costs
+  /// instead is that reaching a point an hour back takes several steps — which
+  /// is what P9's search and its jump into the chat position are for, rather
+  /// than scrolling.
+  const PAGE = 200;
 
   interface Props {
     messages: TranscriptEvent[];
@@ -16,20 +33,45 @@
   // [`toBubbles`] for where a bubble ends.
   let bubbles = $derived(toBubbles(messages));
 
+  let limit = $state(PAGE);
+  let shown = $derived(bubbles.slice(Math.max(0, bubbles.length - limit)));
+  let hidden = $derived(bubbles.length - shown.length);
+
   const colorOf = (streamId: number) => colors.get(streamId) ?? "var(--accent)";
 
   let container: HTMLDivElement | undefined = $state();
   // Follow behaviour: stay pinned to the bottom, but not while the user is
-  // reading further up. Still to come in P7: a proper "N new messages" button
-  // and a virtualised list underneath — an hour across eight streams is tens
-  // of thousands of nodes.
+  // reading further up. Still to come in P7: a proper "N new messages" button.
   let following = $state(true);
+
+  /// Extends the window backwards, keeping what is on screen where it is.
+  ///
+  /// Content added *above* the viewport pushes everything down by its own
+  /// height, so the line the operator was reading would jump off the screen.
+  /// The scroll position is therefore corrected by however much the content
+  /// grew, measured across the DOM update rather than guessed.
+  const showMore = async () => {
+    if (!container || hidden === 0) return;
+
+    const before = container.scrollHeight;
+    limit += PAGE;
+    await tick();
+    if (container) container.scrollTop += container.scrollHeight - before;
+  };
 
   const onScroll = () => {
     if (!container) return;
     const distance =
       container.scrollHeight - container.scrollTop - container.clientHeight;
     following = distance < 80;
+    // Near the top of the window and there is more behind it: reach for the
+    // next page before the operator hits the end of what is rendered, so the
+    // history reads as one list rather than as pages.
+    //
+    // Only while reading back. At the bottom the follow effect trims the
+    // window again, and a short chat sits at `scrollTop` 0 with both
+    // conditions true — growing and trimming each other in a loop.
+    if (!following && container.scrollTop < 400) void showMore();
   };
 
   $effect(() => {
@@ -38,6 +80,11 @@
     // still grows, and the view has to follow that too.
     messages.length;
     if (following && container) {
+      // Back at the bottom, the pages that were opened to read backwards are
+      // no longer being looked at. Dropping them keeps a session that ran for
+      // hours from carrying every node it ever rendered — and it is invisible,
+      // because everything dropped is above the viewport.
+      limit = PAGE;
       container.scrollTop = container.scrollHeight;
     }
   });
@@ -60,11 +107,17 @@
     <p class="empty">Nothing transcribed yet. Speak into one of the channels.</p>
   {/if}
 
+  {#if hidden > 0}
+    <button class="earlier" onclick={showMore}>
+      {hidden} earlier {hidden === 1 ? "bubble" : "bubbles"} — show more
+    </button>
+  {/if}
+
   <!-- Keyed on the identity of the segment that opened the bubble. On all
        three parts, not on `streamId + seq`: those repeat across sessions, and
        a duplicate key throws and stops the list rendering entirely — which is
        what "nothing appears after Stop and Start" looked like. -->
-  {#each bubbles as bubble (bubble.key)}
+  {#each shown as bubble (bubble.key)}
     <article style="--channel: {colorOf(bubble.streamId)}">
       <header>
         <span class="label">{bubble.label || "Stream " + bubble.streamId}</span>
@@ -106,6 +159,22 @@
   .empty {
     color: var(--text-dim);
     margin: auto;
+  }
+
+  .earlier {
+    align-self: center;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    padding: 0.25rem 0.8rem;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .earlier:hover {
+    color: var(--text);
   }
 
   article {
