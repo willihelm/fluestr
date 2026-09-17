@@ -29,9 +29,11 @@ pub struct Ready {
 
 pub struct Worker {
     child: Child,
-    stdin: BufWriter<ChildStdin>,
+    /// Taken during shutdown: closing it is what tells the worker to exit.
+    stdin: Option<BufWriter<ChildStdin>>,
     stdout: BufReader<ChildStdout>,
     ready: Ready,
+    stopped: bool,
 }
 
 impl Worker {
@@ -82,14 +84,21 @@ impl Worker {
 
         Ok(Self {
             child,
-            stdin: BufWriter::new(stdin),
+            stdin: Some(BufWriter::new(stdin)),
             stdout,
             ready,
+            stopped: false,
         })
     }
 
     pub fn ready(&self) -> &Ready {
         &self.ready
+    }
+
+    fn stdin(&mut self) -> Result<&mut BufWriter<ChildStdin>> {
+        self.stdin
+            .as_mut()
+            .context("the sidecar has already been shut down")
     }
 
     /// Sends one segment and blocks until its transcript comes back.
@@ -104,7 +113,7 @@ impl Worker {
             language_mode: segment.language_mode.clone(),
             initial_prompt: segment.initial_prompt.clone(),
         };
-        protocol::write_request(&mut self.stdin, &request, &segment.pcm)
+        protocol::write_request(self.stdin()?, &request, &segment.pcm)
             .context("sending a segment to the sidecar")?;
 
         match protocol::read_response(&mut self.stdout)? {
@@ -116,7 +125,7 @@ impl Worker {
     /// Asks whisper.cpp for its language list — the source the UI picker is
     /// built from, so that no language list is hard-coded anywhere.
     pub fn list_languages(&mut self) -> Result<Vec<whisper_protocol::Language>> {
-        protocol::write_request(&mut self.stdin, &Request::ListLanguages, &[])?;
+        protocol::write_request(self.stdin()?, &Request::ListLanguages, &[])?;
         match protocol::read_response(&mut self.stdout)? {
             Some(Response::Languages { languages }) => Ok(languages),
             Some(other) => bail!("expected a language list, got {other:?}"),
@@ -124,18 +133,49 @@ impl Worker {
         }
     }
 
-    /// Asks the worker to stop, then waits. Falls back to killing it, because
-    /// a sidecar left running would hold the model — and the GPU — forever.
-    pub fn shutdown(mut self) {
-        let _ = protocol::write_request(&mut self.stdin, &Request::Shutdown, &[]);
-        drop(self.stdin);
-        match self.child.wait() {
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(error = %err, "sidecar did not exit cleanly, killing it");
-                let _ = self.child.kill();
-            }
+    /// Asks the worker to stop, then waits.
+    ///
+    /// Takes `&mut self` rather than `self` so that [`Drop`] can tell an
+    /// orderly shutdown from a dropped worker. Calling it twice is harmless.
+    pub fn shutdown(&mut self) {
+        if self.stopped {
+            return;
         }
+        self.stopped = true;
+
+        if let Some(mut stdin) = self.stdin.take() {
+            let _ = protocol::write_request(&mut stdin, &Request::Shutdown, &[]);
+            // Closing the pipe is the second signal: even a worker that did not
+            // understand the request sees EOF on stdin and leaves its loop.
+        }
+
+        if let Err(err) = self.child.wait() {
+            tracing::warn!(error = %err, "sidecar did not exit cleanly, killing it");
+            let _ = self.child.kill();
+        }
+    }
+}
+
+/// A worker that goes out of scope without [`Worker::shutdown`] still has to
+/// take its child process with it.
+///
+/// This is not hypothetical: if starting a session fails *after* the sidecar
+/// came up — a device that will not open, a rejected channel map — the `Worker`
+/// is simply dropped. Without this, that leaves a process behind holding the
+/// model and its GPU allocations, and every retry adds another one.
+///
+/// Such a stray does die when the app does — its stdin closes, the worker reads
+/// EOF and leaves its loop. But "only until the user quits" is not a bound
+/// worth having when each one costs a few hundred megabytes and a Metal
+/// context, and the operator retrying after a failed start is the normal case.
+impl Drop for Worker {
+    fn drop(&mut self) {
+        if self.stopped {
+            return;
+        }
+        tracing::warn!("sidecar dropped without shutdown — killing it");
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -170,11 +210,22 @@ pub fn find_binary() -> Result<PathBuf> {
     )
 }
 
+/// Where `just model` puts its downloads, relative to the repository root.
+const SCRATCH_MODELS: &str = ".scratch/models";
+
 /// Locates a model file.
 ///
 /// A stand-in for the model manager (P11), which will download models into the
 /// app data directory and let the user pick one. Until then: the environment
 /// variable, or whatever `just model` left in `.scratch/models`.
+///
+/// The directory is **not** resolved against the working directory. `tauri dev`
+/// runs the binary with the crate as its working directory, not the repository
+/// root, so a relative path finds nothing — and the resulting "no model" is
+/// indistinguishable from actually not having downloaded one. The search
+/// therefore walks up from both the working directory and the binary's own
+/// location, which covers running from anywhere in the repository as well as
+/// `cargo run` and `tauri dev`.
 pub fn find_model() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("INTERCOM2CHAT_MODEL") {
         let path = PathBuf::from(path);
@@ -187,26 +238,75 @@ pub fn find_model() -> Result<PathBuf> {
         return Ok(path);
     }
 
-    let dir = Path::new(".scratch/models");
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "no model configured and {} does not exist — run `just model small-q5_1` \
-                 or set INTERCOM2CHAT_MODEL",
-                dir.display()
-            )
-        })?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "bin"))
-        .collect();
-    candidates.sort();
+    let mut searched = Vec::new();
+    for start in search_roots() {
+        for ancestor in start.ancestors() {
+            let dir = ancestor.join(SCRATCH_MODELS);
+            if !dir.is_dir() {
+                continue;
+            }
+            if let Some(model) = newest_model(&dir) {
+                return Ok(model);
+            }
+            searched.push(dir);
+        }
+    }
 
-    candidates.into_iter().next().ok_or_else(|| {
-        anyhow::anyhow!(
-            "no .bin model in {} — run `just model small-q5_1`",
-            dir.display()
-        )
-    })
+    if searched.is_empty() {
+        bail!(
+            "no model found — run `just model small-q5_1` or set INTERCOM2CHAT_MODEL \
+             (looked for {SCRATCH_MODELS} above {})",
+            describe(search_roots())
+        );
+    }
+    bail!(
+        "no .bin model in {} — run `just model small-q5_1`",
+        describe(searched)
+    )
+}
+
+/// Directories the upward search starts from.
+fn search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
+    roots
+}
+
+/// Picks one model out of a directory, largest first.
+///
+/// Size is a rough stand-in for quality: `small-q5_1` beats `tiny`, and this
+/// crude rule means downloading a better model is enough to use it. P11 makes
+/// it an explicit choice instead of a guess.
+fn newest_model(dir: &Path) -> Option<PathBuf> {
+    let mut candidates: Vec<(u64, PathBuf)> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "bin") {
+                Some((entry.metadata().ok()?.len(), path))
+            } else {
+                None
+            }
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    candidates.into_iter().next().map(|(_, path)| path)
+}
+
+fn describe(paths: Vec<PathBuf>) -> String {
+    paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -232,8 +332,8 @@ mod tests {
 
     #[test]
     fn a_missing_model_directory_explains_the_fix() {
-        // `find_model` reads the working directory, so this only asserts the
-        // shape of the failure, not a particular path.
+        // Depends on whether the developer has downloaded a model, so this
+        // asserts the shape of the failure rather than a particular path.
         if std::env::var_os("INTERCOM2CHAT_MODEL").is_some() {
             return;
         }
@@ -244,5 +344,45 @@ mod tests {
                 "unhelpful error: {message}"
             );
         }
+    }
+
+    #[test]
+    fn the_model_search_climbs_out_of_a_subdirectory() {
+        // The bug this guards: `tauri dev` runs the binary with the crate as
+        // its working directory, so a path relative to the repository root
+        // resolves to nothing — and "no model" then means "wrong directory"
+        // rather than "not downloaded", which is impossible to tell apart.
+        let root = std::env::temp_dir().join(format!("i2c-model-search-{}", std::process::id()));
+        let models = root.join(SCRATCH_MODELS);
+        std::fs::create_dir_all(&models).unwrap();
+        let deep = root.join("crates/app");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        // Two models: the larger one wins.
+        std::fs::write(models.join("ggml-tiny.bin"), vec![0u8; 64]).unwrap();
+        std::fs::write(models.join("ggml-small-q5_1.bin"), vec![0u8; 512]).unwrap();
+
+        let found = newest_model(&models).expect("a model in the directory");
+        assert_eq!(found.file_name().unwrap(), "ggml-small-q5_1.bin");
+
+        // The upward walk from a nested directory reaches the same place.
+        let via_ancestors = deep
+            .ancestors()
+            .map(|a| a.join(SCRATCH_MODELS))
+            .find(|dir| dir.is_dir());
+        assert_eq!(via_ancestors.as_deref(), Some(models.as_path()));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_directory_without_a_model_is_not_mistaken_for_one() {
+        let root = std::env::temp_dir().join(format!("i2c-model-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("README.md"), "not a model").unwrap();
+
+        assert!(newest_model(&root).is_none());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

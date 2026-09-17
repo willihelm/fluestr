@@ -99,6 +99,8 @@ fn start_session(
             Ok(())
         }
         Err(err) => {
+            // With the chain of causes, which the UI string flattens away.
+            tracing::error!(error = ?err, "starting the session failed");
             let message = err.to_string();
             // Also as an event, so a failure is visible in the same place a
             // successful start is, rather than only in the caller's catch.
