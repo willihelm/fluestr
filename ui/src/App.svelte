@@ -1,60 +1,260 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import ChatList from "./lib/ChatList.svelte";
+  import LevelMeter from "./lib/LevelMeter.svelte";
+  import {
+    listDevices,
+    onLevel,
+    onSessionState,
+    onTranscript,
+    startSession,
+    stopSession,
+    type DeviceOption,
+    type LevelEvent,
+    type SessionState,
+    type TranscriptEvent,
+  } from "./lib/bridge";
 
-  // P0 scaffolding: proves only that the Tauri bridge is up. The chat view
-  // arrives in P7, once P6 emits the events.
-  let version = $state<string | null>(null);
-  let error = $state<string | null>(null);
+  // The narrow vertical slice: one device, one channel, one chat list. The
+  // session setup screen with eight streams, labels and per-stream language
+  // configuration is P7.
+
+  let devices = $state<DeviceOption[]>([]);
+  let device = $state("");
+  let channel = $state(0);
+  let label = $state("Regie");
+  let language = $state("de");
+  // The vocabulary prompt is the single strongest lever on code-switching
+  // quality (P15). Here it is a plain text box so its effect is visible from
+  // the first run — measured at "Q5" becoming "Cue".
+  let prompt = $state("Intercom-Kommandos: Standby, Cue, Go, Fade out, Blackout, Talkback, Regie.");
+
+  let status = $state<SessionState | { state: "starting" } | { state: "idle" }>({
+    state: "idle",
+  });
+  let messages = $state<TranscriptEvent[]>([]);
+  let level = $state<LevelEvent>({ streamId: 0, rms: 0, peak: 0, dropped: 0 });
+
+  let running = $derived(status.state === "running");
+  let busy = $derived(status.state === "starting");
+  let selected = $derived(devices.find((d) => d.name === device));
 
   $effect(() => {
-    invoke<string>("app_version")
-      .then((v) => (version = v))
-      .catch((e) => (error = String(e)));
+    listDevices()
+      .then((found) => {
+        devices = found;
+        device = (found.find((d) => d.isDefault) ?? found[0])?.name ?? "";
+      })
+      .catch((e) => (status = { state: "failed", message: String(e) }));
   });
+
+  $effect(() => {
+    const subscriptions = [
+      onTranscript((event) => {
+        messages = [...messages, event];
+      }),
+      onLevel((event) => (level = event)),
+      onSessionState((event) => (status = event)),
+    ];
+    return () => {
+      for (const subscription of subscriptions) {
+        subscription.then((unlisten) => unlisten());
+      }
+    };
+  });
+
+  const start = async () => {
+    messages = [];
+    // The model load happens inside `start_session` and can take seconds on a
+    // machine's first ever start — the UI has to say so rather than look hung.
+    status = { state: "starting" };
+    try {
+      await startSession({
+        device,
+        channel,
+        label,
+        language,
+        initialPrompt: prompt.trim() === "" ? null : prompt,
+      });
+    } catch (e) {
+      status = { state: "failed", message: String(e) };
+    }
+  };
+
+  const stop = async () => {
+    await stopSession();
+    status = { state: "idle" };
+    level = { streamId: 0, rms: 0, peak: 0, dropped: 0 };
+  };
 </script>
 
 <main>
-  <h1>Intercom2Chat</h1>
-  <p class="dim">Offline transcription for intercom streams</p>
+  <header class="bar">
+    <h1>Intercom2Chat</h1>
 
-  {#if error}
-    <p class="error">Tauri bridge unreachable: {error}</p>
-  {:else if version}
-    <p class="ok">Backend connected — version {version}</p>
-  {:else}
-    <p class="dim">Connecting …</p>
-  {/if}
+    <label>
+      Device
+      <select bind:value={device} disabled={running || busy}>
+        {#each devices as option (option.name)}
+          <option value={option.name}>
+            {option.name} ({option.channels} ch)
+          </option>
+        {/each}
+      </select>
+    </label>
+
+    <label>
+      Channel
+      <input
+        type="number"
+        min="0"
+        max={(selected?.channels ?? 1) - 1}
+        bind:value={channel}
+        disabled={running || busy}
+      />
+    </label>
+
+    <label>
+      Label
+      <input type="text" bind:value={label} disabled={running || busy} />
+    </label>
+
+    <label>
+      Language
+      <input
+        type="text"
+        size="3"
+        bind:value={language}
+        disabled={running || busy}
+        title="ISO 639-1 code. The full list comes from whisper.cpp in P7 — nothing is hard-coded to de/en."
+      />
+    </label>
+
+    {#if running}
+      <button onclick={stop}>Stop</button>
+    {:else}
+      <button onclick={start} disabled={busy || device === ""}>
+        {busy ? "Starting …" : "Start"}
+      </button>
+    {/if}
+  </header>
+
+  <div class="bar vocabulary">
+    <label class="grow">
+      Vocabulary prompt
+      <input type="text" bind:value={prompt} disabled={running || busy} />
+    </label>
+  </div>
+
+  <div class="bar status">
+    {#if status.state === "running"}
+      <span class="ok">●</span>
+      <span>
+        {status.device} · channel {status.channel} · {status.sampleRate} Hz ·
+        {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
+        {(status.loadMs / 1000).toFixed(1)} s
+      </span>
+      <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
+    {:else if status.state === "starting"}
+      <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
+    {:else if status.state === "failed"}
+      <span class="error">{status.message}</span>
+    {:else if status.state === "stopped"}
+      <span class="dim">Session ended.</span>
+    {:else}
+      <span class="dim">Pick a device and press Start.</span>
+    {/if}
+  </div>
+
+  <ChatList {messages} />
 </main>
 
 <style>
   main {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
     height: 100vh;
-    gap: 0.25rem;
+    position: relative;
+  }
+
+  .bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-wrap: wrap;
+  }
+
+  .vocabulary,
+  .status {
+    align-items: center;
   }
 
   h1 {
-    margin: 0;
-    font-size: 1.75rem;
+    margin: 0 0.5rem 0 0;
+    font-size: 1.1rem;
     font-weight: 600;
     letter-spacing: -0.01em;
   }
 
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .grow {
+    flex: 1;
+  }
+
+  select,
+  input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.3rem 0.45rem;
+    font: inherit;
+    font-size: 0.9rem;
+  }
+
+  input[type="number"] {
+    width: 4.5rem;
+  }
+
+  button {
+    background: var(--accent);
+    color: #12141a;
+    border: none;
+    border-radius: 0.3rem;
+    padding: 0.4rem 1.1rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .status {
+    font-size: 0.85rem;
+    gap: 0.5rem;
+  }
+
   .dim {
     color: var(--text-dim);
-    margin: 0;
   }
 
   .ok {
-    color: var(--accent);
-    margin-top: 1rem;
+    color: #5fd38d;
   }
 
   .error {
     color: #ff6b6b;
-    margin-top: 1rem;
   }
 </style>

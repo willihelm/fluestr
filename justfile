@@ -17,8 +17,12 @@ default:
 
 # --- Development ---------------------------------------------------------
 
-# Run the app in development mode (Vite + Tauri, hot reload)
+# Run the app in development mode (Vite + Tauri, hot reload).
+#
+# The sidecar is looked up next to the app binary, which is where cargo puts
+# it — so it has to be built too. Packaging it as a Tauri `externalBin` is P13.
 dev:
+    cargo build -p whisper-worker
     {{tauri}} dev
 
 # Frontend only, without the Tauri window
@@ -74,6 +78,15 @@ fixture name text:
         {{scratch}}/fixtures/{{name}}.aiff {{scratch}}/fixtures/{{name}}.wav
     rm {{scratch}}/fixtures/{{name}}.aiff
     @echo "{{scratch}}/fixtures/{{name}}.wav"
+
+# Run the vertical slice against a WAV file instead of a microphone: fixture ->
+# resampling -> segmentation -> sidecar -> transcript. Needs a model.
+slice fixture=(scratch / "fixtures/de_mixed.wav") model=(scratch / "models/ggml-small-q5_1.bin"):
+    cargo build -p whisper-worker
+    INTERCOM2CHAT_WORKER={{justfile_directory()}}/target/debug/whisper-worker \
+    INTERCOM2CHAT_MODEL={{model}} \
+    SLICE_FIXTURE={{fixture}} \
+        cargo test -p app --test slice -- --ignored --nocapture
 
 clean:
     cargo clean

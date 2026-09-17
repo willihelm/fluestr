@@ -8,10 +8,16 @@ inevitably lose information — nobody can follow eight conversations in
 parallel, and what was said is gone. This app makes what you missed readable
 and searchable, locally and without any cloud service.
 
-**Status:** P0 (scaffolding), P1 (audio capture) and P2 (ring buffers and
-resampling) are in place, P4 (whisper sidecar) works at its core. Segmentation,
-worker pool and chat UI still to come — the pieces are not yet wired together,
-so there is nothing to run end-to-end.
+**Status:** one channel runs end to end — microphone, ring buffer, resampling,
+segmentation, sidecar, chat list. That is a deliberately narrow vertical slice
+to make the real latency measurable, not the MVP: it handles a single stream
+with a single worker and a provisional voice detector.
+[docs/measurements.md](docs/measurements.md) lists what is provisional and
+which work package replaces it.
+
+In place: P0 (scaffolding), P1 (capture), P2 (ring buffers and resampling),
+P4 (sidecar). Still to come: P3 (a real VAD), P5 (worker pool), P6/P7 (the
+full command surface and chat UI), P11 (model manager).
 
 ---
 
@@ -29,10 +35,23 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ## Getting started
 
 ```sh
-just setup   # frontend dependencies
-just dev     # run the app in development mode
-just check   # everything CI runs as well
+just setup              # frontend dependencies
+just model small-q5_1   # a model, until the model manager exists (P11)
+just dev                # run the app
+just check              # everything CI runs as well
 ```
+
+In the app: pick a device, pick a channel, press Start. The first start on a
+machine takes about eight seconds because macOS compiles the Metal shaders
+once; afterwards it is a fraction of a second.
+
+Two environment variables override the stand-ins for work packages that do not
+exist yet:
+
+| Variable | Replaces | Default |
+|---|---|---|
+| `INTERCOM2CHAT_MODEL` | the model manager (P11) | first `.bin` in `.scratch/models` |
+| `INTERCOM2CHAT_WORKER` | the bundled sidecar (P13) | `whisper-worker` next to the app binary |
 
 ## Layout
 
@@ -42,6 +61,7 @@ crates/
   whisper-protocol/  frame format between app and sidecar, shared by both
   whisper-worker/    sidecar process, keeps a whisper model warm
   app/               Tauri backend: session, worker pool, events
+ui/src/lib/          bridge types, chat list, level meter
 ui/                  Svelte + TypeScript
 docs/measurements.md measured evidence behind the architecture decisions
 ```
@@ -109,6 +129,9 @@ WHISPER_TEST_FIXTURE=.scratch/fixtures/de_mixed.wav \
 
 # Resampling throughput (P2) — a property of the machine, so not part of CI:
 cargo test -p audio-core --release -- --ignored --nocapture resampling_cost
+
+# The whole slice against a WAV file instead of a microphone:
+just slice
 ```
 
 `just fixture` generates test audio through macOS text-to-speech. That is fine

@@ -12,6 +12,8 @@ pub mod lang;
 pub mod resample;
 pub mod ring;
 pub mod segment;
+pub mod segmenter;
+pub mod vad;
 
 pub use backend::CpalBackend;
 pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSink};
@@ -20,6 +22,8 @@ pub use lang::{LanguageCode, LanguageMode};
 pub use resample::{Resampler, StreamProcessor};
 pub use ring::{RingSink, RingSource, RingStats};
 pub use segment::{Segment, StreamId, Transcript, SAMPLE_RATE};
+pub use segmenter::{Segmenter, SegmenterConfig};
+pub use vad::{EnergyVad, Vad};
 
 /// Errors raised by the audio core.
 #[derive(Debug, thiserror::Error)]

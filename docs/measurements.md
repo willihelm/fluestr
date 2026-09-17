@@ -218,7 +218,53 @@ cargo test -p audio-core --release -- --ignored --nocapture resampling_cost
 
 ---
 
-## 8. Incidental findings
+## 8. First end-to-end run (vertical slice)
+
+The narrow slice — one channel from capture through resampling, segmentation
+and the sidecar into the chat view — exists so the real latency becomes
+measurable before the worker pool (P5) and the full UI (P7) are built. Run
+without a microphone via `just slice`, which pushes a WAV fixture down the same
+path.
+
+On the 5.65 s German fixture:
+
+| Stage | Result |
+|---|---|
+| Segmentation | 1 segment, 0.00-5.64 s |
+| Model load (warm) | 183 ms |
+| Decode | 434 ms |
+| Transcript | "Achtung Regie, Standby für Cue 5, auf mein Kommando dann Fade out und Blackout." |
+
+The English terms come through verbatim in German mode, as section 4 predicted.
+
+**The latency budget is dominated by neither resampling nor decode.** For a
+6 s segment the decode is ~0.4 s and the conversion is ~3 ms, but the segmenter
+first has to wait out `silence_timeout` (500 ms) before it can know the segment
+ended. That waiting time is therefore a latency setting, not only a quality
+one — which is why it belongs in P12 next to the model choice rather than
+buried in P3.
+
+**Still unmeasured:** latency from a live microphone, where capture buffering
+and the pump interval add to the above. That needs the GUI and someone talking.
+
+### What the slice does provisionally
+
+Marked as such in the code, listed here so none of it is mistaken for a
+decision:
+
+- **One worker, request/response, no queue.** A long segment blocks the ones
+  behind it. P5.
+- **Energy VAD.** Works in a quiet room, will not survive an intercom feed with
+  constant background noise. P3 replaces it behind the `Vad` trait.
+- **Model discovered from `.scratch/models` or `INTERCOM2CHAT_MODEL`.** P11.
+- **Sidecar found next to the app binary.** Bundling it as an `externalBin`
+  with its own signature is P13.
+- **Chat list is unvirtualised.** Fine for minutes, not for an hour across
+  eight streams. P7.
+
+---
+
+## 9. Incidental findings
 
 - **whisper-rs 0.16 ships a Silero VAD** (`whisper_vad.rs`). Relevant for P3:
   the planned alternative to `webrtc-vad` may already be available and would

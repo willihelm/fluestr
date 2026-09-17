@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Merged into the bundle's Info.plist by the Tauri CLI on macOS.
+
+  Without NSMicrophoneUsageDescription macOS does not even ask: the capture
+  callback simply delivers zeros, and a silent channel is indistinguishable
+  from a denied permission. That is the failure the plan flags as the main
+  risk in P1, so the key is here from the start rather than at packaging time.
+
+  P13 additionally needs the `com.apple.security.device.audio-input`
+  entitlement, because Hardened Runtime gates the same access again.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Intercom2Chat transcribes the intercom channels of your audio interface locally. Nothing is sent anywhere.</string>
+  </dict>
+</plist>
