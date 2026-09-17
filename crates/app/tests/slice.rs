@@ -13,10 +13,11 @@
 //!   cargo test -p app --test slice -- --ignored --nocapture
 //! ```
 
+use app_lib::session::speech_detector;
 use app_lib::worker::Worker;
 use audio_core::{
-    EnergyVad, LanguageCode, LanguageMode, Resampler, Segment, Segmenter, SegmenterConfig,
-    StreamId, SAMPLE_RATE,
+    LanguageCode, LanguageMode, Resampler, Segment, Segmenter, SegmenterConfig, StreamId,
+    SAMPLE_RATE,
 };
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -78,9 +79,11 @@ fn a_wav_file_travels_all_the_way_to_a_transcript() {
         pcm.len() as f32 / SAMPLE_RATE as f32
     );
 
+    // The detector the running app would use, not a stand-in — otherwise the
+    // segment boundaries this test prints are not the ones the app produces.
     let mut segmenter = Segmenter::new(
         StreamId(0),
-        Box::new(EnergyVad::new(SAMPLE_RATE)),
+        speech_detector(app_lib::worker::find_vad_model().as_deref()),
         SegmenterConfig {
             language_mode: LanguageMode::Fixed {
                 language: LanguageCode::german(),

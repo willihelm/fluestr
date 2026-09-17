@@ -25,7 +25,7 @@ use anyhow::{bail, Context, Result};
 use audio_core::{
     ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, ChannelAssignment,
     ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segmenter, SegmenterConfig,
-    StreamId, StreamProcessor, SAMPLE_RATE,
+    SileroVad, StreamId, StreamProcessor, Vad, SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -58,10 +58,11 @@ const LEVEL_HZ: u32 = 20;
 /// whisper.cpp's own default for the same threshold.
 ///
 /// Note where the cost falls: the segment is decoded first and discarded
-/// afterwards, so this buys correctness, not time — and under load it is a
-/// decode that a real segment could have had. Not spending it at all needs a
-/// VAD that models speech rather than loudness in front of the segmenter,
-/// which is P3.
+/// afterwards, so this buys correctness, not time. Since P3 that cost is
+/// rarely paid — [`speech_detector`] runs Silero in front of the segmenter, so
+/// a bell no longer opens a segment in the first place. What remains here is
+/// the last of three layers, and it stays because the first one falls back to
+/// the energy detector when the VAD model is missing.
 const NO_SPEECH_THRESHOLD: f32 = 0.6;
 
 /// What the UI sends to start a session.
@@ -217,6 +218,9 @@ impl Session {
                  run `just vad-model`"
             );
         }
+        // The same model file serves both layers: the detector in front of the
+        // segmenter here, and the sidecar's backstop behind it.
+        let detector = speech_detector(vad_model.as_deref());
         let (pool, results) = WorkerPool::spawn(PoolConfig::new(binary, model, vad_model))
             .context("starting the sidecar")?;
         let pool = Arc::new(pool);
@@ -253,7 +257,7 @@ impl Session {
         let processor = StreamProcessor::new(source, granted)?;
         let segmenter = Segmenter::new(
             stream_id,
-            Box::new(EnergyVad::new(SAMPLE_RATE)),
+            detector,
             SegmenterConfig {
                 language_mode: LanguageMode::Fixed {
                     language: LanguageCode::new(&config.language),
@@ -336,6 +340,40 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// The detector the segmenter asks "is this speech".
+///
+/// Silero when the model is there, energy when it is not. The fallback is
+/// deliberate rather than an error: an energy detector opens segments for a
+/// bell and a chair scrape, but it does hear speech, and the sidecar's gate
+/// still stands behind it. A session that runs badly is recoverable; one that
+/// refuses to start because a 0.9 MB file is missing is not.
+pub fn speech_detector(vad_model: Option<&std::path::Path>) -> Box<dyn Vad> {
+    let Some(path) = vad_model else {
+        return Box::new(EnergyVad::new(SAMPLE_RATE));
+    };
+
+    match SileroVad::new(path) {
+        Ok(vad) => {
+            tracing::info!(
+                model = %path.display(),
+                frame_samples = vad.frame_samples(),
+                "speech detection in front of the segmenter"
+            );
+            Box::new(vad)
+        }
+        Err(err) => {
+            // Loud, because the difference is what ends up in the chat: from
+            // here on a bell can open a segment.
+            tracing::warn!(
+                model = %path.display(),
+                error = %err,
+                "Silero failed to load — falling back to the energy detector"
+            );
+            Box::new(EnergyVad::new(SAMPLE_RATE))
+        }
     }
 }
 

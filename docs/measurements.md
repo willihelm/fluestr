@@ -357,7 +357,8 @@ failure this project does not accept.
 **Consequence for P3:** the segmenter's energy VAD stays as the cheap first
 cut, but the authority on "is this speech" now sits in the sidecar. Moving
 Silero in front of the segmenter would additionally save the IPC round trip,
-which is the remaining argument for doing P3 properly.
+which is the remaining argument for doing P3 properly. *That is what §10 then
+did.*
 
 ### What the slice does provisionally
 
@@ -367,7 +368,8 @@ decision:
 - **One worker, request/response, no queue.** A long segment blocks the ones
   behind it. P5.
 - **Energy VAD.** Works in a quiet room, will not survive an intercom feed with
-  constant background noise. P3 replaces it behind the `Vad` trait.
+  constant background noise. P3 has since replaced it behind the `Vad` trait —
+  see §10; it remains only as the fallback when the VAD model is missing.
 - **Model discovered from `.scratch/models` or `INTERCOM2CHAT_MODEL`.** P11.
 - **Sidecar found next to the app binary.** Bundling it as an `externalBin`
   with its own signature is P13.
@@ -412,9 +414,9 @@ nowhere looks exactly like a backend that hangs.
 
 ## 9. Incidental findings
 
-- **whisper-rs 0.16 ships a Silero VAD** (`whisper_vad.rs`). Relevant for P3:
-  the planned alternative to `webrtc-vad` may already be available and would
-  not need a separate dependency.
+- **whisper-rs 0.16 ships a Silero VAD** (`whisper_vad.rs`). This is what P3
+  ended up using — no `webrtc-vad` and no additional dependency, in the sidecar
+  first (§8) and in front of the segmenter since (§10).
 - **`lang_detect(offset_ms, threads)`** returns `(lang_id, Vec<f32>)` — the
   full probability vector the language stabiliser (P3b) needs for its argmax
   over the candidate languages. Whether the separate call costs an additional
@@ -422,6 +424,53 @@ nowhere looks exactly like a backend that hangs.
 - **whisper.cpp logs on its own.** Without `install_logging_hooks()` the C++
   side writes unfiltered, and anything landing on stdout corrupts the frame
   protocol. The sidecar therefore installs the hooks as its first action.
+
+---
+
+## 10. Speech detection in front of the segmenter (P3)
+
+Silero now decides what the segmenter cuts, instead of frame energy. The
+sidecar's gate (§8) stays behind it as a backstop, but it is no longer the
+first place in the chain that can tell speech from sound.
+
+`cargo test -p audio-core --test silero -- --ignored --nocapture`, 3 s of each
+signal, share of 32 ms frames called speech:
+
+| Signal | Silero | Energy VAD |
+|---|---|---|
+| digital silence | 0.00 | 0.00 |
+| quiet room tone (0.005) | 0.00 | 0.00 |
+| loud broadband noise (0.3) | 0.00 | **1.00** |
+| loud 440 Hz tone (0.3) | 0.00 | **1.00** |
+| German speech fixture | **0.86** | — |
+
+The two loud rows are the whole point. An energy detector opens a segment for
+every one of those frames and cannot do otherwise: it measures loudness, and
+both signals are loud. Each such segment previously cost a full ~320 ms decode
+before the text filter discarded it.
+
+**Through the segmenter.** Noise, a tone and a spoken passage in one signal,
+each separated by silence: exactly one segment comes out, and it is the spoken
+one (6.23-12.19 s, the speech starting at 6.5 s with the 300 ms pre-roll in
+front of it). The energy detector produced a segment for all three.
+
+**The window size is read from the model**, not compiled in: whisper.cpp stores
+it in the model file and exposes it nowhere, so `SileroVad` probes it once with
+a known number of samples and counts the probabilities returned. Silero v5.1.2
+answers 512 samples — 32 ms, which is therefore the segmenter's frame.
+
+**Cost: 0.41 ms per frame, 79x realtime per stream.** A frame is 32 ms of
+audio, so one stream spends about 1.3 % of a core on speech detection and eight
+spend ~10 % — against decoders that need the machine. That figure includes the
+rolling context: `whisper_vad_detect_speech` clears the LSTM state on every
+call, so each call replays the preceding four windows and only the last
+probability is read. Judging each frame with a cold network would be five times
+cheaper and is not worth it at this price.
+
+**Still on one stream.** The 10 % is arithmetic from a single-stream
+measurement, not eight streams measured together. That is the P14 load test.
+
+---
 
 ## Reproducing
 
@@ -432,4 +481,8 @@ just fixture de_mixed "Achtung Regie, Standby für Cue fünf. Auf mein Kommando 
 WHISPER_TEST_MODEL=.scratch/models/ggml-small-q5_1.bin \
 WHISPER_TEST_FIXTURE=.scratch/fixtures/de_mixed.wav \
   cargo test -p whisper-worker --test sidecar -- --ignored --nocapture
+
+# Section 10: speech detection in front of the segmenter
+just vad-model
+cargo test -p audio-core --test silero -- --ignored --nocapture
 ```

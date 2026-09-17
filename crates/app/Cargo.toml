@@ -18,7 +18,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-audio-core = { workspace = true }
+audio-core = { workspace = true, features = ["silero"] }
 whisper-protocol = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

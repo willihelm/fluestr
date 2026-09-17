@@ -11,7 +11,7 @@ name = "whisper-worker"
 path = "src/main.rs"
 
 [dependencies]
-audio-core = { workspace = true }
+audio-core = { workspace = true, features = ["silero"] }
 whisper-protocol = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

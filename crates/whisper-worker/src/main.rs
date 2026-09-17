@@ -9,14 +9,14 @@
 //! crashes, the pool (P5) respawns the worker and the app keeps running.
 
 use anyhow::{Context, Result};
-use audio_core::LanguageMode;
+use audio_core::{silero, LanguageMode};
 use std::io::{BufReader, BufWriter};
 use std::time::Instant;
 use whisper_protocol as protocol;
 use whisper_protocol::{Language, Request, Response};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
-    WhisperVadContext, WhisperVadContextParams, WhisperVadParams,
+    WhisperVadContext, WhisperVadContextParams,
 };
 
 struct Args {
@@ -216,6 +216,11 @@ fn transcribe(
 ) -> Result<Decoded> {
     // The gate, before any decoding happens.
     //
+    // Since P3 the same model also runs in front of the segmenter, so most of
+    // what arrives here has already been judged to be speech. This layer stays
+    // because it is the only one that sees the segment as a whole, and because
+    // the app falls back to an energy detector when the VAD model is missing.
+    //
     // Note this is *not* whisper's `params.vad` flag. That one is only honoured
     // by `whisper_full`; the sidecar uses `whisper_full_with_state`, which
     // skips it entirely — setting the flag there looks like protection and
@@ -225,7 +230,7 @@ fn transcribe(
     if let Some(vad) = vad {
         let t0 = Instant::now();
         let segments = vad
-            .segments_from_samples(vad_params(), pcm)
+            .segments_from_samples(silero::segment_params(), pcm)
             .map_err(|e| anyhow::anyhow!("VAD: {e:?}"))?;
         let vad_ms = t0.elapsed().as_millis() as u32;
 
@@ -315,20 +320,6 @@ fn transcribe(
         no_speech_probability: no_speech,
         decode_ms,
     })
-}
-
-/// Thresholds for the speech gate.
-///
-/// Only has to answer "speech or not" — the segmenter (P3) has already applied
-/// its own minimum length and pre-roll, and the audio it sends is at most a few
-/// seconds long.
-fn vad_params() -> WhisperVadParams {
-    let mut params = WhisperVadParams::default();
-    params.set_threshold(0.5);
-    // Shorter than the default 250 ms: a single "Go." is a legitimate intercom
-    // call and must not be filtered out as too brief.
-    params.set_min_speech_duration(150);
-    params
 }
 
 /// What one decode produced.

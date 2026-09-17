@@ -10,7 +10,7 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-17.
+**Status of this document:** 2026-09-17, after P3.
 
 ---
 
@@ -54,7 +54,7 @@ named below is missing. **Open** — not started.
 | P0 | Scaffolding & toolchain | **Done** | — |
 | P1 | Audio capture (macOS, multichannel) | **Partial** | Channel mapping unverified on real hardware |
 | P2 | Ring buffer & resampling | **Done** | — |
-| P3 | VAD & segment scheduler | **Partial** | Speech detection is energy-based; Silero sits in the sidecar, not in the segmenter |
+| P3 | VAD & segment scheduler | **Done** | — |
 | P3b | Language stabiliser | **Open** | — |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test; still fed by a single stream |
@@ -70,10 +70,10 @@ named below is missing. **Open** — not started.
 | P15 | Vocabulary & prompt management | **Partial** | A single text box, not stored, not named |
 
 **What runs today:** one channel end to end — microphone, ring buffer,
-resampling, segmentation, speech gate, worker pool, chat list — at a measured
-~330 ms from the end of a spoken segment to the text appearing. The pool
-behind the segmenter is already indifferent to how many streams feed it; what
-is still single-stream is everything in front of it.
+resampling, Silero speech detection, segmentation, worker pool, chat list — at
+a measured ~330 ms from the end of a spoken segment to the text appearing. The
+pool behind the segmenter is already indifferent to how many streams feed it;
+what is still single-stream is everything in front of it.
 
 ---
 
@@ -95,9 +95,10 @@ It paid for itself twice:
   tuning is worth doing — model size and segment length — and where it is not.
 - Running it on real audio exposed problems no unit test would have found: a
   quiet channel filled the chat with `[BREAK]`, `(music)` and, later,
-  hallucinated sentences. That is now the three-layer defence in P3/P4, and it
-  would otherwise have surfaced during acceptance rather than during
-  development.
+  hallucinated sentences. That is now the three-layer defence in P3/P4 —
+  Silero in front of the segmenter, the sidecar's gate behind it, the text
+  filter last — and it would otherwise have surfaced during acceptance rather
+  than during development.
 
 What the slice does provisionally is listed per package below and marked in the
 code.
@@ -122,7 +123,10 @@ and whisper has no way to know it received a fragment. Force-flush after a
 maximum duration keeps one continuous talker from breaking the latency target.
 
 **Speech detection belongs where speech is modelled.** Energy tells loudness
-apart from quiet, not speech from a bell. See P3.
+apart from quiet, not speech from a bell. Silero therefore decides what the
+segmenter cuts, in the app process rather than only in the sidecar: a segment
+that was never speech now costs 0.4 ms of detection instead of a ~320 ms decode
+plus an IPC round trip. See P3 and measurements.md §10.
 
 ---
 
@@ -160,7 +164,9 @@ queried from the sidecar. A third language costs configuration, not code.
 
 Cargo workspace with four crates: `app` (Tauri backend), `whisper-worker`
 (sidecar binary), `whisper-protocol` (shared frame format), `audio-core`
-(capture/VAD/segmentation, UI-free and therefore unit-testable). Frontend in
+(capture/VAD/segmentation, UI-free and therefore unit-testable; whisper.cpp
+enters it only through the optional `silero` feature, so the Windows port and
+the crate's own tests never have to build it). Frontend in
 `ui/` with Vite + Svelte + TS, Tauri v2, pnpm, pinned Rust toolchain,
 `justfile`, CI on `macos-14`.
 
@@ -200,27 +206,44 @@ artificially blocked consumer produces overrun counts rather than a panic or an
 audio glitch. ✔ — a 12 kHz tone that would alias onto 4 kHz is suppressed by
 92 dB; see measurements.md §7.
 
-### P3 — VAD & segment scheduler — **Partial**
+### P3 — VAD & segment scheduler — **Done**
 
-`Vad` trait with an energy-based first implementation. Segmentation rules per
-stream: start on speech onset with ~300 ms pre-roll, end after ~500 ms of
-silence, force-flush at `max_segment_len` (6 s) **cut at the quietest frame of
-the recent past**, discard anything under ~300 ms.
+`Vad` trait, with `SileroVad` as the implementation the app uses and
+`EnergyVad` kept as the fallback for a machine without the VAD model.
+Segmentation rules per stream: start on speech onset with ~300 ms pre-roll, end
+after ~500 ms of silence, force-flush at `max_segment_len` (6 s) **cut at the
+quietest frame of the recent past**, discard anything under ~300 ms.
 
 **Accepted when:** unit tests on a WAV fixture with known pauses produce the
-expected segment count and boundaries (±100 ms). ✔ for the segmenter.
+expected segment count and boundaries (±100 ms). ✔ — and, for the detector,
+loud noise and a loud tone produce no segment at all while the spoken passage
+in the same signal produces exactly one. See measurements.md §10.
 
-**Outstanding — the detector.** `EnergyVad` measures loudness, and loudness is
-all it can measure: a bell, a chair scrape and a spoken word are
-indistinguishable to it. It works in a quiet room and will not survive an
-intercom feed with constant background noise.
+**What the detector does now.** Silero runs in the app process, in front of the
+segmenter, so a bell or a chair scrape never opens a segment. Measured on 3 s
+of each signal, as a share of frames called speech: loud broadband noise and a
+loud 440 Hz tone read 0.00 against the energy detector's 1.00; the speech
+fixture reads 0.86.
 
-Silero *is* now in use, but as a gate inside the sidecar (see P4) — after the
-segment has already been cut and sent. Moving it in front of the segmenter,
-behind the existing `Vad` trait, would additionally save the IPC round trip and
-the segments that are created only to be rejected. Measured: 2 of 11 segments
-in a live session passed the gate, cost a full ~320 ms decode, and were then
-discarded by the text filter.
+Three things about it are worth knowing before changing it:
+
+- **The LSTM state is cleared on every call.** `whisper_vad_detect_speech`
+  resets it, so a call containing only the current frame judges that frame with
+  no memory of the syllable it belongs to. Each call therefore replays the
+  preceding four windows and reads only the last probability. It costs 0.41 ms
+  per 32 ms frame — about 1.3 % of a core per stream.
+- **The frame size comes from the model.** whisper.cpp reads the window length
+  out of the model file and exposes it nowhere, and the whole scheme rests on
+  one probability meaning exactly one frame. `SileroVad` probes it once at
+  startup instead of compiling in 512.
+- **It fails open.** A frame the model refuses to judge counts as speech. The
+  sidecar's gate is still behind it, so failing open costs a wasted decode
+  while failing closed would cost an operator who spoke and was never
+  transcribed.
+
+**Outstanding:** nothing for the MVP. The threshold and the pre-roll/timeout
+values are still constants in the code — they belong in P12 with the rest of
+the settings, and `silence_timeout` in particular is a *latency* parameter.
 
 ### P3b — Language stabiliser (auto mode only) — **Open**
 
@@ -246,9 +269,12 @@ writes on stdout and corrupts the frame protocol.
 
 **Speech gate.** A Silero VAD context is loaded alongside the model and run
 *before* decoding. No speech segments means empty text and no decoder call.
-This is the only component in the chain that models speech rather than
-loudness. Three earlier attempts failed and are documented in measurements.md
-§8, including one that appeared to work and did nothing at all.
+Since P3 the same model also runs in front of the segmenter, so this is the
+backstop rather than the first line: it is the only layer that sees a segment
+as a whole, and it is what still protects a session that fell back to the
+energy detector. Three earlier attempts failed and are documented in
+measurements.md §8, including one that appeared to work and did nothing at
+all.
 
 **Accepted when:** a CLI test pipes a WAV fixture in and gets correct German
 and English text back; a mixed-language fixture returns the English terms
@@ -530,8 +556,8 @@ P0 Scaffolding
 in the log. *Reached, including the pool — what P5 still owes is a load test
 that cannot be run until several streams exist to load it with.*
 
-**Milestone B (usable MVP):** + P3, P6, P7, P11, P12. Eight channels, chat UI,
-model download.
+**Milestone B (usable MVP):** + P6, P7, P11, P12. Eight channels, chat UI,
+model download. *P3 is done.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P3b, P8, P9, P10, P13.
@@ -542,23 +568,21 @@ P3b, P8, P9, P10, P13.
 
 In this order, with the reason each one comes where it does.
 
-1. **P3 — move Silero in front of the segmenter.** Now the first thing worth
-   doing: the pool made every wasted decode a decode a real segment could have
-   had, and 2 of 11 segments in a live session were decoded only to be thrown
-   away by the text filter. It also replaces the energy detector, which will
-   not survive a real intercom feed.
-2. **P6 → P7** — generated shared types, bundled level events, several streams
-   with a virtualised list. The pool is already indifferent to the stream
-   count, so this is what finally puts more than one stream behind it.
-3. **P14 reference load test** — the numbers in measurements.md §8 were all
-   taken on one stream through one worker and none of them has been re-measured
-   against the queue. Possible only once step 2 exists.
-4. **P11 → P12** — model download and persisted presets, which together make
-   the app usable by someone who is not holding a terminal.
-5. **P15** — develop vocabulary against the measurable baseline from step 3,
+1. **P6 → P7** — generated shared types, bundled level events, several streams
+   with a virtualised list, the group sidebar and the Settings page. The pool
+   is already indifferent to the stream count and the detector in front of it
+   is per-stream, so this is what finally puts more than one stream through
+   the pipeline. Everything below needs it.
+2. **P14 reference load test** — the numbers in measurements.md §8 and §10 were
+   all taken on one stream. The 10 % CPU figure for eight streams' speech
+   detection is arithmetic, not a measurement, and the queue has never been
+   under real contention. Possible only once step 1 exists.
+3. **P11 → P12** — model download and persisted presets, which together make
+   the app usable by someone who is not holding a terminal. P12 also takes the
+   constants P3 still owns: the Silero threshold, `silence_timeout`,
+   `max_segment`.
+4. **P15** — develop vocabulary against the measurable baseline from step 2,
    not by feel.
-
----
 
 ## Whole-system verification
 

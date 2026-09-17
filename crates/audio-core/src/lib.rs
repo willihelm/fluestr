@@ -13,6 +13,8 @@ pub mod resample;
 pub mod ring;
 pub mod segment;
 pub mod segmenter;
+#[cfg(feature = "silero")]
+pub mod silero;
 pub mod vad;
 
 pub use backend::CpalBackend;
@@ -23,6 +25,8 @@ pub use resample::{Resampler, StreamProcessor};
 pub use ring::{RingSink, RingSource, RingStats};
 pub use segment::{is_only_non_speech, Segment, StreamId, Transcript, SAMPLE_RATE};
 pub use segmenter::{Segmenter, SegmenterConfig};
+#[cfg(feature = "silero")]
+pub use silero::SileroVad;
 pub use vad::{EnergyVad, Vad};
 
 /// Errors raised by the audio core.
@@ -42,6 +46,9 @@ pub enum AudioError {
 
     #[error("audio backend: {0}")]
     Backend(String),
+
+    #[error("speech detection: {0}")]
+    Vad(String),
 }
 
 pub type Result<T> = std::result::Result<T, AudioError>;

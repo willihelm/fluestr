@@ -6,6 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 description = "Capture, ring buffers, resampling and segmentation — UI-free and therefore unit-testable"
 
+[features]
+default = []
+# Speech detection with Silero (P3). Off by default so the crate's own tests
+# and the Windows port do not have to build whisper.cpp to run.
+silero = ["dep:whisper-rs"]
+
 [dependencies]
 cpal = { workspace = true }
 ringbuf = { workspace = true }
@@ -13,6 +19,7 @@ rubato = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+whisper-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 hound = { workspace = true }
