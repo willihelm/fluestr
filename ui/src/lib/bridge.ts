@@ -25,12 +25,15 @@ export interface StreamConfig {
   channel: number;
   label: string;
   language: string;
-  initialPrompt: string | null;
 }
 
 export interface SessionConfig {
   device: string;
   streams: StreamConfig[];
+  /// The active vocabulary, applied to every stream. Session-level rather than
+  /// per stream because the terms of a production are the same on every
+  /// channel — see `vocabulary.ts` and P15.
+  vocabulary: string | null;
 }
 
 export interface TranscriptEvent {

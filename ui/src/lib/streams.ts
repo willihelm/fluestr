@@ -16,15 +16,8 @@ export interface Channel {
   channel: number;
   label: string;
   language: string;
-  prompt: string;
   color: string;
 }
-
-/// German on purpose: this is vocabulary data, not code. The single strongest
-/// lever on code-switching quality (P15) — here still a plain text box, so its
-/// effect is visible from the first run.
-export const DEFAULT_PROMPT =
-  "Intercom-Kommandos: Standby, Cue, Go, Fade out, Blackout, Talkback, Regie.";
 
 let nextKey = 0;
 
@@ -41,7 +34,6 @@ export const newChannel = (existing: Channel[], deviceChannels: number): Channel
     channel,
     label: `Channel ${channel + 1}`,
     language: "de",
-    prompt: DEFAULT_PROMPT,
     color: paletteColor(existing.length),
   };
 };
@@ -53,7 +45,6 @@ export const toConfig = (channels: Channel[]): StreamConfig[] =>
     channel: c.channel,
     label: c.label.trim() === "" ? `Channel ${c.channel + 1}` : c.label.trim(),
     language: c.language.trim().toLowerCase(),
-    initialPrompt: c.prompt.trim() === "" ? null : c.prompt.trim(),
   }));
 
 /// Why the setup cannot be started, or `null` if it can.

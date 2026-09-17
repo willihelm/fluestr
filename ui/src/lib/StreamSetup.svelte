@@ -1,13 +1,14 @@
 <script lang="ts">
   // The channel setup: one row per intercom channel, with the device channel
-  // it is patched to, its label, its language, its colour and its vocabulary
-  // prompt.
+  // it is patched to, its label, its language and its colour. Vocabulary is
+  // not here — it is one global list for every channel, edited beside this on
+  // the Settings page (P15).
   //
-  // Still in the chat view. P7's target interaction model puts this on a
-  // dedicated Settings page and leaves the chat to the chat, and P12 makes it
-  // a saved preset — an engineer does not want to remap eight channels before
-  // every show. Editing is locked while a session runs, because the channel
-  // map is fixed when capture opens.
+  // Lives on the Settings page rather than above the chat, so the live view is
+  // only the live view. P12 still owes making it a saved preset — an engineer
+  // does not want to remap eight channels before every show. Editing is locked
+  // while a session runs, because the channel map is fixed when capture
+  // opens.
 
   import { newChannel, duplicateChannels, type Channel } from "./streams";
 
@@ -78,11 +79,6 @@
         <label class="colour">
           <span>Colour</span>
           <input type="color" bind:value={channel.color} disabled={locked} />
-        </label>
-
-        <label class="prompt">
-          <span>Vocabulary</span>
-          <input type="text" bind:value={channel.prompt} disabled={locked} />
         </label>
 
         <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
@@ -167,7 +163,7 @@
     color: var(--text-dim);
   }
 
-  .prompt {
+  .label {
     flex: 1;
   }
 

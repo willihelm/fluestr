@@ -1,0 +1,208 @@
+<script lang="ts">
+  // Which channels are in which group, on the Settings page.
+  //
+  // A grid rather than a per-group list: with eight channels and a handful of
+  // groups the question being answered is usually "where does this channel
+  // show up", and that is a column, not a row. Membership is non-exclusive, so
+  // a channel may be ticked in any number of groups — nothing here enforces a
+  // single home, because there isn't one.
+  //
+  // Editable while a session runs, unlike the channel map. A group is a view,
+  // not part of the capture configuration: an operator watching eight channels
+  // live is exactly who needs to narrow them down to three.
+
+  import { isMember, newGroup, toggleMember, type Group } from "./groups";
+  import type { Channel } from "./streams";
+
+  interface Props {
+    groups: Group[];
+    channels: Channel[];
+  }
+
+  let { groups = $bindable(), channels }: Props = $props();
+
+  const add = () => {
+    groups = [...groups, newGroup(groups)];
+  };
+
+  const remove = (key: number) => {
+    // Deletes the view, never the channels in it.
+    groups = groups.filter((g) => g.key !== key);
+  };
+
+  const toggle = (group: Group, channel: Channel) => {
+    groups = groups.map((g) => (g.key === group.key ? toggleMember(g, channel) : g));
+  };
+</script>
+
+<section>
+  <header>
+    <h2>Groups</h2>
+    <span class="count">{groups.length} {groups.length === 1 ? "group" : "groups"}</span>
+    <button class="add" onclick={add}>Add group</button>
+  </header>
+
+  <p class="hint">
+    A group is a view onto some of the channels, selected in the sidebar of the chat.
+    A channel can be in any number of groups; removing it from one leaves it in the
+    others and in the setup.
+  </p>
+
+  {#if groups.length === 0}
+    <p class="empty">No groups yet. The chat shows every channel.</p>
+  {:else if channels.length === 0}
+    <p class="empty">Add a channel first — there is nothing to put in a group.</p>
+  {:else}
+    <div class="grid">
+      {#each groups as group (group.key)}
+        <div class="group">
+          <div class="name">
+            <input type="text" bind:value={group.name} aria-label="Group name" />
+            <button class="remove" onclick={() => remove(group.key)} title="Delete this group">
+              ×
+            </button>
+          </div>
+
+          <div class="members">
+            {#each channels as channel (channel.key)}
+              <label style="--channel: {channel.color}">
+                <input
+                  type="checkbox"
+                  checked={isMember(group, channel)}
+                  onchange={() => toggle(group, channel)}
+                />
+                <span class="dot"></span>
+                <span class="channel-label">{channel.label}</span>
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
+</section>
+
+<style>
+  section {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    padding: 0.5rem 1rem 0.75rem;
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 0.4rem;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+
+  .count {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  .add {
+    margin-left: auto;
+  }
+
+  .hint,
+  .empty {
+    margin: 0 0 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    gap: 0.6rem;
+  }
+
+  .group {
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    padding: 0.5rem;
+  }
+
+  .name {
+    display: flex;
+    gap: 0.3rem;
+    align-items: center;
+    margin-bottom: 0.4rem;
+  }
+
+  .name input {
+    flex: 1;
+  }
+
+  .members {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .members label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--text);
+  }
+
+  .dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--channel);
+    flex: none;
+  }
+
+  .channel-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  input[type="text"] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.25rem 0.4rem;
+    font: inherit;
+    font-size: 0.85rem;
+    min-width: 0;
+  }
+
+  button {
+    background: var(--accent);
+    color: #12141a;
+    border: none;
+    border-radius: 0.3rem;
+    padding: 0.3rem 0.8rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .remove {
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0.2rem 0.45rem;
+  }
+
+  .remove:hover {
+    color: #ff6b6b;
+  }
+</style>

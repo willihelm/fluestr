@@ -103,8 +103,6 @@ pub struct StreamConfig {
     pub label: String,
     /// Primary language, fixed. Auto mode is P3b.
     pub language: String,
-    /// Vocabulary prompt (P15 will manage named lists; here it is a text box).
-    pub initial_prompt: Option<String>,
 }
 
 /// What the UI sends to start a session.
@@ -119,6 +117,21 @@ pub struct SessionConfig {
     /// Device name, as returned by `list_devices`.
     pub device: String,
     pub streams: Vec<StreamConfig>,
+    /// The active vocabulary, as whisper's `initial_prompt`, for **every**
+    /// stream.
+    ///
+    /// Session-level rather than per stream on purpose. The terms of a
+    /// production — its cue names, its department names, its house jargon —
+    /// are the same on every channel, and a per-channel prompt meant
+    /// maintaining eight copies of one list that then drifted apart. It is
+    /// also the strongest single lever on code-switching quality
+    /// (measurements.md §4), so the setup where it is half-applied is the
+    /// setup where half the channels quietly transcribe worse.
+    ///
+    /// `default` so a config written before this field existed still parses
+    /// as "no vocabulary" rather than failing to start a session.
+    #[serde(default)]
+    pub vocabulary: Option<String>,
 }
 
 /// Identifies one run of the pipeline.
@@ -401,7 +414,9 @@ impl Session {
                         language_mode: LanguageMode::Fixed {
                             language: LanguageCode::new(&stream.language),
                         },
-                        initial_prompt: stream.initial_prompt.clone(),
+                        // The same vocabulary on every stream — see
+                        // [`SessionConfig::vocabulary`].
+                        initial_prompt: config.vocabulary.clone(),
                         ..Default::default()
                     },
                 ),
@@ -1198,23 +1213,31 @@ mod tests {
     #[test]
     fn the_session_config_is_read_as_the_ui_writes_it() {
         let config: SessionConfig = serde_json::from_str(
-            r#"{"device":"Scarlett 18i20","streams":[
-                {"channel":0,"label":"Regie","language":"de",
-                 "initialPrompt":"Standby, Cue, Go"},
-                {"channel":5,"label":"FOH","language":"en","initialPrompt":null}
+            r#"{"device":"Scarlett 18i20","vocabulary":"Standby, Cue, Go","streams":[
+                {"channel":0,"label":"Regie","language":"de"},
+                {"channel":5,"label":"FOH","language":"en"}
             ]}"#,
         )
         .unwrap();
         assert_eq!(config.streams.len(), 2);
         assert_eq!(config.streams[0].channel, 0);
-        assert_eq!(
-            config.streams[0].initial_prompt.as_deref(),
-            Some("Standby, Cue, Go")
-        );
+        // One vocabulary for the whole session, not one per stream.
+        assert_eq!(config.vocabulary.as_deref(), Some("Standby, Cue, Go"));
         // Not contiguous and not ordered: an engineer patches the channels
         // they have, not the first N.
         assert_eq!(config.streams[1].channel, 5);
         assert_eq!(config.streams[1].language, "en");
-        assert_eq!(config.streams[1].initial_prompt, None);
+    }
+
+    #[test]
+    fn a_session_without_a_vocabulary_still_starts() {
+        // The field is optional in both senses: absent parses, and it parses
+        // as "no prompt" rather than as a failure to start.
+        let config: SessionConfig = serde_json::from_str(
+            r#"{"device":"Scarlett 18i20",
+                "streams":[{"channel":0,"label":"Regie","language":"de"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(config.vocabulary, None);
     }
 }

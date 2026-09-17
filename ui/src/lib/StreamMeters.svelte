@@ -10,13 +10,19 @@
   import type { StreamLevel } from "./bridge";
 
   interface Props {
+    /// *Every* configured channel, never a filtered list: the stream id is the
+    /// position in this array, exactly as the backend assigns it, so a
+    /// pre-filtered list would silently shift every meter onto the wrong
+    /// stream. Which of them to draw is `visible`.
     channels: Channel[];
     levels: Map<number, StreamLevel>;
     /// Segments the decode queue gave up on, per stream id.
     overloaded: Map<number, number>;
+    /// The stream ids the selected group shows, or `null` for all of them.
+    visible: Set<number> | null;
   }
 
-  let { channels, levels, overloaded }: Props = $props();
+  let { channels, levels, overloaded, visible }: Props = $props();
 
   const empty = (streamId: number): StreamLevel => ({
     streamId,
@@ -28,6 +34,7 @@
 
 <div class="meters">
   {#each channels as channel, streamId (channel.key)}
+    {#if visible === null || visible.has(streamId)}
     {@const level = levels.get(streamId) ?? empty(streamId)}
     <div class="stream" style="--channel: {channel.color}">
       <span class="name">{channel.label}</span>
@@ -38,6 +45,7 @@
         </span>
       {/if}
     </div>
+    {/if}
   {/each}
 </div>
 
