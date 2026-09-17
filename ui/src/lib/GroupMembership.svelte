@@ -35,11 +35,11 @@
   };
 </script>
 
-<section>
+<section class="panel">
   <header>
     <h2>Groups</h2>
     <span class="count">{groups.length} {groups.length === 1 ? "group" : "groups"}</span>
-    <button class="add" onclick={add}>Add group</button>
+    <button class="action" onclick={add}>Add group</button>
   </header>
 
   <p class="hint">
@@ -83,37 +83,6 @@
 </section>
 
 <style>
-  section {
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    padding: 0.5rem 1rem 0.75rem;
-  }
-
-  header {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-    margin-bottom: 0.4rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 0.85rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-dim);
-  }
-
-  .count {
-    font-size: 0.8rem;
-    color: var(--text-dim);
-  }
-
-  .add {
-    margin-left: auto;
-  }
-
   .hint,
   .empty {
     margin: 0 0 0.4rem;

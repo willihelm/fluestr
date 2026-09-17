@@ -18,7 +18,7 @@
   let warning = $derived(lengthWarning(vocabulary));
 </script>
 
-<section>
+<section class="panel">
   <header>
     <h2>Vocabulary</h2>
     <span class="count">
@@ -27,7 +27,7 @@
       about {tokens} of {TOKEN_LIMIT} tokens
     </span>
     <button
-      class="reset"
+      class="action"
       onclick={() => (vocabulary = DEFAULT_VOCABULARY)}
       disabled={locked || vocabulary === DEFAULT_VOCABULARY}
     >
@@ -48,37 +48,6 @@
 </section>
 
 <style>
-  section {
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    padding: 0.5rem 1rem 0.75rem;
-  }
-
-  header {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-    margin-bottom: 0.4rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 0.85rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-dim);
-  }
-
-  .count {
-    font-size: 0.8rem;
-    color: var(--text-dim);
-  }
-
-  .reset {
-    margin-left: auto;
-  }
-
   .hint {
     margin: 0 0 0.4rem;
     font-size: 0.8rem;

@@ -4,15 +4,23 @@
   import SettingsPage from "./lib/SettingsPage.svelte";
   import GroupSidebar from "./lib/GroupSidebar.svelte";
   import ClearCommunication from "./lib/ClearCommunication.svelte";
-  import { newChannel, toConfig, validate, mutedChannels, type Channel } from "./lib/streams";
-  import { forgetChannels, visibleStreams, type Group } from "./lib/groups";
+  import { toConfig, validate, mutedChannels } from "./lib/streams";
+  import { forgetChannels, visibleStreams } from "./lib/groups";
+  import {
+    fromStoredConfig,
+    newProfile,
+    toStoredConfig,
+    type Profile,
+  } from "./lib/profiles";
   import { DEFAULT_VOCABULARY, toConfig as vocabularyConfig } from "./lib/vocabulary";
   import {
     listDevices,
+    loadConfig,
     onLevels,
     onOverload,
     onSessionState,
     onTranscript,
+    saveConfig,
     startSession,
     stopSession,
     type DeviceOption,
@@ -30,15 +38,38 @@
 
   type View = "chat" | "settings";
 
+  /// How long after the last keystroke the configuration is written.
+  ///
+  /// Long enough that typing a label is one save rather than twelve, short
+  /// enough that nobody can build a setup and close the window in between. The
+  /// write itself is atomic, so a save landing at an awkward moment costs
+  /// nothing.
+  const SAVE_DEBOUNCE_MS = 400;
+
   let view = $state<View>("chat");
 
   let devices = $state<DeviceOption[]>([]);
-  let device = $state("");
-  let channels = $state<Channel[]>([]);
-  let groups = $state<Group[]>([]);
+  // The stored setups (P12) and the one being used. Device, channel map and
+  // groups all live inside the active profile; the vocabulary sits beside them
+  // because it is one list for every profile — see `profiles.ts`.
+  let profiles = $state<Profile[]>([]);
+  let activeKey = $state<number | null>(null);
   let vocabulary = $state(DEFAULT_VOCABULARY);
+  // Nothing is saved before the configuration has been read: an empty UI
+  // saving itself over a file it has not seen yet is how a setup is lost.
+  let loaded = $state(false);
+  let saveError = $state<string | null>(null);
   /// The group the chat is focused on; `null` is the all-channels view.
   let selectedGroup = $state<number | null>(null);
+
+  let active = $derived(profiles.find((p) => p.key === activeKey) ?? null);
+  // Read-only views of the active profile, so everything below reads the way
+  // it did when these were top-level state. Writing happens on the Settings
+  // page, into the profile itself — which is what makes an edit something that
+  // gets saved.
+  let device = $derived(active?.device ?? "");
+  let channels = $derived(active?.channels ?? []);
+  let groups = $derived(active?.groups ?? []);
 
   let status = $state<SessionState | { state: "starting" } | { state: "idle" }>({
     state: "idle",
@@ -54,10 +85,14 @@
   let busy = $derived(status.state === "starting");
   let selected = $derived(devices.find((d) => d.name === device));
   let deviceChannels = $derived(selected?.channels ?? 0);
+  // A restored profile may name an interface that is not plugged in — that is
+  // the normal case for a setup carried between the office and the house, and
+  // it is a different problem from a device with no input channels.
+  let connected = $derived(selected !== undefined);
   // The stream id is the row's position, which is exactly how the backend
   // assigns it — see `SessionConfig::streams`.
   let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
-  let problem = $derived(validate(channels, device, deviceChannels));
+  let problem = $derived(validate(channels, device, deviceChannels, connected));
   // Which streams receive no audio because the device has no such channel.
   // While a session runs this comes from the backend's own answer rather than
   // from the UI's copy of the setup — that is the authoritative mapping, and
@@ -78,31 +113,91 @@
     visible === null ? messages : messages.filter((m) => visible.has(m.streamId)),
   );
 
+  // Startup: the devices that are there, and the setup from last time.
+  //
+  // Both before anything else, and the configuration is not optional to the
+  // result — a window that came up with an empty channel map and then filled
+  // it in would spend its first moment looking like the setup was lost.
   $effect(() => {
-    listDevices()
-      .then((found) => {
-        devices = found;
-        device = (found.find((d) => d.isDefault) ?? found[0])?.name ?? "";
-      })
-      .catch((e) => (status = { state: "failed", message: String(e) }));
+    const first = async () => {
+      const found = await listDevices();
+      devices = found;
+      const fallback = (found.find((d) => d.isDefault) ?? found[0])?.name ?? "";
+
+      // A configuration that cannot be read is not a reason to refuse to
+      // transcribe: the app comes up empty and says why, rather than not
+      // coming up. Saying why matters because the same failure is the one that
+      // will silently lose whatever is built next.
+      let stored = null;
+      try {
+        stored = await loadConfig();
+      } catch (e) {
+        saveError = String(e);
+      }
+
+      const restored = stored
+        ? fromStoredConfig(stored)
+        : { profiles: [], activeKey: null, vocabulary: null };
+
+      if (restored.profiles.length === 0) {
+        // First start: one profile on the default device, with one channel, so
+        // the app is usable without first having to work out that a profile
+        // and a channel have to be created.
+        const created = newProfile([], fallback);
+        profiles = [created];
+        activeKey = created.key;
+      } else {
+        profiles = restored.profiles;
+        activeKey = restored.activeKey;
+      }
+
+      // `null` is a file that has never held a vocabulary, which keeps the
+      // default; an empty string is a box the operator cleared, which stays
+      // cleared — refilling it would turn the prompt back on behind their
+      // back.
+      if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
+
+      loaded = true;
+    };
+
+    first().catch((e) => (status = { state: "failed", message: String(e) }));
   });
 
-  // One channel to begin with, so the app is usable without first having to
-  // work out that a channel has to be added. Only when there are none at all:
-  // switching devices must never throw away a setup the operator typed in.
+  // Saving is a consequence of the state changing, not of any particular
+  // button: there is no Save on the Settings page, because a setup an operator
+  // believes is stored and is not is worse than no persistence at all.
+  // Debounced, so typing a label is one write; the write itself is atomic on
+  // the backend, so an unlucky moment costs nothing.
   $effect(() => {
-    if (deviceChannels > 0 && channels.length === 0) {
-      channels = [newChannel([])];
-    }
+    if (!loaded || activeKey === null) return;
+
+    // Built here rather than in the timer: this is what reads every field, and
+    // reading them is what makes this effect run again when one of them
+    // changes.
+    const config = toStoredConfig(profiles, activeKey, vocabulary);
+
+    const timer = setTimeout(() => {
+      saveConfig(config)
+        .then(() => (saveError = null))
+        .catch((e) => (saveError = String(e)));
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
   });
 
   // A deleted channel has to leave the groups it was in, and a deleted group
   // has to release the chat. Both are cheap to do on every change and easy to
   // forget at the one call site that causes them.
+  //
+  // Selecting a different profile goes through the same path: its groups are
+  // other groups with other keys, so the chat falls back to the all-channels
+  // view instead of staying pointed at a group that is no longer there.
   $effect(() => {
-    const pruned = forgetChannels(groups, channels);
-    if (pruned.some((g, i) => g.members.length !== groups[i].members.length)) {
-      groups = pruned;
+    if (active) {
+      const pruned = forgetChannels(active.groups, active.channels);
+      if (pruned.some((g, i) => g.members.length !== active.groups[i].members.length)) {
+        active.groups = pruned;
+      }
     }
     if (selectedGroup !== null && !groups.some((g) => g.key === selectedGroup)) {
       selectedGroup = null;
@@ -262,12 +357,12 @@
   {#if view === "settings"}
     <SettingsPage
       {devices}
-      bind:device
-      bind:channels
-      bind:groups
+      bind:profiles
+      bind:activeKey
       bind:vocabulary
       {deviceChannels}
       locked={running || busy}
+      {saveError}
     />
   {:else}
     <div class="chat">

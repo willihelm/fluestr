@@ -35,6 +35,17 @@ describe("validate", () => {
     );
   });
 
+  it("tells a device that is not plugged in from one without inputs", () => {
+    // A stored profile names the interface of the production, which is
+    // regularly not the one connected to the laptop it is opened on. One of
+    // the two is solved with a cable and the other with a different device, so
+    // they must not read the same.
+    expect(validate([channel(0)], "MADIface", 0, false)).toBe("MADIface is not connected.");
+    expect(validate([channel(0)], "Some output", 0, true)).toBe(
+      "The selected device has no input channels.",
+    );
+  });
+
   it("still insists on a device, a channel and a language", () => {
     expect(validate([channel(0)], "", 2)).toBe("No input device selected.");
     expect(validate([], "Scarlett 2i2", 2)).toBe("Add at least one channel.");

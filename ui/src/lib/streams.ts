@@ -42,6 +42,19 @@ export const newChannel = (existing: Channel[]): Channel => {
   };
 };
 
+/// A channel read back from the stored configuration (P12).
+///
+/// Everything but the key comes from the file; the key is handed out here,
+/// because it identifies a row to Svelte for as long as the window is open and
+/// means nothing outside it. That is also why it is not stored: it would be
+/// noise in a file an operator may have to read, and a restored setup that
+/// reused stale keys would collide with the ones a later `newChannel` hands
+/// out.
+export const restoreChannel = (stored: Omit<Channel, "key">): Channel => ({
+  ...stored,
+  key: nextKey++,
+});
+
 /// What `start_session` is sent. The order is the order of the list, because
 /// that is what defines the stream ids.
 export const toConfig = (channels: Channel[]): StreamConfig[] =>
@@ -61,8 +74,16 @@ export const validate = (
   channels: Channel[],
   device: string,
   deviceChannels: number,
+  /// Whether the named device is among the ones currently present. A stored
+  /// profile (P12) may well name an interface that is not plugged in, and
+  /// "not connected" is a different problem from "has no input channels" —
+  /// one is solved with a cable, the other with a different device. Defaults
+  /// to true so callers that only ever pass a device they picked from the
+  /// list do not have to say so.
+  connected = true,
 ): string | null => {
   if (device === "") return "No input device selected.";
+  if (!connected) return `${device} is not connected.`;
   if (channels.length === 0) return "Add at least one channel.";
 
   for (const c of channels) {

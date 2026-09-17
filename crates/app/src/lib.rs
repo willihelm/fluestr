@@ -1,19 +1,23 @@
 //! Tauri backend.
 //!
 //! Holds the capture session and the worker pool, and forwards their output to
-//! the UI as events. The rest of the command surface (`update_stream_config`,
-//! group CRUD, `search_session`) and the SQLite persistence (P10) are still to
-//! come — what is here carries up to eight channels of one multichannel device
-//! through the pipeline into the chat.
+//! the UI as events, and owns the configuration file the Settings page is
+//! saved to (P12). The rest of the command surface (`update_stream_config`,
+//! group CRUD, `search_session`) and the SQLite persistence of *transcripts*
+//! (P10) are still to come — what is here carries up to eight channels of one
+//! multichannel device through the pipeline into the chat.
 
+pub mod config;
 pub mod pool;
 pub mod session;
 pub mod worker;
 
+use config::Config;
 use session::{
     DeviceOption, EventSink, LevelsEvent, OverloadEvent, Session, SessionConfig, SessionState,
     TranscriptEvent,
 };
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -50,11 +54,59 @@ impl EventSink for TauriEvents {
 #[derive(Default)]
 struct AppState {
     session: Mutex<Option<Session>>,
+    /// Where the configuration file lives, resolved once at setup.
+    ///
+    /// Resolved there rather than per command because it depends on the app's
+    /// identifier and on the platform, and a command that cannot answer where
+    /// its own configuration is has nothing useful to do. `None` means the
+    /// resolver refused — see [`run`]: the app still starts, and saving says
+    /// why it cannot.
+    config_path: Mutex<Option<PathBuf>>,
+}
+
+impl AppState {
+    /// The configuration path, or the reason there is none.
+    fn config_path(&self) -> Result<PathBuf, String> {
+        self.config_path
+            .lock()
+            .map_err(|_| "configuration path poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "no configuration directory on this system".to_string())
+    }
 }
 
 #[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// The stored configuration, or the default one.
+///
+/// Infallible on purpose where it can be: a first start, an unreadable file
+/// and a file from a newer version all come back as an empty configuration and
+/// a log line rather than as an error the UI would have to render instead of
+/// the app. What it cannot paper over is not knowing where to look, which is
+/// the one case that also makes saving impossible and therefore has to be
+/// visible.
+#[tauri::command]
+fn load_config(state: tauri::State<'_, AppState>) -> Result<Config, String> {
+    Ok(config::load(&state.config_path()?))
+}
+
+/// Writes the whole configuration.
+///
+/// The whole of it, not a patch: it is a few kilobytes that a human edits at
+/// human speed, and a partial update would need the two sides to agree on
+/// which half is authoritative — which is exactly the drift the single file
+/// exists to avoid.
+#[tauri::command]
+fn save_config(state: tauri::State<'_, AppState>, config: Config) -> Result<(), String> {
+    let path = state.config_path()?;
+    config::save(&path, &config).map_err(|err| {
+        // With the chain of causes, which the UI string flattens away.
+        tracing::error!(error = ?err, "saving the configuration failed");
+        err.to_string()
+    })
 }
 
 #[tauri::command]
@@ -130,11 +182,29 @@ fn stop_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            app.manage(AppState::default());
+            let state = AppState::default();
+            // A missing configuration directory is not a reason to refuse to
+            // start: the app transcribes perfectly well without ever saving a
+            // profile, and an operator in front of a show is better served by
+            // a running app that cannot remember than by no app at all. It is
+            // reported, and every save says so again.
+            match app.path().app_config_dir() {
+                Ok(dir) => {
+                    let path = dir.join(config::FILE_NAME);
+                    tracing::info!(path = %path.display(), "configuration file");
+                    *state.config_path.lock().expect("fresh state") = Some(path);
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "no configuration directory — nothing will be saved");
+                }
+            }
+            app.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_version,
+            load_config,
+            save_config,
             list_devices,
             start_session,
             stop_session

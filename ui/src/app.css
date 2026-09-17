@@ -25,3 +25,64 @@ body {
   overflow: hidden;
   height: 100vh;
 }
+
+/* --- Settings panels -----------------------------------------------------
+
+   Each section of the Settings page is a card on the page background, not
+   another slab of surface ending in a hairline. The page asks five separate
+   questions — which profile, which interface, which channels, which words,
+   which views — and edge-to-edge sections that touch read as one long form in
+   which it is easy to answer the wrong one. A gap the eye can land in is what
+   says they are separate.
+
+   Global rather than repeated in each component: the five sections have to
+   look alike, and five copies of one block is five chances for them to drift.
+   Only the shared frame lives here — what a section puts *inside* itself
+   stays with the component. */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem 0.9rem;
+}
+
+/* The profile switcher. Marked apart from the rest because it is not a
+   sibling of them: the device, the channels and the groups below it all
+   belong to whichever profile is selected here, and a card that looked like
+   the others would give no hint that it governs them. */
+.panel.scope {
+  border-color: rgba(110, 168, 254, 0.45);
+}
+
+.panel > header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The brightest small text on the page: the titles are what it is scanned by.
+   Everything else in that size — counts, hints, warnings — stays dim, so the
+   hierarchy is carried by contrast rather than by size alone. */
+.panel h2 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.panel .count {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+/* Pushed to the right edge of the header: an action belongs to the section it
+   is titled with, and the gap between title and action is what keeps it from
+   reading as part of the title. */
+.panel header .action {
+  margin-left: auto;
+}

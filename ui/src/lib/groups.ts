@@ -33,6 +33,17 @@ export const newGroup = (existing: Group[]): Group => ({
   members: [],
 });
 
+/// A group read back from the stored configuration (P12).
+///
+/// The members arrive as channel keys, already translated from the positions
+/// the file stores — see `profiles.ts`, which is the one place that
+/// translation happens.
+export const restoreGroup = (name: string, members: number[]): Group => ({
+  key: nextKey++,
+  name,
+  members,
+});
+
 export const isMember = (group: Group, channel: Channel): boolean =>
   group.members.includes(channel.key);
 

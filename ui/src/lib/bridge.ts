@@ -106,7 +106,59 @@ export type SessionState =
   | { state: "stopped" }
   | { state: "failed"; message: string };
 
+// --- Configuration (P12) --------------------------------------------------
+//
+// Mirrors `crates/app/src/config.rs`. A profile is one production's setup; the
+// vocabulary sits beside them rather than inside one, because the jargon of a
+// house outlives any one patch — see `profiles.ts`.
+
+/// Schema version of the configuration file. Sent on every save so a later
+/// change has something to branch on; the backend refuses to reinterpret a
+/// file that claims a higher one.
+export const CONFIG_VERSION = 1;
+
+export interface StoredChannel {
+  /// Zero-based, like the audio API. The UI shows it one-based.
+  channel: number;
+  label: string;
+  language: string;
+  /// Part of the channel's configuration, not a rendering detail: a channel is
+  /// recognised by its colour long before anyone reads its label.
+  color: string;
+}
+
+export interface StoredGroup {
+  name: string;
+  /// Positions in `StoredProfile.channels`, not the channel keys membership
+  /// uses while the setup is being edited. `profiles.ts` owns the conversion.
+  members: number[];
+}
+
+export interface StoredProfile {
+  name: string;
+  device: string;
+  channels: StoredChannel[];
+  groups: StoredGroup[];
+}
+
+export interface StoredConfig {
+  version: number;
+  /// Position of the profile last in use, so a restart lands where the
+  /// operator left off. Clamped by the backend.
+  active: number;
+  /// `null` is "never set", and the UI fills in its default; an empty string is
+  /// a box the operator cleared, which turns the prompt off and stays off.
+  vocabulary: string | null;
+  profiles: StoredProfile[];
+}
+
 export const appVersion = () => invoke<string>("app_version");
+/// The stored configuration, or an empty one. Only fails when the app cannot
+/// work out where its configuration directory is — which is also the case in
+/// which nothing can be saved, so it has to be visible.
+export const loadConfig = () => invoke<StoredConfig>("load_config");
+/// Writes the whole configuration, atomically on the other side.
+export const saveConfig = (config: StoredConfig) => invoke<void>("save_config", { config });
 export const listDevices = () => invoke<DeviceOption[]>("list_devices");
 /// Resolves with the running state, so the UI does not have to wait for an
 /// event to learn that the session it just asked for actually started.

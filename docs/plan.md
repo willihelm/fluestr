@@ -11,7 +11,8 @@ Evidence for the architecture decisions is in
 repeating numbers, so there is one place to correct when a measurement changes.
 
 **Status of this document:** 2026-09-17, after the Settings page, the group
-sidebar and muting the channels the device does not have.
+sidebar, muting the channels the device does not have, and the stored
+configuration with its profiles.
 
 ---
 
@@ -59,16 +60,16 @@ named below is missing. **Open** — not started.
 | P3b | Language stabiliser | **Open** | — |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
-| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no persisted group CRUD, no `clear_communication` in the backend, no `search_session` |
+| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no `clear_communication` in the backend, no `search_session` |
 | P7 | Chat UI | **Partial** | No language picker from the sidecar's list; the window is a window, not a jump to an arbitrary position |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Open** | — |
 | P10 | SQLite persistence | **Open** | — |
 | P11 | Model manager | **Open** | Models discovered from `.scratch/models` or environment variables |
-| P12 | Settings & presets | **Open** | Every threshold is a constant in the code |
+| P12 | Settings & presets | **Partial** | Profiles are stored and read back; every threshold is still a constant in the code, and the device is recognised by its display name |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
-| P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, but not stored, not named, and not yet measured against a baseline |
+| P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
@@ -78,8 +79,9 @@ Around it: a Settings page holding the device, the channel map, the one global
 vocabulary and the groups; a channel map that may reach past the device, whose
 surplus channels start muted instead of blocking Start; a chat page with a
 group sidebar that narrows the view to a group's channels; consecutive segments merged into one bubble per
-utterance; and Clear all communication as the only action that empties the
-chat. What the eight-channel case still lacks is a measurement of its own: the
+utterance; Clear all communication as the only action that empties the
+chat; and all of that setup stored as named profiles that come back at the next
+start. What the eight-channel case still lacks is a measurement of its own: the
 latency and CPU numbers were all taken with one stream running.
 
 ---
@@ -429,13 +431,18 @@ production" a property of the system instead of a convention — a later caller
 cannot half-apply it. The field is `#[serde(default)]`, so a config written
 before it existed still starts a session with no prompt rather than failing.
 
+**Configuration is two commands, not a CRUD surface.** `load_config` and
+`save_config` move the whole file, because it is a few kilobytes a human edits
+at human speed and a per-entity command set would need the two sides to agree
+on which half is authoritative. So groups, the channel map and the profiles
+around them need no commands of their own: they are edited in the UI and
+stored with everything else. See P12.
+
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
-`specta`) instead of hand-written TypeScript; `update_stream_config`, group
-CRUD and channel-to-group assignment commands, `clear_communication` (atomic
-deletion of transcript data only), and `search_session`. Groups exist in the UI
-and have no backend at all yet — they live as long as the window does, and
-their persistence is P12's. `clear_communication` likewise clears what exists
-today, which is the in-memory chat; the stored half arrives with P10.
+`specta`) instead of hand-written TypeScript; `update_stream_config`,
+`clear_communication` (atomic deletion of transcript data only), and
+`search_session`. `clear_communication` clears what exists today, which is the
+in-memory chat; the stored half arrives with P10.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
@@ -479,8 +486,8 @@ backend stays zero-based and the conversion happens at that one boundary.
 
 **A channel the device does not have is muted, not a refusal to start.** A
 setup is built for the desk and then carried to a laptop with a two-input
-interface, and until P12 persists presets, rebuilding it for the small
-interface means losing it. So the setup may hold more channels than the device
+interface, and rebuilding it for the small interface would mean losing it —
+now that P12 stores it as a profile, rebuilding it would mean *overwriting* it. So the setup may hold more channels than the device
 offers: those keep their stream id, their colour and their group membership,
 are marked `muted` in the running state, and receive no audio — no ring, no
 segmenter, no VAD context. The session refuses to start only when *every*
@@ -497,7 +504,12 @@ faster than reading eight labels, and it is the same colour on the meter strip.
 
 **The interaction model.** Channel configuration belongs on the dedicated
 Settings page, not in the live chat view: input mapping, label, language and
-channel colour are edited there. Vocabulary is likewise managed on Settings,
+channel colour are edited there. Its sections — profile, input, channels,
+vocabulary, groups — are cards with the page background between them rather
+than one continuous surface divided by hairlines: it asks five separate
+questions, and sections that touch read as one long form in which it is easy to
+answer the wrong one. The frame is one `.panel` rule in `app.css`, not five
+copies in five components. Vocabulary is likewise managed on Settings,
 but globally: one active vocabulary/prompt applies to all channels and has no
 per-channel assignment. Each channel has a user-editable colour; a deterministic
 palette colour is preselected when the channel is created, with enough contrast
@@ -610,7 +622,7 @@ picks the largest non-Silero `.bin` as the speech model and the newest
 **Accepted when:** a fresh machine without a model is guided through the
 download to the first transcription; a tampered file is rejected by checksum.
 
-### P12 — Settings & configuration persistence — **Open**
+### P12 — Settings & configuration persistence — **Partial**
 
 Persistent settings: worker count, model choice, VAD thresholds, maximum
 segment length, hysteresis parameters from P3b, theme. Session presets: a named
@@ -626,12 +638,44 @@ id, not the display name.
 **Accepted when:** a preset, including channel colours and non-exclusive group
 memberships, survives a restart and a reconnect of the interface.
 
-**What P7 has now handed it:** groups, their names and their memberships, the
-active vocabulary, and the channel map with its colours all exist and are all
-lost when the window closes. Membership is keyed on the channel's own key
-rather than on its position, which is the shape that has to survive the
-round trip — a preset that stored positions would silently re-point every group
-the first time a channel was deleted.
+**Done:** the presets, as **profiles**. `config.json` in the app's
+configuration directory holds a list of profiles — device, channel map with
+labels, languages and colours, groups with their memberships — plus the active
+vocabulary beside them and which profile was last in use. It is read at
+startup, written on every edit after a short debounce, and there is no Save
+button: a setup an operator believes is stored and is not is worse than no
+persistence at all. Profiles are created, renamed, duplicated and deleted at
+the top of the Settings page, and switching is locked while a session runs, for
+the same reason the channel map is.
+
+Three decisions worth keeping in view:
+
+- **JSON, not the P10 database.** Configuration is read once and written when a
+  human edits something, which is nothing like the write load transcripts have.
+  It is also the one file an operator may have to repair by hand or send to
+  someone else when it is wrong.
+- **Saved membership is positions, live membership is keys.** Both are right
+  where they are: the key is stable while a row is edited, which is what stops
+  a deleted channel from re-pointing every group below it; the position is what
+  still means something after a restart, when every key is a number the new
+  window has never issued. `ui/src/lib/profiles.ts` owns that translation and
+  is the only place that does, and `profiles.test.ts` pins down the case it
+  exists for — a channel deleted between two saves.
+- **Nothing here may stop the app from starting.** A missing file is a first
+  run; an unreadable one, or one from a newer version, is moved to
+  `config.bad.json` and the app comes up empty and says so, rather than
+  overwriting the only copy of a setup before anyone could look at it. Writes
+  go through a temporary file and a rename, so an interrupted save cannot
+  truncate the real one.
+
+**Outstanding:** the settings proper — worker count, model choice, VAD
+thresholds, maximum segment length, the P3b hysteresis parameters, theme — are
+all still constants in the code, and none of them is in the file yet. So is
+**device recognition by a stable id**: a profile stores the display name, which
+is what the rest of the app keys on, so two identical interfaces cannot be told
+apart and a renamed one is not recognised. A stored device that is not
+connected is at least kept and marked as such rather than silently replaced,
+which is the half of "survives a reconnect" that could be had without the id.
 
 **Candidates already identified as needing to be settings:** the segmenter's
 `silence_timeout` (it is a *latency* parameter, not only a quality one — it is
@@ -700,9 +744,16 @@ average, so it reads low exactly where this list is densest. Hence the warning
 at 80 % rather than at the limit, and hence `estimated` in the name of
 everything that carries it.
 
-**Outstanding:** named vocabulary lists stored in SQLite with exactly one
-active, a shipped starter list, and shortening that is deliberate rather than
-whisper's silent truncation. And the measurement: the point of a global list is
+The one active list is stored and read back since P12 — beside the profiles
+rather than inside one, because the jargon of a house outlives any one patch
+and a copy per profile is a copy that drifts. An emptied box stays empty across
+a restart: the file tells "never set", which keeps the default, apart from
+"deliberately cleared", which turns the prompt off and is how its effect gets
+measured at all.
+
+**Outstanding:** *named* lists with exactly one active — today there is one
+list and no way to keep a second — a shipped starter list, and shortening that
+is deliberate rather than whisper's silent truncation. And the measurement: the point of a global list is
 that its effect is visible on *every* channel, which needs the P14 fixture set
 to show.
 
@@ -740,10 +791,11 @@ in the log. *Reached, including the pool — what P5 still owes is a load test o
 live audio.*
 
 **Milestone B (usable MVP):** + P6, P7, P11, P12. Eight channels, chat UI,
-model download. *P3 is done, eight channels run, and the chat view the eight
-make necessary — Settings page, group sidebar, bounded list — is in place. What
-is left is the model download and the saved presets: everything configured on
-the Settings page currently dies with the window.*
+model download. *P3 is done, eight channels run, the chat view the eight make
+necessary — Settings page, group sidebar, bounded list — is in place, and the
+setup now survives the window as a profile. What is left for this milestone is
+the model download, and the settings proper: every threshold is still a
+constant in the code.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P3b, P8, P9, P10, P13.
@@ -762,13 +814,15 @@ In this order, with the reason each one comes where it does.
    decisions rest on is currently a single-stream number. The chat's window
    bounds the DOM, which removes the frontend from the list of things that
    could explain a bad result.
-2. **P11 → P12** — model download and persisted presets, which together make
-   the app usable by someone who is not holding a terminal. P12 has become the
-   more urgent of the two: the Settings page now holds a channel map, eight
-   colours, a vocabulary and a set of groups, and every one of them is typed in
-   again after every restart. Nobody rebuilds that before a show. P12 also
-   takes the constants P3 still owns: the Silero threshold, `silence_timeout`,
-   `max_segment`.
+2. **P11** — the model download, which is what is left between the app and
+   somebody who is not holding a terminal: today a model is found in
+   `.scratch/models` or named by an environment variable, and a fresh machine
+   gets neither. P12's presets are done — the channel map, the colours, the
+   groups and the vocabulary are stored as profiles and read back — so what
+   remains of P12 is the settings proper, and those are worth doing *after*
+   step 1: the constants P3 owns (the Silero threshold, `silence_timeout`,
+   `max_segment`) should be exposed against measured numbers rather than
+   guessed ones.
 3. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel. The control exists and is global; what is missing is the
    evidence that any particular list is better than another.

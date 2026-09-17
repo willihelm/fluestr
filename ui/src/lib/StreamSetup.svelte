@@ -5,10 +5,10 @@
   // the Settings page (P15).
   //
   // Lives on the Settings page rather than above the chat, so the live view is
-  // only the live view. P12 still owes making it a saved preset — an engineer
-  // does not want to remap eight channels before every show. Editing is locked
-  // while a session runs, because the channel map is fixed when capture
-  // opens.
+  // only the live view. It belongs to the profile selected above it and is
+  // stored with it (P12) — an engineer does not remap eight channels before
+  // every show. Editing is locked while a session runs, because the channel
+  // map is fixed when capture opens.
 
   import { newChannel, duplicateChannels, mutedChannels, type Channel } from "./streams";
 
@@ -34,13 +34,13 @@
   };
 </script>
 
-<section>
+<section class="panel">
   <header>
     <h2>Channels</h2>
     <span class="count">{channels.length} of {deviceChannels} on the device</span>
     <!-- Not capped at the device's channel count: the setup describes the
          production, not whatever interface happens to be plugged in now. -->
-    <button class="add" onclick={add} disabled={locked}>Add channel</button>
+    <button class="action" onclick={add} disabled={locked}>Add channel</button>
   </header>
 
   <div class="rows">
@@ -120,37 +120,6 @@
 </section>
 
 <style>
-  section {
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    padding: 0.5rem 1rem 0.75rem;
-  }
-
-  header {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-    margin-bottom: 0.4rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 0.85rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-dim);
-  }
-
-  .count {
-    font-size: 0.8rem;
-    color: var(--text-dim);
-  }
-
-  .add {
-    margin-left: auto;
-  }
-
   .rows {
     display: flex;
     flex-direction: column;
