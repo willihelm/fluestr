@@ -85,6 +85,11 @@ export interface RunningStream {
   streamId: number;
   channel: number;
   label: string;
+  // The device has no such channel, so the stream runs silently: it keeps its
+  // id, its colour and its groups and receives no audio. The backend mutes
+  // rather than refusing to start, so one setup serves both the desk and a
+  // two-input laptop interface.
+  muted: boolean;
 }
 
 export type SessionState =

@@ -21,13 +21,17 @@ export interface Channel {
 
 let nextKey = 0;
 
-/// A new row, preset to the first free device channel and the next palette
-/// colour. Both are starting points the operator can overwrite; neither is
-/// ever silently reassigned afterwards.
-export const newChannel = (existing: Channel[], deviceChannels: number): Channel => {
+/// A new row, preset to the first free channel and the next palette colour.
+/// Both are starting points the operator can overwrite; neither is ever
+/// silently reassigned afterwards.
+///
+/// Deliberately not clamped to the device's channel count: a setup may hold
+/// more channels than the interface currently plugged in has, and those start
+/// muted rather than blocking the session — see [`mutedChannels`].
+export const newChannel = (existing: Channel[]): Channel => {
   const taken = new Set(existing.map((c) => c.channel));
   let channel = 0;
-  while (taken.has(channel) && channel < deviceChannels - 1) channel += 1;
+  while (taken.has(channel)) channel += 1;
 
   return {
     key: nextKey++,
@@ -62,12 +66,19 @@ export const validate = (
   if (channels.length === 0) return "Add at least one channel.";
 
   for (const c of channels) {
-    if (c.channel < 0 || c.channel >= deviceChannels) {
-      return `${c.label} is on channel ${c.channel + 1}, but the device has ${deviceChannels}.`;
-    }
     if (c.language.trim() === "") {
       return `${c.label} has no language.`;
     }
+  }
+
+  // A channel the device does not have is muted, not a refusal to start: a
+  // setup built for the desk has to survive being carried to a laptop with two
+  // inputs. Only a setup where *nothing* is left to listen to is an error,
+  // because then starting would transcribe silence and look like a broken app.
+  if (mutedChannels(channels, deviceChannels).length === channels.length) {
+    return deviceChannels === 0
+      ? "The selected device has no input channels."
+      : `None of the ${channels.length} channels exists on this device; it has ${deviceChannels}.`;
   }
 
   // Allowed by the backend — mirroring one channel into two views is unusual
@@ -84,3 +95,16 @@ export const duplicateChannels = (channels: Channel[]): number[] => {
   for (const c of channels) seen.set(c.channel, (seen.get(c.channel) ?? 0) + 1);
   return [...seen.entries()].filter(([, n]) => n > 1).map(([channel]) => channel);
 };
+
+/// The channels the device does not have, as indices into `channels` — the
+/// stream ids, which is what the meters and the session state key on.
+///
+/// These start anyway and are carried along silently: they keep their id,
+/// their colour and their place in the groups and receive no audio. Muting
+/// rather than dropping them is what keeps the ids stable, and rather than
+/// refusing to start is what lets one saved setup serve both the desk and a
+/// two-input laptop interface.
+export const mutedChannels = (channels: Channel[], deviceChannels: number): number[] =>
+  channels
+    .map((c, streamId) => (c.channel < 0 || c.channel >= deviceChannels ? streamId : -1))
+    .filter((streamId) => streamId >= 0);

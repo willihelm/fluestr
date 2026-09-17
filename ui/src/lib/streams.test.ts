@@ -1,0 +1,73 @@
+// The rules of the channel setup, asserted rather than argued about.
+
+import { describe, expect, it } from "vitest";
+import { mutedChannels, newChannel, validate, type Channel } from "./streams";
+
+const channel = (device: number, label = `Channel ${device + 1}`): Channel => ({
+  key: device,
+  channel: device,
+  label,
+  language: "de",
+  color: "#888888",
+});
+
+describe("validate", () => {
+  it("starts a setup that reaches past the device, because those channels mute", () => {
+    // The case this exists for: eight channels patched for the desk, plugged
+    // into a two-input interface. Refusing to start would mean rebuilding the
+    // setup for the small interface and again for the desk.
+    const channels = [channel(0), channel(1), channel(4), channel(7)];
+
+    expect(validate(channels, "Scarlett 2i2", 2)).toBeNull();
+  });
+
+  it("refuses only when nothing is left to listen to", () => {
+    const channels = [channel(4), channel(7)];
+
+    expect(validate(channels, "Scarlett 2i2", 2)).toBe(
+      "None of the 2 channels exists on this device; it has 2.",
+    );
+  });
+
+  it("names the device without input channels rather than counting to zero", () => {
+    expect(validate([channel(0)], "Some output", 0)).toBe(
+      "The selected device has no input channels.",
+    );
+  });
+
+  it("still insists on a device, a channel and a language", () => {
+    expect(validate([channel(0)], "", 2)).toBe("No input device selected.");
+    expect(validate([], "Scarlett 2i2", 2)).toBe("Add at least one channel.");
+    expect(validate([{ ...channel(0), language: " " }], "Scarlett 2i2", 2)).toBe(
+      "Channel 1 has no language.",
+    );
+  });
+});
+
+describe("mutedChannels", () => {
+  it("answers in stream ids, which is what the meters and the events key on", () => {
+    // Positions 1 and 3, not device channels 5 and 8: a muted row keeps its
+    // place in the list, so the ids of the rows after it do not move.
+    const channels = [channel(0), channel(4), channel(1), channel(7)];
+
+    expect(mutedChannels(channels, 2)).toEqual([1, 3]);
+  });
+
+  it("mutes nothing when the device covers every channel", () => {
+    expect(mutedChannels([channel(0), channel(7)], 8)).toEqual([]);
+  });
+});
+
+describe("newChannel", () => {
+  it("takes the next free channel even beyond what the device offers", () => {
+    // Otherwise the setup could never be built larger than the interface
+    // currently plugged in, which is the whole point of muting.
+    const existing = [channel(0), channel(1)];
+
+    expect(newChannel(existing).channel).toBe(2);
+  });
+
+  it("fills a gap left by a removed row", () => {
+    expect(newChannel([channel(0), channel(2)]).channel).toBe(1);
+  });
+});

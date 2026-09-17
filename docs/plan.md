@@ -10,8 +10,8 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-17, after the Settings page and the
-group sidebar.
+**Status of this document:** 2026-09-17, after the Settings page, the group
+sidebar and muting the channels the device does not have.
 
 ---
 
@@ -75,8 +75,9 @@ end — microphone, one ring buffer and segmenter per channel, Silero speech
 detection, the shared worker pool, one colour-coded chat — at a measured
 ~330 ms on one stream from the end of a spoken segment to the text appearing.
 Around it: a Settings page holding the device, the channel map, the one global
-vocabulary and the groups; a chat page with a group sidebar that narrows the
-view to a group's channels; consecutive segments merged into one bubble per
+vocabulary and the groups; a channel map that may reach past the device, whose
+surplus channels start muted instead of blocking Start; a chat page with a
+group sidebar that narrows the view to a group's channels; consecutive segments merged into one bubble per
 utterance; and Clear all communication as the only action that empties the
 chat. What the eight-channel case still lacks is a measurement of its own: the
 latency and CPU numbers were all taken with one stream running.
@@ -409,6 +410,17 @@ Two more things worth knowing, both in the code:
   lives; persistence needs one that survives a restart, and that belongs with
   P10.
 
+**A failed session has to be cleared, or Start never works again.** The
+failure — the device unplugged, the sidecar lost — is discovered on the
+processing thread, which reports `session-state: failed` and ends. Nothing
+there can reach the session the Tauri state holds, so it stayed in that slot:
+the UI, seeing the failure, offered Start, and Start answered "a session is
+already running" until the app was restarted. `start_session` now asks
+`Session::is_finished` and clears such a session before refusing, which also
+joins its threads and releases its sidecar; and the UI calls the idempotent
+`stop_session` when it sees a failure, so the model is freed then rather than
+at the next Start.
+
 **Vocabulary is session-level, not per stream.** `SessionConfig::vocabulary`
 is handed to every stream's segmenter, and `StreamConfig` no longer carries a
 prompt at all. Putting it in the wire format rather than leaving it to the UI
@@ -464,6 +476,19 @@ for, rather than scrolling.
 
 Channels are numbered from 1, the way they are numbered on an interface; the
 backend stays zero-based and the conversion happens at that one boundary.
+
+**A channel the device does not have is muted, not a refusal to start.** A
+setup is built for the desk and then carried to a laptop with a two-input
+interface, and until P12 persists presets, rebuilding it for the small
+interface means losing it. So the setup may hold more channels than the device
+offers: those keep their stream id, their colour and their group membership,
+are marked `muted` in the running state, and receive no audio — no ring, no
+segmenter, no VAD context. The session refuses to start only when *every*
+channel is above what the device has, because then it would open a device and
+transcribe silence, which reads as a broken app rather than as a misconfigured
+one. Muted rather than dropped is what keeps the ids stable: the stream id is
+the row's position, so removing a row would move every channel after it onto
+the wrong label.
 
 Each channel gets a palette colour when it is created and the operator can
 change it. The colour is configuration, not decoration: with eight channels

@@ -225,6 +225,11 @@ pub struct RunningStream {
     pub stream_id: u16,
     pub channel: u16,
     pub label: String,
+    /// The device does not have this channel, so the stream is carried along
+    /// silently: it keeps its id, its colour and its place in the groups, and
+    /// receives no audio. See [`Session::start`] for why that beats refusing
+    /// to start.
+    pub muted: bool,
 }
 
 /// Lifecycle of the session, as the UI needs to render it.
@@ -304,33 +309,66 @@ impl Session {
         if config.streams.is_empty() {
             bail!("no channels configured");
         }
-        if config.streams.len() > BUDGETED_STREAMS {
+        let backend = CpalBackend::new();
+        let device_id = audio_core::DeviceId(config.device.clone());
+        let info = backend.device(&device_id)?;
+
+        // A configured channel the device does not have is muted, not a
+        // refusal to start. A channel map is made for the desk and then
+        // carried to a laptop with a two-input interface, and the operator
+        // wants the channels that *are* there rather than having to delete the
+        // rest and rebuild the setup afterwards.
+        //
+        // Muted streams keep their stream id. The id is the position in
+        // `config.streams`, and the chat colours, the group membership and the
+        // meters are all built on it, so dropping a row would move every later
+        // channel onto the wrong label — the exact failure P1 is careful about
+        // everywhere else.
+        let live: Vec<(u16, &StreamConfig)> = config
+            .streams
+            .iter()
+            .enumerate()
+            .map(|(index, stream)| (index as u16, stream))
+            .filter(|(_, stream)| stream.channel < info.channels)
+            .collect();
+
+        if live.is_empty() {
+            // Nothing to mute down to: starting would open a device and
+            // transcribe silence, which looks like the app being broken.
+            bail!(
+                "none of the {} configured channels exists on '{}' — it has {} channels",
+                config.streams.len(),
+                info.name,
+                info.channels
+            );
+        }
+
+        // Counted after muting: it is the streams that actually decode that
+        // the queue bound and the worker count were reasoned for.
+        if live.len() > BUDGETED_STREAMS {
             tracing::warn!(
-                streams = config.streams.len(),
+                streams = live.len(),
                 budgeted = BUDGETED_STREAMS,
                 "more streams than the queue bound and worker count were reasoned for"
             );
         }
 
-        let backend = CpalBackend::new();
-        let device_id = audio_core::DeviceId(config.device.clone());
-        let info = backend.device(&device_id)?;
-
-        for stream in &config.streams {
-            if stream.channel >= info.channels {
-                // Numbered and labelled the way the UI shows it. The index is
-                // zero-based because the audio API is, but an error an
-                // operator reads has no business exposing that — and with
-                // eight rows on screen it also has to say *which* one is
-                // wrong.
-                bail!(
-                    "'{}' is on channel {}, which does not exist on '{}' — it has {} channels",
-                    stream.label,
-                    stream.channel as u32 + 1,
-                    info.name,
-                    info.channels
-                );
-            }
+        if live.len() < config.streams.len() {
+            // Numbered the way the UI shows it — the index is zero-based
+            // because the audio API is, but nothing an operator reads has any
+            // business exposing that.
+            let muted: Vec<String> = config
+                .streams
+                .iter()
+                .filter(|stream| stream.channel >= info.channels)
+                .map(|stream| format!("'{}' (ch {})", stream.label, stream.channel as u32 + 1))
+                .collect();
+            tracing::warn!(
+                device = %info.name,
+                channels = info.channels,
+                muted = %muted.join(", "),
+                "muted: the device does not have these channels"
+            );
         }
 
         // The sidecar comes up first. Loading the model can take seconds, and
@@ -356,27 +394,34 @@ impl Session {
         // map — the de-interleaver pairs them by position, and a mismatch
         // there puts the lighting desk's words under the sound engineer's
         // label without anything crashing.
-        let mut assignments = Vec::with_capacity(config.streams.len());
-        let mut sinks: Vec<Box<dyn audio_core::SampleSink>> =
-            Vec::with_capacity(config.streams.len());
-        let mut sources = Vec::with_capacity(config.streams.len());
-        let mut running = Vec::with_capacity(config.streams.len());
+        let mut assignments = Vec::with_capacity(live.len());
+        let mut sinks: Vec<Box<dyn audio_core::SampleSink>> = Vec::with_capacity(live.len());
+        let mut sources = Vec::with_capacity(live.len());
 
-        for (index, stream) in config.streams.iter().enumerate() {
-            let stream_id = StreamId(index as u16);
+        for &(stream_id, stream) in &live {
             let (sink, source) = ring::channel(rate, RING_SECONDS);
             assignments.push(ChannelAssignment {
-                stream_id,
+                stream_id: StreamId(stream_id),
                 channel: stream.channel,
             });
             sinks.push(Box::new(sink));
             sources.push(source);
-            running.push(RunningStream {
-                stream_id: stream_id.0,
+        }
+
+        // Every configured stream, muted ones included: this is the UI's
+        // authoritative answer to which channel ended up where, and a muted
+        // channel missing from it would read as one that simply vanished.
+        let running: Vec<RunningStream> = config
+            .streams
+            .iter()
+            .enumerate()
+            .map(|(index, stream)| RunningStream {
+                stream_id: index as u16,
                 channel: stream.channel,
                 label: stream.label.clone(),
-            });
-        }
+                muted: stream.channel >= info.channels,
+            })
+            .collect();
 
         let channel_map = ChannelMap::new(assignments, info.channels)?;
 
@@ -399,12 +444,12 @@ impl Session {
         // Only once the device has actually opened: a detector per stream
         // means a whisper.cpp VAD context per stream, and there is no point
         // paying for eight of them for a device that was going to refuse.
-        let mut pipelines = Vec::with_capacity(config.streams.len());
-        for (index, (stream, source)) in config.streams.iter().zip(sources).enumerate() {
+        let mut pipelines = Vec::with_capacity(live.len());
+        for (&(stream_id, stream), source) in live.iter().zip(sources) {
             pipelines.push(Pipeline {
                 processor: StreamProcessor::new(source, granted)?,
                 segmenter: Segmenter::new(
-                    StreamId(index as u16),
+                    StreamId(stream_id),
                     // The same model file serves both layers: the detector in
                     // front of this segmenter and the sidecar's backstop
                     // behind it. Each stream needs its own instance — the
@@ -443,7 +488,8 @@ impl Session {
         tracing::info!(
             session_id,
             device = %info.name,
-            streams = config.streams.len(),
+            streams = live.len(),
+            muted = config.streams.len() - live.len(),
             sample_rate = granted,
             detector = if vad_model.is_some() { "silero" } else { "energy" },
             workers = pool.workers(),
@@ -476,6 +522,21 @@ impl Session {
     /// Stops in the order the data flows, so nothing is left half-processed.
     pub fn stop(mut self) {
         self.shutdown();
+    }
+
+    /// Whether the pipeline has left its loop — because the device was
+    /// unplugged, the sidecar was lost, or Stop was pressed.
+    ///
+    /// The failure is discovered on the processing thread, which has no way
+    /// back to the `Session` the Tauri state holds: it reports
+    /// [`SessionState::Failed`] and ends. Without a way to ask, the dead
+    /// session stays in that slot and the next Start is refused with "a
+    /// session is already running" — while the UI, which saw the failure,
+    /// offers Start rather than Stop. So the question has to be askable.
+    pub fn is_finished(&self) -> bool {
+        self.processing
+            .as_ref()
+            .is_some_and(|handle| handle.is_finished())
     }
 
     fn shutdown(&mut self) {
@@ -1152,11 +1213,20 @@ mod tests {
         let running = serde_json::to_value(SessionState::Running {
             session_id: 7,
             device: "MacBook Pro Microphone".into(),
-            streams: vec![RunningStream {
-                stream_id: 0,
-                channel: 2,
-                label: "Regie".into(),
-            }],
+            streams: vec![
+                RunningStream {
+                    stream_id: 0,
+                    channel: 2,
+                    label: "Regie".into(),
+                    muted: false,
+                },
+                RunningStream {
+                    stream_id: 1,
+                    channel: 9,
+                    label: "Licht".into(),
+                    muted: true,
+                },
+            ],
             sample_rate: 48_000,
             model: "ggml-small-q5_1.bin".into(),
             load_ms: 140,
@@ -1168,6 +1238,10 @@ mod tests {
         assert_eq!(running["sampleRate"], 48_000);
         assert_eq!(running["streams"][0]["streamId"], 0);
         assert_eq!(running["streams"][0]["channel"], 2);
+        // A channel the device does not have travels back as muted rather than
+        // as a failure to start, and the UI renders it from this flag.
+        assert_eq!(running["streams"][0]["muted"], false);
+        assert_eq!(running["streams"][1]["muted"], true);
 
         let failed = serde_json::to_value(SessionState::Failed {
             message: "no model".into(),

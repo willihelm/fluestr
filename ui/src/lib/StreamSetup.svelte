@@ -10,7 +10,7 @@
   // while a session runs, because the channel map is fixed when capture
   // opens.
 
-  import { newChannel, duplicateChannels, type Channel } from "./streams";
+  import { newChannel, duplicateChannels, mutedChannels, type Channel } from "./streams";
 
   interface Props {
     channels: Channel[];
@@ -21,9 +21,12 @@
   let { channels = $bindable(), deviceChannels, locked }: Props = $props();
 
   let duplicates = $derived(duplicateChannels(channels));
+  // Not an error either: a row the current device has no channel for starts
+  // muted, so one setup serves the desk and the laptop interface alike.
+  let muted = $derived(new Set(mutedChannels(channels, deviceChannels)));
 
   const add = () => {
-    channels = [...channels, newChannel(channels, deviceChannels)];
+    channels = [...channels, newChannel(channels)];
   };
 
   const remove = (key: number) => {
@@ -35,14 +38,14 @@
   <header>
     <h2>Channels</h2>
     <span class="count">{channels.length} of {deviceChannels} on the device</span>
-    <button class="add" onclick={add} disabled={locked || channels.length >= deviceChannels}>
-      Add channel
-    </button>
+    <!-- Not capped at the device's channel count: the setup describes the
+         production, not whatever interface happens to be plugged in now. -->
+    <button class="add" onclick={add} disabled={locked}>Add channel</button>
   </header>
 
   <div class="rows">
     {#each channels as channel, index (channel.key)}
-      <div class="row" style="--channel: {channel.color}">
+      <div class="row" class:muted={muted.has(index)} style="--channel: {channel.color}">
         <span class="dot" title="Stream {index}"></span>
 
         <label class="channel">
@@ -53,7 +56,6 @@
           <input
             type="number"
             min="1"
-            max={deviceChannels}
             value={channel.channel + 1}
             oninput={(e) => (channel.channel = Number(e.currentTarget.value) - 1)}
             disabled={locked}
@@ -81,6 +83,10 @@
           <input type="color" bind:value={channel.color} disabled={locked} />
         </label>
 
+        {#if muted.has(index)}
+          <span class="tag" title="The selected device has only {deviceChannels} channels, so this one receives no audio. It keeps its place, its colour and its groups.">muted</span>
+        {/if}
+
         <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
           title="Remove this channel">×</button>
       </div>
@@ -90,6 +96,17 @@
       <p class="empty">No channels yet. Add one to start transcribing.</p>
     {/if}
   </div>
+
+  {#if muted.size > 0}
+    <!-- Said once, in full, rather than only implied by the badges: an
+         operator who sees a channel stay silent for a whole show has to be
+         able to find out here why, and the reason is the device, not the
+         setup. -->
+    <p class="warn">
+      {muted.size} of {channels.length} channels are above the {deviceChannels} the selected
+      device has; they start muted and receive no audio.
+    </p>
+  {/if}
 
   {#if duplicates.length > 0}
     <!-- Allowed, not forbidden: two views of one channel is a legitimate if
@@ -165,6 +182,23 @@
 
   .label {
     flex: 1;
+  }
+
+  /* Dimmed, not hidden: a muted row is still part of the setup, and it has to
+     be editable — pointing it at a channel the device has is the fix. */
+  .row.muted {
+    opacity: 0.55;
+  }
+
+  .tag {
+    align-self: center;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #f2b544;
+    border: 1px solid currentColor;
+    border-radius: 0.25rem;
+    padding: 0 0.3rem;
   }
 
   .empty {

@@ -4,7 +4,7 @@
   import SettingsPage from "./lib/SettingsPage.svelte";
   import GroupSidebar from "./lib/GroupSidebar.svelte";
   import ClearCommunication from "./lib/ClearCommunication.svelte";
-  import { newChannel, toConfig, validate, type Channel } from "./lib/streams";
+  import { newChannel, toConfig, validate, mutedChannels, type Channel } from "./lib/streams";
   import { forgetChannels, visibleStreams, type Group } from "./lib/groups";
   import { DEFAULT_VOCABULARY, toConfig as vocabularyConfig } from "./lib/vocabulary";
   import {
@@ -58,6 +58,16 @@
   // assigns it — see `SessionConfig::streams`.
   let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
   let problem = $derived(validate(channels, device, deviceChannels));
+  // Which streams receive no audio because the device has no such channel.
+  // While a session runs this comes from the backend's own answer rather than
+  // from the UI's copy of the setup — that is the authoritative mapping, and
+  // the two would differ the moment the device is swapped under a running
+  // session.
+  let muted = $derived(
+    status.state === "running"
+      ? new Set(status.streams.filter((s) => s.muted).map((s) => s.streamId))
+      : new Set(mutedChannels(channels, deviceChannels)),
+  );
 
   let group = $derived(groups.find((g) => g.key === selectedGroup) ?? null);
   // `null` means every stream, which is not the same as an empty set: a group
@@ -82,7 +92,7 @@
   // switching devices must never throw away a setup the operator typed in.
   $effect(() => {
     if (deviceChannels > 0 && channels.length === 0) {
-      channels = [newChannel([], deviceChannels)];
+      channels = [newChannel([])];
     }
   });
 
@@ -110,7 +120,17 @@
       onOverload((event) => {
         overloaded = new Map(overloaded).set(event.streamId, event.dropped);
       }),
-      onSessionState((event) => (status = event)),
+      onSessionState((event) => {
+        status = event;
+        // A failed session is over — but its threads and its loaded model are
+        // only released when something takes it out of the backend's slot, and
+        // the failure was discovered inside the pipeline, not by a command.
+        // Stop is idempotent, so saying so here costs nothing and frees the
+        // sidecar instead of keeping it alive until the next Start.
+        if (event.state === "failed") {
+          stopSession().catch(() => {});
+        }
+      }),
     ];
 
     // Subscribing can be refused — `listen` needs the `core:event` capability,
@@ -209,8 +229,10 @@
     {#if status.state === "running"}
       <span class="ok">●</span>
       <span>
-        {status.device} · {status.streams.length}
-        {status.streams.length === 1 ? "channel" : "channels"} · {status.sampleRate} Hz ·
+        {status.device} · {status.streams.length - muted.size}
+        {status.streams.length - muted.size === 1 ? "channel" : "channels"}{muted.size > 0
+          ? `, ${muted.size} muted`
+          : ""} · {status.sampleRate} Hz ·
         {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
         {(status.loadMs / 1000).toFixed(1)} s
       </span>
@@ -257,7 +279,7 @@
                three-channel group are five things to read past. The filtering
                happens by stream id inside the component, because the stream id
                *is* the position in `channels`. -->
-          <StreamMeters {channels} {levels} {overloaded} {visible} />
+          <StreamMeters {channels} {levels} {overloaded} {visible} {muted} />
         {/if}
 
         {#if visible !== null && visible.size === 0}

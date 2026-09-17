@@ -75,6 +75,21 @@ fn start_session(
     config: SessionConfig,
 ) -> Result<SessionState, String> {
     let mut slot = state.session.lock().map_err(|_| "session state poisoned")?;
+
+    // A session whose pipeline has already ended — device unplugged, sidecar
+    // lost — is still sitting in the slot, because the failure is discovered
+    // on the processing thread and nothing there can reach this state. Left
+    // alone it makes the next Start fail with "a session is already running"
+    // while the UI, which saw the failure, offers Start rather than Stop, and
+    // nothing but restarting the app gets out of it. Clearing it here is also
+    // what joins its threads and releases its sidecar.
+    if slot.as_ref().is_some_and(Session::is_finished) {
+        tracing::info!("clearing the previous session, whose pipeline had ended");
+        if let Some(finished) = slot.take() {
+            finished.stop();
+        }
+    }
+
     if slot.is_some() {
         return Err("a session is already running".into());
     }

@@ -20,9 +20,14 @@
     overloaded: Map<number, number>;
     /// The stream ids the selected group shows, or `null` for all of them.
     visible: Set<number> | null;
+    /// The stream ids the device has no channel for. They are shown rather
+    /// than hidden: a meter that is simply absent reads as a bug, while a
+    /// silent one reads as a channel nobody is talking on — and neither is
+    /// what happened.
+    muted: Set<number>;
   }
 
-  let { channels, levels, overloaded, visible }: Props = $props();
+  let { channels, levels, overloaded, visible, muted }: Props = $props();
 
   const empty = (streamId: number): StreamLevel => ({
     streamId,
@@ -36,9 +41,13 @@
   {#each channels as channel, streamId (channel.key)}
     {#if visible === null || visible.has(streamId)}
     {@const level = levels.get(streamId) ?? empty(streamId)}
-    <div class="stream" style="--channel: {channel.color}">
+    <div class="stream" class:muted={muted.has(streamId)} style="--channel: {channel.color}">
       <span class="name">{channel.label}</span>
-      <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
+      {#if muted.has(streamId)}
+        <span class="tag" title="Channel {channel.channel + 1} does not exist on the selected device, so this stream receives no audio.">muted</span>
+      {:else}
+        <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
+      {/if}
       {#if (overloaded.get(streamId) ?? 0) > 0}
         <span class="error" title="The decode queue was full and the oldest segments were dropped">
           {overloaded.get(streamId)} not transcribed
@@ -67,6 +76,18 @@
     /* The meter takes its colour from the channel, so a bar can be found
        without reading the label next to it. */
     --accent: var(--channel);
+  }
+
+  .stream.muted {
+    opacity: 0.55;
+  }
+
+  .tag {
+    flex: 1;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
   }
 
   .name {
