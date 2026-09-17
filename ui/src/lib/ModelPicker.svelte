@@ -31,6 +31,7 @@
     type ModelStatus,
   } from "./bridge";
   import type { ModelChoice } from "./profiles";
+  import type { Flag } from "./SettingsPage.svelte";
 
   interface Props {
     models: ModelChoice;
@@ -38,9 +39,14 @@
     /// switching or deleting one is locked for the same reason the channel map
     /// is: it would take effect at a moment nobody chose.
     locked: boolean;
+    /// Told whenever the answer to "can this machine transcribe" changes, so
+    /// the Settings rail can mark this section from anywhere on the page. It
+    /// is the one problem here that nothing outside this component can see:
+    /// it is a question about files on disk, not about the setup.
+    onstatus?: (flag: Flag) => void;
   }
 
-  let { models = $bindable(), locked }: Props = $props();
+  let { models = $bindable(), locked, onstatus }: Props = $props();
 
   let view = $state<ModelsView | null>(null);
   let error = $state<string | null>(null);
@@ -76,6 +82,14 @@
     return () => {
       subscription.then((unlisten) => unlisten()).catch(() => {});
     };
+  });
+
+  // No model at all is an error — the app cannot transcribe a word. No speech
+  // detection is a warning: it works, but whisper invents sentences for the
+  // silence between transmissions, which reads as the app making things up.
+  $effect(() => {
+    if (view === null) return;
+    onstatus?.(view.problem ? "error" : view.vad ? null : "warn");
   });
 
   const speech = $derived(view?.models.filter((m) => m.kind === "speech") ?? []);

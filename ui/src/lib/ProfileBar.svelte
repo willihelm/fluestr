@@ -2,11 +2,15 @@
   // The profile switcher at the top of the Settings page (P12).
   //
   // A profile is one production's setup — interface, channel map, groups — and
-  // an engineer works several of them on the same machine. The bar is the
-  // first thing on the page on purpose: everything below it belongs to
-  // whichever profile is selected here, and a page that let you edit eight
-  // channels before revealing which setup you were editing would be a page
-  // that loses somebody's patch.
+  // an engineer works several of them on the same machine. The bar spans the
+  // top of the page on purpose: the sections it governs are named under it in
+  // the rail, and a page that let you edit eight channels before revealing
+  // which setup you were editing would be a page that loses somebody's patch.
+  //
+  // A strip rather than a card, and without the paragraph that used to explain
+  // what a profile holds. It is not a sixth question of the same kind as the
+  // sections below — it *selects what they are about* — and the rail says what
+  // belongs to it by listing those sections under its name.
   //
   // Locked while a session runs, like the channel map and for the same reason:
   // the capture configuration is fixed once capture has opened, and switching
@@ -62,65 +66,58 @@
   };
 </script>
 
-<section class="panel scope">
-  <header>
-    <h2>Profile</h2>
-    <span class="count">
-      {profiles.length}
-      {profiles.length === 1 ? "profile" : "profiles"}
-    </span>
-  </header>
+<header class="bar">
+  <label class="pick">
+    <span>Profile</span>
+    <select bind:value={activeKey} disabled={locked} aria-label="Active profile">
+      {#each profiles as profile (profile.key)}
+        <option value={profile.key}>{profile.name}</option>
+      {/each}
+    </select>
+  </label>
 
-  <div class="row">
-    <label class="pick">
-      <span>Active</span>
-      <select bind:value={activeKey} disabled={locked}>
-        {#each profiles as profile (profile.key)}
-          <option value={profile.key}>{profile.name}</option>
-        {/each}
-      </select>
+  {#if active}
+    <label class="name">
+      <span>Name</span>
+      <input type="text" bind:value={active.name} aria-label="Profile name" />
     </label>
+  {/if}
 
-    {#if active}
-      <label class="name">
-        <span>Name</span>
-        <input type="text" bind:value={active.name} aria-label="Profile name" />
-      </label>
-    {/if}
-
-    <div class="actions">
-      <button onclick={add} disabled={locked}>New</button>
-      <button onclick={copy} disabled={locked || active === null}>Duplicate</button>
-      <button
-        class="remove"
-        onclick={remove}
-        disabled={locked || profiles.length < 2}
-        title={profiles.length < 2
-          ? "The last profile cannot be deleted — there would be nothing to configure."
-          : "Delete this profile"}
-      >
-        Delete
-      </button>
-    </div>
+  <div class="actions">
+    <button onclick={add} disabled={locked}>New</button>
+    <button onclick={copy} disabled={locked || active === null}>Duplicate</button>
+    <button
+      class="remove"
+      onclick={remove}
+      disabled={locked || profiles.length < 2}
+      title={profiles.length < 2
+        ? "The last profile cannot be deleted — there would be nothing to configure."
+        : "Delete this profile"}
+    >
+      Delete
+    </button>
   </div>
 
-  <p class="hint">
-    A profile holds the input device, the channel map with its colours, and the groups.
-    The vocabulary is not in it: it is one list for every profile, because the terms of a
-    house outlive any one patch.
-  </p>
-
   {#if saveError}
+    <!-- Never swallowed: an operator who builds a setup believing it is stored
+         and finds it gone before the next show has been failed twice. -->
     <p class="error">Not saved: {saveError}</p>
+  {:else if locked}
+    <p class="note">Locked while the session runs.</p>
   {/if}
-</section>
+</header>
 
 <style>
-  .row {
+  /* The same height and hairline as the two bars above it, so the three read
+     as one header rather than as a card that happens to sit at the top. */
+  .bar {
     display: flex;
     align-items: flex-end;
     gap: 0.6rem;
     flex-wrap: wrap;
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
   }
 
   label {
@@ -131,12 +128,9 @@
     color: var(--text-dim);
   }
 
-  .pick {
-    min-width: 12rem;
-  }
-
+  .pick,
   .name {
-    min-width: 12rem;
+    min-width: 11rem;
   }
 
   select,
@@ -176,15 +170,17 @@
     color: #ff6b6b;
   }
 
-  .hint {
-    margin: 0.5rem 0 0;
-    font-size: 0.8rem;
+  .note,
+  .error {
+    margin: 0 0 0.25rem auto;
+    font-size: 0.78rem;
+  }
+
+  .note {
     color: var(--text-dim);
   }
 
   .error {
-    margin: 0.35rem 0 0;
-    font-size: 0.8rem;
     color: #ff6b6b;
   }
 </style>

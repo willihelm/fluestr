@@ -462,8 +462,8 @@ it belongs with the P14 load test.
 
 Today: two pages. **Settings** holds the input device, the editable list of
 channels — device channel, label, language and colour, added and removed
-freely — the one global vocabulary, and the groups with their membership.
-**Chat** holds a group sidebar, a meter per running stream in the selected
+freely — the one global vocabulary, the groups with their membership, and the
+model manager. **Chat** holds a group sidebar, a meter per running stream in the selected
 view, and the lines themselves, each with its channel's colour down the left
 edge and its label, timestamp, language badges and measured latency. Follow
 behaviour with a "jump to latest" button. Start/Stop is in the header and
@@ -491,8 +491,31 @@ are corrected. What it costs is that a point an hour back takes several steps
 to reach — which is what P9's search and its jump into the chat position are
 for, rather than scrolling.
 
+**The Settings page is split by scope, not by topic.** Its four sections sit
+in a rail on the left, under a heading naming what each belongs to: Audio and
+Groups under the *profile*, Vocabulary under *all profiles*, Models under *this
+machine*. Scope is the thing an operator gets wrong — what a change here
+travels with, and what stays behind — and as one scrolling column of cards all
+four looked alike, with the difference carried only by a paragraph of prose in
+the profile card. Grouping the rail says it once, so no section has to explain
+its own scope. The profile switcher is a strip across the top rather than a
+fifth card, because it does not ask a question of the same kind as the
+sections: it selects what they are about.
+
+Each rail item carries a dot when its section wants attention — amber for a
+setup that will not start or a vocabulary over the token budget, red for a
+machine with no model at all. Those are exactly the problems that used to be
+invisible from the chat, where an app that refuses to start looks like it is
+refusing for no reason. The sections all stay mounted and the inactive ones are
+hidden, because a model download is minutes long and a rail that unmounted it
+would throw away the progress of a transfer that is still running.
+
 Channels are numbered from 1, the way they are numbered on an interface; the
-backend stays zero-based and the conversion happens at that one boundary.
+backend stays zero-based and the conversion happens at that one boundary. The
+channel list names its fields once, above the columns, rather than over every
+row: eight rows of "Ch / Label / Lang / Colour" is four times as much text as
+the setup itself, and it buried the one thing the section is read for — which
+label sits on which channel.
 
 **A channel the device does not have is muted, not a refusal to start.** A
 setup is built for the desk and then carried to a laptop with a two-input
@@ -742,9 +765,12 @@ labels, languages and colours, groups with their memberships — plus the active
 vocabulary beside them and which profile was last in use. It is read at
 startup, written on every edit after a short debounce, and there is no Save
 button: a setup an operator believes is stored and is not is worse than no
-persistence at all. Profiles are created, renamed, duplicated and deleted at
-the top of the Settings page, and switching is locked while a session runs, for
-the same reason the channel map is.
+persistence at all. Profiles are created, renamed, duplicated and deleted in a
+strip across the top of the Settings page, and switching is locked while a
+session runs, for the same reason the channel map is. What the strip governs is
+named below it rather than explained in it: the rail lists Audio and Groups
+under the active profile's name, which is the whole of what a profile holds —
+see P7.
 
 Three decisions worth keeping in view:
 

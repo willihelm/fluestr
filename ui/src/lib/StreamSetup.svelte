@@ -44,51 +44,59 @@
   </header>
 
   <div class="rows">
+    <!-- The field names once, over the columns, rather than over every row.
+         Eight channels meant eight copies of "Ch  Label  Lang  Colour", which
+         is four times as much text as the setup itself and hid the one thing
+         the section is scanned for: which label sits on which channel. The
+         inputs keep the names as `aria-label`, so nothing is lost to a screen
+         reader. -->
+    {#if channels.length > 0}
+      <div class="head" aria-hidden="true">
+        <span></span>
+        <span>Ch</span>
+        <span>Label</span>
+        <span>Lang</span>
+        <span>Colour</span>
+        <span></span>
+      </div>
+    {/if}
+
     {#each channels as channel, index (channel.key)}
       <div class="row" class:muted={muted.has(index)} style="--channel: {channel.color}">
         <span class="dot" title="Stream {index}"></span>
 
-        <label class="channel">
-          <span>Ch</span>
-          <!-- Counted from 1, the way channels are numbered on an interface
-               and in a patch list. The backend stays zero-based; the
-               conversion happens here and nowhere else. -->
-          <input
-            type="number"
-            min="1"
-            value={channel.channel + 1}
-            oninput={(e) => (channel.channel = Number(e.currentTarget.value) - 1)}
-            disabled={locked}
-          />
-        </label>
+        <!-- Counted from 1, the way channels are numbered on an interface and
+             in a patch list. The backend stays zero-based; the conversion
+             happens here and nowhere else. -->
+        <input
+          type="number"
+          min="1"
+          aria-label="Device channel"
+          value={channel.channel + 1}
+          oninput={(e) => (channel.channel = Number(e.currentTarget.value) - 1)}
+          disabled={locked}
+        />
 
-        <label class="label">
-          <span>Label</span>
-          <input type="text" bind:value={channel.label} disabled={locked} />
-        </label>
+        <input type="text" aria-label="Label" bind:value={channel.label} disabled={locked} />
 
-        <label class="language">
-          <span>Lang</span>
-          <input
-            type="text"
-            size="3"
-            bind:value={channel.language}
-            disabled={locked}
-            title="ISO 639-1 code. The list comes from the sidecar in a later step — nothing is hard-coded to de/en."
-          />
-        </label>
+        <input
+          type="text"
+          aria-label="Language"
+          bind:value={channel.language}
+          disabled={locked}
+          title="ISO 639-1 code. The list comes from the sidecar in a later step — nothing is hard-coded to de/en."
+        />
 
-        <label class="colour">
-          <span>Colour</span>
-          <input type="color" bind:value={channel.color} disabled={locked} />
-        </label>
+        <input type="color" aria-label="Colour" bind:value={channel.color} disabled={locked} />
 
-        {#if muted.has(index)}
-          <span class="tag" title="The selected device has only {deviceChannels} channels, so this one receives no audio. It keeps its place, its colour and its groups.">muted</span>
-        {/if}
+        <div class="end">
+          {#if muted.has(index)}
+            <span class="tag" title="The selected device has only {deviceChannels} channels, so this one receives no audio. It keeps its place, its colour and its groups.">muted</span>
+          {/if}
 
-        <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
-          title="Remove this channel">×</button>
+          <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
+            title="Remove this channel">×</button>
+        </div>
       </div>
     {/each}
 
@@ -126,10 +134,19 @@
     gap: 0.3rem;
   }
 
+  /* One template for the heading and every row, so the columns line up and
+     stay lined up — the whole point of naming the fields once. */
+  .head,
   .row {
-    display: flex;
-    align-items: flex-end;
+    display: grid;
+    grid-template-columns: 0.6rem 4rem minmax(6rem, 1fr) 3.5rem 2.6rem 5.5rem;
+    align-items: center;
     gap: 0.5rem;
+  }
+
+  .head {
+    font-size: 0.7rem;
+    color: var(--text-dim);
   }
 
   .dot {
@@ -137,20 +154,17 @@
     height: 0.6rem;
     border-radius: 50%;
     background: var(--channel);
-    margin-bottom: 0.45rem;
-    flex: none;
   }
 
-  label {
+  .end {
     display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    font-size: 0.7rem;
-    color: var(--text-dim);
-  }
-
-  .label {
-    flex: 1;
+    align-items: center;
+    gap: 0.3rem;
+    /* The column is held open by the template whether or not the row is
+       muted, so the badge appearing does not shorten the label field of that
+       one row while its neighbours keep theirs. */
+    justify-content: flex-end;
+    min-width: 0;
   }
 
   /* Dimmed, not hidden: a muted row is still part of the setup, and it has to
@@ -160,7 +174,6 @@
   }
 
   .tag {
-    align-self: center;
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -192,12 +205,12 @@
     font-size: 0.85rem;
   }
 
-  input[type="number"] {
-    width: 3.5rem;
+  input {
+    min-width: 0;
   }
 
   input[type="color"] {
-    width: 2.2rem;
+    width: 100%;
     height: 1.8rem;
     padding: 0.1rem;
   }

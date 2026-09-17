@@ -28,15 +28,16 @@ body {
 
 /* --- Settings panels -----------------------------------------------------
 
-   Each section of the Settings page is a card on the page background, not
-   another slab of surface ending in a hairline. The page asks five separate
-   questions — which profile, which interface, which channels, which words,
-   which views — and edge-to-edge sections that touch read as one long form in
-   which it is easy to answer the wrong one. A gap the eye can land in is what
-   says they are separate.
+   Each panel is a card on the page background, not another slab of surface
+   ending in a hairline. Most sections of the Settings page are one card; the
+   Audio section is two, because "which interface" and "which channels are
+   patched where" are separate questions that happen to be asked together, and
+   edge-to-edge sections that touch read as one long form in which it is easy
+   to answer the wrong one. A gap the eye can land in is what says they are
+   separate.
 
-   Global rather than repeated in each component: the five sections have to
-   look alike, and five copies of one block is five chances for them to drift.
+   Global rather than repeated in each component: the panels have to look
+   alike, and a copy of the block per component is a chance for them to drift.
    Only the shared frame lives here — what a section puts *inside* itself
    stays with the component. */
 .panel {
@@ -46,13 +47,10 @@ body {
   padding: 0.75rem 1rem 0.9rem;
 }
 
-/* The profile switcher. Marked apart from the rest because it is not a
-   sibling of them: the device, the channels and the groups below it all
-   belong to whichever profile is selected here, and a card that looked like
-   the others would give no hint that it governs them. */
-.panel.scope {
-  border-color: rgba(110, 168, 254, 0.45);
-}
+/* The profile strip is not a panel any more — it is a bar across the top of
+   the Settings page, styled with the other two bars in `App.svelte`. What
+   replaced the "this governs everything below it" hint is the rail: the
+   sections that belong to a profile are listed under its name. */
 
 .panel > header {
   display: flex;

@@ -371,6 +371,7 @@
       {deviceChannels}
       locked={running || busy}
       {saveError}
+      {problem}
     />
   {:else}
     <div class="chat">
