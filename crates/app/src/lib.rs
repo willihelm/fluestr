@@ -311,8 +311,13 @@ async fn pick_model_file<R: Runtime>(app: AppHandle<R>, current: Option<String>)
 /// Deliberately not an audible alarm. An intercom room is already a room full
 /// of speech, and a beep per matching word is the fastest way to have the
 /// feature switched off. `urgent` picks between the two requests the platform
-/// offers: an alert term keeps asking until the app is looked at, a group's
-/// flash-on-message is a single bounce.
+/// offers: an alert term keeps asking until the app is looked at, anything
+/// else is a single bounce.
+///
+/// A group's flash-on-message asks for more than a bounce — the whole window
+/// in dark orange — and that half of it is not here: no platform offers to
+/// paint a window, so the page paints itself. See `flash.ts`. Which is also
+/// why that half reaches a focused window and this one does not.
 ///
 /// A focused window is left alone — the operator is already looking at it, and
 /// macOS would bounce the dock icon of the app in front of them.

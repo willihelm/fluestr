@@ -22,7 +22,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn } from "@tauri-apps/api/event";
 import { call, emit, isRemote, on } from "./transport";
-import { flashPage } from "./flash";
+import { flashPage, floodWindow } from "./flash";
 import { ALL_CHANNELS_VIEW, closeGroupTabs, openGroupTab, type GroupView } from "./windows";
 import type {
   DeviceOption,
@@ -161,10 +161,18 @@ export const setAlertTerms = (terms: string[]) =>
 /// group's flash-on-message is a single bounce. Never a sound, in either case:
 /// this is an intercom room.
 ///
-/// In a browser there is no window and no platform to ask (P16), so the page
-/// asks with what a tab owns: its own surface and its title in the tab strip.
-/// Same two requests, same rules — see `flash.ts`.
-export const requestAttention = (urgent: boolean): Promise<void> => {
+/// `loud` is that group setting, and it is drawn rather than asked for: the
+/// whole window in dark orange, here and not on the platform, because no
+/// platform offers "paint this window". It is therefore the same in the app
+/// and in a browser — the page is what the operator is looking at either way —
+/// and it is the one request that is made even to a focused window. Somebody
+/// watching the meters in this window has not seen the chat in it.
+///
+/// In a browser there is no window and no platform to ask (P16), so the rest
+/// of the request is made with what a tab owns: its own surface and its title
+/// in the tab strip. Same two requests, same rules — see `flash.ts`.
+export const requestAttention = (urgent: boolean, loud: boolean): Promise<void> => {
+  if (loud) floodWindow();
   if (isRemote) {
     flashPage(urgent);
     return Promise.resolve();

@@ -43,6 +43,7 @@ describe("attentionFor", () => {
   it("is urgent about an alert term", () => {
     expect(after([event(0, "Feuer im Schnürboden", [{ start: 0, end: 5 }])], everything)).toEqual({
       urgent: true,
+      loud: false,
     });
   });
 
@@ -67,12 +68,13 @@ describe("attentionFor", () => {
     expect(after([event(0, "Feuer", [{ start: 0, end: 5 }])], watching)).toBeNull();
     expect(after([event(1, "Feuer", [{ start: 0, end: 5 }])], watching)).toEqual({
       urgent: true,
+      loud: false,
     });
   });
 
-  it("flashes for a new bubble from a group that asked for it", () => {
+  it("floods for a new bubble from a view that asked for it", () => {
     const watching = { alerts: null, flash: new Set([0]) };
-    expect(after([event(0, "Vorhang")], watching)).toEqual({ urgent: false });
+    expect(after([event(0, "Vorhang")], watching)).toEqual({ urgent: false, loud: true });
   });
 
   it("does not flash for a segment that only continues a bubble", () => {
@@ -87,12 +89,14 @@ describe("attentionFor", () => {
     expect(after([event(0, "Vorhang")], watching)).toBeNull();
   });
 
-  // Urgency wins: an alert term in a flashing group is still the request that
-  // keeps asking.
-  it("is urgent when a bubble both opens and carries a term", () => {
+  // Both, because they are not alternatives: the term is what keeps the
+  // platform asking, the group's setting is what paints the window. A bubble
+  // that does both asks for both.
+  it("is urgent and loud when a bubble both opens and carries a term", () => {
     const watching = { alerts: null, flash: new Set([0]) };
     expect(after([event(0, "Feuer", [{ start: 0, end: 5 }])], watching)).toEqual({
       urgent: true,
+      loud: true,
     });
   });
 

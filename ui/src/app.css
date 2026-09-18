@@ -6,6 +6,9 @@
   --text: #e6e8ee;
   --text-dim: #9aa1b4;
   --accent: #6ea8fe;
+  /* The loud attention request (P17): the whole window, in dark orange. Not
+     the red of an alert term — two requests, two colours. */
+  --flood: #a33d00;
 
   color-scheme: dark;
   font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
@@ -123,5 +126,58 @@ body.flashing:not(.urgent) {
   body.flashing {
     animation: none;
     box-shadow: inset 0 0 0 4px var(--attention);
+  }
+}
+
+/* --- The loud request (P17) ----------------------------------------------
+
+   A flood, where everything above is an inset: the whole window in dark
+   orange for one pulse per message. This is what a group's flash setting asks
+   for, and it is the one request made whether or not the window is focused —
+   the view it is set on is the one that has to be noticed while the operator
+   is looking at the meters, the sidebar or another panel of the same window.
+
+   Dark orange rather than the red an alert term uses. The two are different
+   requests and must not be read as the same one: red is a word that must not
+   be missed, orange is this view saying something.
+
+   Over everything, including any dialog, because it is about the window and
+   not about what is in it — and `pointer-events: none`, because an operator
+   who reaches for a control mid-flood must not have the click swallowed by a
+   sheet of colour. Peak opacity short of opaque for the same reason: the chat
+   underneath stays legible while it is asking. */
+body.flooding::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: var(--flood);
+  animation: flood 1.2s ease-out forwards;
+}
+
+@keyframes flood {
+  from {
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.72;
+  }
+  55% {
+    opacity: 0.72;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* No animation, but still unmistakable: it holds for the pulse and the class
+   is taken off by `flash.ts`, which is what ends it either way. Dimmer than
+   the peak of the pulse, because what pulses is read past and what simply
+   sits there is read through. */
+@media (prefers-reduced-motion: reduce) {
+  body.flooding::after {
+    animation: none;
+    opacity: 0.55;
   }
 }

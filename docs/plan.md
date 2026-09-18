@@ -518,9 +518,10 @@ Every group can be opened in its own window from the sidebar, **and so can the
 all-channels view** — a live view of its channels that receives history,
 transcripts, meters and session state from the shared backend and reflects
 later membership changes. It does not own a capture session, so Start/Stop
-stays global; closing it closes only that view. All channels is not a group and
-so has nothing in the profile to remember settings on: no flash-on-message, and
-a pin that lasts as long as the window does.
+stays global; closing it closes only that view. All channels is not a group, so
+what it remembers sits on the profile rather than in `groups`: it carries the
+same flash-on-message preference the groups do, and a pin that lasts as long as
+the window does.
 
 **How it is one app in several windows.** The same bundle is mounted in every
 WebView, and the window's *label* says which view it is — `group-3` is the
@@ -759,14 +760,15 @@ its first transcription — needs P13.
 
 **Accepted when:** a preset, including channel colours and non-exclusive group
 memberships, and the global vocabulary and alert terms survive a restart and a
-reconnect of the interface; each group's flash-on-message preference does too.
+reconnect of the interface; each view's flash-on-message preference does too.
 ✔ for the identity half — the reconnect is verified against real hardware in
 `capture_live.rs`, `#[ignore]`d because CI has no interface.
 
 **Done:** the presets, as **profiles**. `config.json` in the app's
 configuration directory holds a list of profiles — device, default language,
 channel map with labels, languages and colours, groups with their memberships
-and flash-on-message preference — plus the active vocabulary, alert terms, the
+and flash-on-message preference, and that preference for the all-channels view —
+plus the active vocabulary, alert terms, the
 remote block and which profile was last in use. It is read at startup and
 written on every edit after a short debounce; there is no Save button, because
 a setup an operator believes is stored and is not is worse than no persistence
@@ -926,17 +928,25 @@ attention request for a new match in an unfocused window — deliberately not an
 audible alarm, which must not add noise to an intercom environment. One rule in
 `ui/src/lib/attention.ts` serves both views so they cannot drift: the main
 window is urgent about every alert term whichever group is selected — it is the
-view of the whole session — and flashes only for the group it is showing; a
+view of the whole session — and floods only for the view it is showing; a
 group window is the other way round, urgent only for its own members and always
-flashing when that group asks for it. Each group carries its own
-**Flash on every new message** preference, off by default, stored with the group
-and editable while a session runs; it fires for every new message from that
-group's channels whether or not it contains an alert term. The all-channels view
-has no implicit group setting. The request is counted per bubble and not per
-segment — one sentence arrives as three segments, and three flashes for one
-sentence is exactly the noise this must not add. The browser viewer highlights
-the same characters but flashes its own surface and tab title, having no window
-to ask the platform about.
+flooding when its view asks for it. **Every new bubble is marked in the chat**,
+in every view and with nothing to switch it on: that is how the line that just
+arrived is told from the ones above it, which is a question an operator watching
+eight interleaved channels has whatever their settings say. What a view's own
+**Flash on every new message** preference adds is the loud request — the whole
+window in dark orange for one pulse per message, distinct from the red of an
+alert term. It is off by default, editable while a session runs, stored with the
+group and on the profile for the all-channels view, which carries the same
+preference. Being painted by the page rather than asked of the platform, it is
+the same in the app and in a browser, and it is the one request made **even to a
+focused window**: the view it is set on is the one that has to be noticed while
+the operator is looking at the meters or another panel of the same window. The
+request is counted per bubble and not per segment — one sentence arrives as three
+segments, and three flashes for one sentence is exactly the noise this must not
+add. The browser viewer highlights the same characters and, having no window to
+ask the platform about, makes the rest of the request with its own surface and
+tab title.
 
 ### P16 — LAN remote client — **Partial**
 
@@ -1289,8 +1299,10 @@ In this order, with the reason each one comes where it does.
     exact word is highlighted and the window requests attention; "rescue" does
     neither. Repeat from a channel in an open group to verify its separate
     window. Then enable that group's **Flash on every new message** and speak a
-    non-alert message → its window requests attention; disable it and repeat →
-    it does not. Verify that the browser highlights the same characters and
+    non-alert message → the whole window floods dark orange, focused or not;
+    disable it and repeat → the new line is still marked in the chat and the
+    window is not. Repeat both with the all-channels view's own setting. Verify
+    that the browser highlights the same characters, floods the same way, and
     flashes its own surface and tab title (P17, P16).
 14. On Windows, with a DAW holding the same interface: start a session on eight
     channels and let the DAW run through it — the transcripts appear and the

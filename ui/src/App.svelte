@@ -123,6 +123,9 @@
   let deviceId = $derived(active?.deviceId ?? "");
   let channels = $derived(active?.channels ?? []);
   let groups = $derived(active?.groups ?? []);
+  // The all-channels view's own flash setting. On the profile because that
+  // view is not a group — see `groups.ts`.
+  let allChannelsFlash = $derived(active?.allChannelsFlash ?? false);
 
   let status = $state<SessionState | { state: "starting" } | { state: "idle" }>({
     state: "idle",
@@ -202,6 +205,12 @@
   // with no members shows nothing, and saying so is more useful than silently
   // falling back to showing everything.
   let visible = $derived(visibleStreams(group, channels));
+  /// Whether the view on screen floods the window on every message (P17) — the
+  /// selected group's setting, or the profile's for the all-channels view.
+  let flashing = $derived(group === null ? allChannelsFlash : group.flash);
+  /// Every stream of the profile, for the all-channels view: `visible` says
+  /// "every stream" with `null`, and the attention request needs the set.
+  let everyStream = $derived(new Set(channels.map((_, streamId) => streamId)));
   let searchable = $derived(viewStreams(channels, visible));
   let shown = $derived(
     visible === null ? messages : messages.filter((m) => visible.has(m.streamId)),
@@ -577,9 +586,10 @@
   /// and the main chat sees every one of them, whichever group is on screen —
   /// it is the view of the whole session, and a word that must not be missed
   /// must not be missed because a group happened to be selected. A group's
-  /// flash-on-message is the quieter request, and it follows the view: only
-  /// while that group is the one on screen, and never for the all-channels
-  /// view, which has no group setting to follow.
+  /// flash-on-message is the loud one — the whole window in dark orange — and
+  /// it follows the view: only while the view that asked for it is the one on
+  /// screen. The all-channels view asks for it too, with the setting it keeps
+  /// on the profile.
   ///
   /// Counted per **bubble**, not per segment. The event that just arrived is
   /// in the last bubble either way; what decides is whether it brought the
@@ -594,12 +604,16 @@
       // Every stream: this is the view of the whole session, and a word that
       // must not be missed must not be missed because of what is on screen.
       alerts: null,
-      // The flash follows the view instead, and the all-channels view has no
-      // group setting to follow.
-      flash: group?.flash === true ? visible : null,
+      // The flood follows the view instead — whichever view is on screen, and
+      // whatever that view's own setting says. `visible` is `null` for the
+      // all-channels view, which here has to be spelled out as the streams it
+      // shows: "off" is the only thing `null` means to `attentionFor`.
+      flash: flashing ? (visible ?? everyStream) : null,
     });
     if (!asking) return;
-    requestAttention(asking.urgent).catch((e) => console.warn("no attention request:", e));
+    requestAttention(asking.urgent, asking.loud).catch((e) =>
+      console.warn("no attention request:", e),
+    );
   };
 
   // One global Start for every configured channel — there is deliberately no
@@ -788,16 +802,12 @@
             This group has no channels yet. Add some on the Settings page.
           </p>
         {:else}
-          <!-- The flash follows the view, like the attention request: only
-               while a group that asked for it is the one on screen. The
-               all-channels view has no group setting to follow. -->
-          <ChatList
-            messages={shown}
-            {colors}
-            starts={sessionStarts}
-            flash={group?.flash === true}
-            streams={searchable}
-          />
+          <!-- Every new bubble flashes, in every view: it is how the line
+               that just arrived is told from the ones above it. What a view's
+               own setting adds is the loud request — the whole window in dark
+               orange — and that is the attention request's business, not the
+               chat's. -->
+          <ChatList messages={shown} {colors} starts={sessionStarts} streams={searchable} />
         {/if}
       </div>
     </div>

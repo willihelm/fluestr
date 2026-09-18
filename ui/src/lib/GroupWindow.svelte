@@ -13,11 +13,11 @@
   // the Settings page reaches a window that is already open.
   //
   // The all-channels view is the same component with nothing to filter by. It
-  // is not a group, so it has no stored settings to follow — no flash-on-every-
-  // message, and a pin that lasts as long as the window does. That is the same
-  // answer the main window's sidebar gives, where the all-channels row is the
-  // state of having selected no group rather than a group containing
-  // everything.
+  // is not a group, so what it follows is the profile's own setting rather
+  // than a group's: it flashes on every message if the profile says so, and
+  // its pin lasts as long as the window does. That is the same answer the main
+  // window's sidebar gives, where the all-channels row is the state of having
+  // selected no group rather than a group containing everything.
   //
   // Closing it closes this view and nothing else: never the group, never its
   // history, never the session.
@@ -71,6 +71,10 @@
   // pre-filtered list would point every id at the wrong channel.
   let channels = $state<Channel[]>([]);
   let target = $state<Group | null>(null);
+  /// The all-channels view's flash setting, read from the active profile. Only
+  /// meaningful in a window showing that view; a group window follows its
+  /// group's own setting.
+  let allChannelsFlash = $state(false);
   // Whether a configuration has been read at all. Without it the window cannot
   // tell "this group was deleted" from "the file has not arrived yet", and it
   // would spend its first moment claiming the group is gone.
@@ -134,6 +138,7 @@
     const profile = profiles.find((p) => p.key === activeKey) ?? null;
     channels = profile?.channels ?? [];
     target = showsAll ? null : (profile?.groups[group as number] ?? null);
+    allChannelsFlash = profile?.allChannelsFlash ?? false;
     known = true;
     // The backend titled this window when it opened it; a rename afterwards
     // arrives here and nowhere else. The all-channels view cannot be renamed,
@@ -246,19 +251,23 @@
 
   /// Asks this window to be looked at (P17).
   ///
-  /// Narrower than the main window's on both counts, and deliberately: this is
-  /// a view of one group, not of the session. An alert term on a channel that
-  /// is not a member is somebody else's business — the main window sees every
-  /// one of them. The flash-on-message setting, on the other hand, always
-  /// applies here: this window *is* that group's view, so there is no "while it
-  /// is selected" to qualify it.
+  /// Narrower than the main window's on the urgent count, and deliberately:
+  /// this is a view of one group, not of the session. An alert term on a
+  /// channel that is not a member is somebody else's business — the main
+  /// window sees every one of them. The flash-on-message setting, on the other
+  /// hand, always applies here: this window *is* that view, so there is no
+  /// "while it is selected" to qualify it.
   const attend = (event: TranscriptEvent) => {
     const asking = attentionFor(event, bubbles[bubbles.length - 1], {
       alerts: visible,
-      flash: target?.flash === true ? visible : null,
+      // The group's setting, or the profile's where this window is the
+      // all-channels view. `visible` is already every stream in that case.
+      flash: (showsAll ? allChannelsFlash : target?.flash === true) ? visible : null,
     });
     if (!asking) return;
-    requestAttention(asking.urgent).catch((e) => console.warn("no attention request:", e));
+    requestAttention(asking.urgent, asking.loud).catch((e) =>
+      console.warn("no attention request:", e),
+    );
   };
 </script>
 
@@ -339,13 +348,7 @@
     {#if running}
       <StreamMeters {channels} {levels} {overloaded} {visible} {muted} />
     {/if}
-    <ChatList
-      messages={shown}
-      {colors}
-      starts={sessionStarts}
-      flash={target?.flash === true}
-      streams={searchable}
-    />
+    <ChatList messages={shown} {colors} starts={sessionStarts} streams={searchable} />
   {/if}
 </main>
 

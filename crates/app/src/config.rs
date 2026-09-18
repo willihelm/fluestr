@@ -162,6 +162,20 @@ pub struct Profile {
     pub language: String,
     pub channels: Vec<StoredChannel>,
     pub groups: Vec<StoredGroup>,
+    /// Whether the all-channels view flashes its window on every message, the
+    /// way a group with [`StoredGroup::flash`] does.
+    ///
+    /// On the profile rather than in `groups`, because the all-channels view is
+    /// not a group: it is the state of having selected none, and inventing a
+    /// group containing everything to hang one flag off would be a group the
+    /// operator can see, rename and delete. One flag per profile instead, next
+    /// to the channel list it is a view of.
+    ///
+    /// `#[serde(default)]` — off — for [`StoredGroup::flash`]'s reason: a file
+    /// written before this existed has no such field, and a setup that comes
+    /// back flashing at everything is not what its absence meant.
+    #[serde(default)]
+    pub all_channels_flash: bool,
 }
 
 /// What a profile without a stored default language falls back to.
@@ -469,6 +483,7 @@ mod tests {
                         color: "#6ea8fe".into(),
                     }],
                     groups: vec![],
+                    all_channels_flash: false,
                 },
                 Profile {
                     name: "Grosses Haus".into(),
@@ -495,6 +510,7 @@ mod tests {
                         flash: true,
                         on_top: true,
                     }],
+                    all_channels_flash: true,
                 },
             ],
         }
@@ -589,6 +605,8 @@ mod tests {
         // And its window opens like any other one: a setup that suddenly put
         // windows in front of everything is not what a missing field meant.
         assert!(!config.profiles[0].groups[0].on_top);
+        // And the all-channels view of that profile is quiet too.
+        assert!(!config.profiles[0].all_channels_flash);
     }
 
     #[test]
@@ -728,7 +746,15 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]),
-            ["channels", "device", "deviceId", "groups", "language", "name"]
+            [
+                "allChannelsFlash",
+                "channels",
+                "device",
+                "deviceId",
+                "groups",
+                "language",
+                "name"
+            ]
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),

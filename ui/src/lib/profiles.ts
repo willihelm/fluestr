@@ -83,6 +83,12 @@ export interface Profile {
   language: string;
   channels: Channel[];
   groups: Group[];
+  /// Whether the all-channels view floods its window on every message, the way
+  /// a group with its `flash` setting on does (P17).
+  ///
+  /// On the profile because the all-channels view is not a group: it is the
+  /// state of having selected none. See `groups.ts`.
+  allChannelsFlash: boolean;
 }
 
 let nextKey = 0;
@@ -110,6 +116,9 @@ export const newProfile = (
   language,
   channels: [newChannel([], language)],
   groups: [],
+  // Quiet to begin with, for the reason a new group is: an app that starts by
+  // flashing at everything gets its attention requests ignored.
+  allChannelsFlash: false,
 });
 
 /// A profile as the file holds it. Membership translated from channel keys to
@@ -123,6 +132,7 @@ export const toStored = (profile: Profile): StoredProfile => {
     device: profile.device,
     deviceId: profile.deviceId,
     language: profile.language,
+    allChannelsFlash: profile.allChannelsFlash,
     channels: profile.channels.map((c) => ({
       channel: c.channel,
       label: c.label,
@@ -164,6 +174,10 @@ export const fromStored = (stored: StoredProfile): Profile => {
     // A file written before profiles had a default language has none, and
     // "" would make every channel added afterwards languageless.
     language: stored.language ?? DEFAULT_LANGUAGE,
+    // A file written before the all-channels view had the setting has no such
+    // field, and that view starts quiet — the same reading a group's missing
+    // `flash` gets.
+    allChannelsFlash: stored.allChannelsFlash ?? false,
     channels,
     groups: stored.groups.map((g) =>
       restoreGroup(

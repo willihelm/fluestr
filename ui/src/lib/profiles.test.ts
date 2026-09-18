@@ -52,6 +52,7 @@ const aProfile = (): Profile => {
     language: "de",
     channels,
     groups: [restoreGroup("Bühne", [channels[1].key], false)],
+    allChannelsFlash: true,
   };
 };
 
@@ -65,6 +66,7 @@ const stored: StoredProfile = {
     { channel: 3, label: "Licht", language: "en", color: "#5fd38d" },
   ],
   groups: [{ name: "Bühne", flash: false, onTop: false, members: [1] }],
+  allChannelsFlash: true,
 };
 
 describe("toStored", () => {
@@ -443,6 +445,15 @@ describe("alert terms and flashing", () => {
         anOldFile<StoredProfile>({ ...stored, groups: [{ name: "Bühne", members: [1] }] }),
       ).groups[0].onTop,
     ).toBe(false);
+  });
+
+  it("keeps the all-channels view's flash setting across the file", () => {
+    expect(fromStored(toStored(aProfile())).allChannelsFlash).toBe(true);
+  });
+
+  it("reads a file written before the all-channels view had that setting as quiet", () => {
+    const { allChannelsFlash: _, ...before } = stored;
+    expect(fromStored(anOldFile<StoredProfile>(before)).allChannelsFlash).toBe(false);
   });
 
   it("stores the alert list without the editor's empty row", () => {

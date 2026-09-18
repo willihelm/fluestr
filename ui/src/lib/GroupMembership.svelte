@@ -17,9 +17,14 @@
   interface Props {
     groups: Group[];
     channels: Channel[];
+    /// The flash setting of the all-channels view, which is not a group and so
+    /// has nowhere in `groups` to keep one — it lives on the profile. Edited
+    /// here anyway, because this is where the question is asked of every other
+    /// view and an operator looking for it looks here.
+    allChannelsFlash: boolean;
   }
 
-  let { groups = $bindable(), channels }: Props = $props();
+  let { groups = $bindable(), channels, allChannelsFlash = $bindable() }: Props = $props();
 
   const add = () => {
     groups = [...groups, newGroup(groups)];
@@ -45,9 +50,19 @@
   <p class="hint">
     A group is a view onto some of the channels, selected in the sidebar of the chat.
     A channel can be in any number of groups; removing it from one leaves it in the
-    others and in the setup. Flashing asks the window for attention on every message
-    of that group, not only on an alert term — for the one view worth looking up for.
+    others and in the setup. Every new message is marked in the chat whatever these
+    say; flashing adds the loud request — the whole window in dark orange on every
+    message of that view, not only on an alert term. For the one view worth being
+    interrupted by.
   </p>
+
+  <!-- Above the groups, and outside the grid: the all-channels view is not a
+       group — it cannot be renamed, deleted or given members — and a card
+       among the others would invite all three. -->
+  <label class="all-channels">
+    <input type="checkbox" bind:checked={allChannelsFlash} />
+    <span>Flash on every message in <strong>All channels</strong></span>
+  </label>
 
   {#if groups.length === 0}
     <p class="empty">No groups yet. The chat shows every channel.</p>
@@ -96,6 +111,20 @@
     margin: 0 0 0.4rem;
     font-size: 0.8rem;
     color: var(--text-dim);
+  }
+
+  .all-channels {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 0.6rem;
+  }
+
+  .all-channels strong {
+    color: var(--text);
+    font-weight: 600;
   }
 
   .grid {

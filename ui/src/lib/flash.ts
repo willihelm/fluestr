@@ -15,6 +15,11 @@
 // A visible page is left alone, which is the browser's version of "the window
 // is focused": an operator already looking at the chat is not asked to look at
 // it.
+//
+// `floodWindow` is the exception on both counts. It is the loud request a
+// group's flash setting makes — the whole surface in dark orange — and it is
+// drawn by the page in the app as well, because in the app the page *is* the
+// window and there is nothing else that could paint it.
 
 /// How long one pulse of the page lasts, and how fast the title alternates.
 ///
@@ -23,6 +28,11 @@
 /// in the tab strip, slow enough to be read.
 const PULSE_MS = 1_200;
 const TITLE_INTERVAL_MS = 600;
+
+/// How long the window stays flooded. The same pulse, because it is the same
+/// request made louder — a flood that outlasted the pulse would be a different
+/// kind of ask, and the operator would learn two timings for one event.
+const FLOOD_MS = PULSE_MS;
 
 /// What the title is prefixed with while the page is asking. A shape rather
 /// than a word, because the rest of the title is the group's name and an
@@ -100,6 +110,38 @@ export const flashPage = (urgent: boolean) => {
     pulseTimer = null;
     if (!insisting) stopFlashing();
   }, PULSE_MS);
+};
+
+// --- The loud one --------------------------------------------------------
+
+let floodTimer: ReturnType<typeof setTimeout> | null = null;
+
+/// Floods the whole window in dark orange for one pulse.
+///
+/// What a group with its flash setting on asks for, and the one request that
+/// is made **whether or not the window is focused**. Everything else here
+/// declines to ask an operator who is already looking; this setting exists
+/// precisely for the view that must be noticed while they are looking
+/// somewhere else on the same screen — the chat is one panel of a window that
+/// also holds meters, a sidebar and a settings page.
+///
+/// A pulse per message rather than a state that persists until the window is
+/// looked at: the quantity being signalled is "another one arrived", and a
+/// window that stayed orange would stop counting after the first.
+export const floodWindow = () => {
+  // Restarted rather than extended. A second message during the first flood
+  // has to be visible as a second flood, and re-adding a class the element
+  // already has does not replay its animation — the reflow between the two is
+  // what makes the browser treat it as a new one.
+  document.body.classList.remove("flooding");
+  void document.body.offsetWidth;
+  document.body.classList.add("flooding");
+
+  if (floodTimer !== null) clearTimeout(floodTimer);
+  floodTimer = setTimeout(() => {
+    floodTimer = null;
+    document.body.classList.remove("flooding");
+  }, FLOOD_MS);
 };
 
 /// Stops the flashing as soon as the page is actually looked at.

@@ -230,7 +230,22 @@ deviceId: string,
  * `#[serde(default)]` because a file written before this existed has no
  * such field, and its profiles must keep loading.
  */
-language: string, channels: Array<StoredChannel>, groups: Array<StoredGroup>, };
+language: string, channels: Array<StoredChannel>, groups: Array<StoredGroup>, 
+/**
+ * Whether the all-channels view flashes its window on every message, the
+ * way a group with [`StoredGroup::flash`] does.
+ *
+ * On the profile rather than in `groups`, because the all-channels view is
+ * not a group: it is the state of having selected none, and inventing a
+ * group containing everything to hang one flag off would be a group the
+ * operator can see, rename and delete. One flag per profile instead, next
+ * to the channel list it is a view of.
+ *
+ * `#[serde(default)]` — off — for [`StoredGroup::flash`]'s reason: a file
+ * written before this existed has no such field, and a setup that comes
+ * back flashing at everything is not what its absence meant.
+ */
+allChannelsFlash: boolean, };
 
 /**
  * Whether the listener runs, and where.

@@ -31,14 +31,6 @@
     /// rather than one value, because the chat holds lines from every session
     /// that has run since it was cleared.
     starts: Map<number, number>;
-    /// Whether an arriving bubble flashes (P17) — the group on screen has its
-    /// flash-on-message setting on.
-    ///
-    /// The in-window half of that setting. The platform's attention request
-    /// only does anything to a window nobody is looking at; an operator who
-    /// *is* looking at the chat, at eight interleaved channels, is exactly who
-    /// needs to be told which line is the new one.
-    flash: boolean;
     /// The channels this view shows, in stream order, for the channel filter
     /// (P9). Handed down rather than derived from the bubbles: a channel that
     /// has not spoken yet is still one an operator may want to sit on, and a
@@ -47,7 +39,7 @@
     streams: { streamId: number; label: string }[];
   }
 
-  let { messages, colors, starts, flash, streams }: Props = $props();
+  let { messages, colors, starts, streams }: Props = $props();
 
   // --- Search and filter (P9) ---------------------------------------------
   //
@@ -123,15 +115,21 @@
   // segment keeps its key and must not flash again — one new bubble, one
   // flash, which is the same thing the attention request is counted by.
   //
+  // Every view, with nothing to switch it on: it is not an attention request
+  // but the answer to "which of these lines is the one that just arrived",
+  // which is a question an operator watching eight interleaved channels has
+  // whatever the view's settings say. What a view's flash setting adds is the
+  // loud request — the whole window — and that is made outside this component.
+  //
   // The first pass only takes stock. Everything on screen when the view opens
-  // is history, and a chat that flashes its whole window on arrival teaches
+  // is history, and a chat that flashes every line of it on arrival teaches
   // the operator to ignore the flash.
   $effect(() => {
     const keys = bubbles.map((b) => b.key);
     untrack(() => {
       const previous = known;
       known = new Set(keys);
-      if (previous === null || !flash) return;
+      if (previous === null) return;
       for (const key of keys) {
         if (!previous.has(key)) arriving.add(key);
       }

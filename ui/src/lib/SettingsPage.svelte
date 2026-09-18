@@ -336,7 +336,11 @@
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>
-          <GroupMembership bind:groups={active.groups} channels={active.channels} />
+          <GroupMembership
+            bind:groups={active.groups}
+            bind:allChannelsFlash={active.allChannelsFlash}
+            channels={active.channels}
+          />
         </div>
       {/if}
 
