@@ -1,5 +1,5 @@
 <script module lang="ts">
-  export type Section = "audio" | "groups" | "vocabulary" | "models";
+  export type Section = "profiles" | "audio" | "groups" | "vocabulary" | "models";
 
   /// How urgently a section wants attention, shown as a dot on its rail item.
   ///
@@ -38,11 +38,18 @@
   // left says it instead: each section sits under the heading of the thing it
   // belongs to, once, so no section has to explain its own scope.
   //
+  // The profiles are a section of their own, above those headings, rather than
+  // a strip that was on screen whichever section was open. Picking a setup is
+  // the rarest thing done here and it was sitting in front of the most
+  // frequent ones, with Delete under the cursor all evening. What has to stay
+  // visible is not the switcher but the *name*, and the rail already carries
+  // it: the sections that belong to a profile are listed under it.
+  //
   // What is deliberately not here is Start/Stop: it is session-wide and stays
   // in the header, reachable from either page, because an operator who has to
   // find the right page before they can stop capture has already lost.
 
-  import ProfileBar from "./ProfileBar.svelte";
+  import ProfileSection from "./ProfileSection.svelte";
   import StreamSetup from "./StreamSetup.svelte";
   import VocabularyEditor from "./VocabularyEditor.svelte";
   import GroupMembership from "./GroupMembership.svelte";
@@ -107,6 +114,9 @@
   let modelFlag = $state<Flag>(null);
 
   let flags = $derived<Record<Section, Flag>>({
+    // Never flagged: a failed save is about the whole file, not about the
+    // profile list, and it is said once in the strip at the top of the page.
+    profiles: null,
     audio: problem === null ? null : "warn",
     groups: null,
     vocabulary: lengthWarning(vocabulary) === null ? null : "warn",
@@ -118,6 +128,14 @@
   // category: "Profile · Oper grosses Haus" is what an operator recognises,
   // "profile-scoped settings" is not.
   let rail = $derived<{ scope: string; note: string; items: { id: Section; title: string }[] }[]>([
+    {
+      // No heading of its own: it is what the headings below it are about, and
+      // a scope line over the profile list would have to name the very thing
+      // the list is for choosing.
+      scope: "",
+      note: "",
+      items: [{ id: "profiles", title: "Profiles" }],
+    },
     {
       scope: active ? `Profile · ${active.name}` : "Profile",
       note: "Carried between houses with the profile.",
@@ -140,14 +158,22 @@
 </script>
 
 <div class="page">
-  <ProfileBar bind:profiles bind:activeKey {locked} {saveError} />
+  <!-- The one thing that is worth the top of the page whichever section is
+       open. Never swallowed and never buried in the section that happens to
+       have caused it: an operator who builds a setup believing it is stored
+       and finds it gone before the next show has been failed twice. -->
+  {#if saveError}
+    <p class="failed">Settings not saved: {saveError}</p>
+  {/if}
 
   <div class="body">
     <nav class="rail" aria-label="Settings sections">
       {#each rail as group (group.scope)}
         <div class="scope">
-          <h2>{group.scope}</h2>
-          <p>{group.note}</p>
+          {#if group.scope}
+            <h2>{group.scope}</h2>
+            <p>{group.note}</p>
+          {/if}
           {#each group.items as item (item.id)}
             <button
               class="item"
@@ -171,6 +197,10 @@
          unmounted it would throw away the progress bar of a transfer that is
          still running. -->
     <div class="pane">
+      <div class="sheet" hidden={section !== "profiles"}>
+        <ProfileSection bind:profiles bind:activeKey {locked} />
+      </div>
+
       {#if active}
         <div class="sheet" hidden={section !== "audio"}>
           <section class="panel">
@@ -227,6 +257,18 @@
     display: flex;
     flex: 1;
     min-height: 0;
+  }
+
+  /* A strip in the shape of the two bars above it rather than a card, so it
+     reads as part of the window's status furniture and not as one more thing
+     on the page to configure. */
+  .failed {
+    margin: 0;
+    padding: 0.4rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    color: #ff6b6b;
+    font-size: 0.8rem;
   }
 
   /* --- The rail ---------------------------------------------------------

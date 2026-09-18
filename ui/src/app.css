@@ -47,10 +47,10 @@ body {
   padding: 0.75rem 1rem 0.9rem;
 }
 
-/* The profile strip is not a panel any more — it is a bar across the top of
-   the Settings page, styled with the other two bars in `App.svelte`. What
-   replaced the "this governs everything below it" hint is the rail: the
-   sections that belong to a profile are listed under its name. */
+/* The profiles are a panel like the rest: a section of the Settings page
+   reached from the rail, not a strip across the top of it. What stays visible
+   whichever section is open is the active profile's *name*, which the rail
+   heads its profile-scoped sections with. */
 
 .panel > header {
   display: flex;

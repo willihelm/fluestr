@@ -491,16 +491,29 @@ are corrected. What it costs is that a point an hour back takes several steps
 to reach — which is what P9's search and its jump into the chat position are
 for, rather than scrolling.
 
-**The Settings page is split by scope, not by topic.** Its four sections sit
-in a rail on the left, under a heading naming what each belongs to: Audio and
-Groups under the *profile*, Vocabulary under *all profiles*, Models under *this
-machine*. Scope is the thing an operator gets wrong — what a change here
+**The Settings page is split by scope, not by topic.** Its four scoped sections
+sit in a rail on the left, under a heading naming what each belongs to: Audio
+and Groups under the *profile*, Vocabulary under *all profiles*, Models under
+*this machine*. Scope is the thing an operator gets wrong — what a change here
 travels with, and what stays behind — and as one scrolling column of cards all
 four looked alike, with the difference carried only by a paragraph of prose in
 the profile card. Grouping the rail says it once, so no section has to explain
-its own scope. The profile switcher is a strip across the top rather than a
-fifth card, because it does not ask a question of the same kind as the
-sections: it selects what they are about.
+its own scope.
+
+**The profiles are a section of their own, not a permanent strip.** Picking a
+setup is the rarest thing done on this page — once at the start of a show — and
+as a strip across the top it stood in front of the most frequent ones, with New,
+Duplicate and Delete under the cursor all evening next to the fields they would
+discard. It sits first in the rail instead, above the scope headings, because it
+selects what those headings are about. What has to stay visible while the
+channel map is edited is not the switcher but the *name*, and the rail carries
+it: the profile-scoped sections are listed under "Profile · Oper grosses Haus".
+With room for a list rather than a dropdown, each setup is one row with its own
+name field, its channel and group count, its device and its own Duplicate and
+Delete, so three profiles can be told apart without selecting each one in turn.
+The one thing that does span the page whichever section is open is a failed
+save, in a strip at the top: an operator who builds a setup believing it is
+stored and finds it gone before the next show has been failed twice.
 
 Each rail item carries a dot when its section wants attention — amber for a
 setup that will not start or a vocabulary over the token budget, red for a
@@ -537,7 +550,7 @@ faster than reading eight labels, and it is the same colour on the meter strip.
 
 **The interaction model.** Channel configuration belongs on the dedicated
 Settings page, not in the live chat view: input mapping, label, language and
-channel colour are edited there. Its sections — profile, input, channels,
+channel colour are edited there. Its sections — profiles, input, channels,
 vocabulary, groups — are cards with the page background between them rather
 than one continuous surface divided by hairlines: it asks five separate
 questions, and sections that touch read as one long form in which it is easy to
@@ -765,12 +778,14 @@ labels, languages and colours, groups with their memberships — plus the active
 vocabulary beside them and which profile was last in use. It is read at
 startup, written on every edit after a short debounce, and there is no Save
 button: a setup an operator believes is stored and is not is worse than no
-persistence at all. Profiles are created, renamed, duplicated and deleted in a
-strip across the top of the Settings page, and switching is locked while a
-session runs, for the same reason the channel map is. What the strip governs is
-named below it rather than explained in it: the rail lists Audio and Groups
-under the active profile's name, which is the whole of what a profile holds —
-see P7.
+persistence at all. Profiles are created, renamed, duplicated and deleted in
+their own section of the Settings page, first in the rail, and switching is
+locked while a session runs, for the same reason the channel map is. The
+section is not on screen while the channels are edited, because choosing a
+setup is done once a show and deleting one should not be a click away from the
+fields it would discard. What it governs is named in the rail rather than
+explained in it: Audio and Groups are listed under the active profile's name,
+which is the whole of what a profile holds — see P7.
 
 Three decisions worth keeping in view:
 
