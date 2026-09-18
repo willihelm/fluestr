@@ -164,7 +164,8 @@ pub struct Config {
     /// start, which is also how the effect of the vocabulary stops being
     /// measurable (P14).
     pub vocabulary: Option<String>,
-    /// Catalogue id of the speech model (P11), e.g. `small-q5_1`.
+    /// Catalogue id of the speech model (P11), e.g. `small-q5_1`, or
+    /// [`crate::models::CUSTOM`] for the file [`Config::model_path`] names.
     ///
     /// Beside the profiles rather than inside one, for the same reason the
     /// vocabulary is: which model a machine can run is a property of the
@@ -180,9 +181,10 @@ pub struct Config {
     /// Catalogue id of the speech-detection model.
     #[serde(default)]
     pub vad_model: Option<String>,
-    /// A `.bin` outside the catalogue. The fallback for a machine that will
-    /// never reach the internet: the operator carries the file in and says
-    /// where it is. Outranks [`Config::model`] when set.
+    /// The custom model's `.bin`, from outside the catalogue. The way in for a
+    /// machine that will never reach the internet: the operator carries the
+    /// file in and says where it is. Used when [`Config::model`] selects it,
+    /// and remembered while it does not.
     #[serde(default)]
     pub model_path: Option<String>,
     pub profiles: Vec<Profile>,

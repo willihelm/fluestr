@@ -26,6 +26,11 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tauri = { version = "2", features = [] }
+# The native file dialog, for the custom model's path. Used from Rust rather
+# than through its JavaScript package: the picker is one command like every
+# other one here, and the frontend keeps a single way of talking to the backend.
+tauri-plugin-dialog = "2"
+sysinfo = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
 sha2 = { workspace = true }

@@ -90,6 +90,26 @@ export interface OverloadEvent {
   dropped: number;
 }
 
+// What the app and its whisper workers are costing the machine, once a second
+// (P8). Mirrors `crates/app/src/resources.rs`.
+//
+// Sent whether or not a session runs: a machine that is already loaded is
+// something to see before pressing Start, and the fall after Stop is how the
+// memory a session held is seen to come back.
+export interface ResourceUsage {
+  /// Share of the whole machine in percent, so 100 means every core is busy.
+  /// Already divided by `cores` on the backend — the raw per-core figure that
+  /// the operating system reports reads as 800 % on eight busy workers.
+  cpu: number;
+  /// Resident bytes, summed over the app and its sidecars.
+  memory: number;
+  /// The machine's physical memory, so a gigabyte figure has a scale.
+  totalMemory: number;
+  /// How many processes the figures cover: the app plus one per worker.
+  processes: number;
+  cores: number;
+}
+
 // How the backend actually mapped a stream. Authoritative: the stream ids the
 // events carry are defined here, not by the UI's own copy of the setup.
 export interface RunningStream {
@@ -183,8 +203,9 @@ export interface StoredConfig {
   /// translation in `profiles.ts` is what has to survive reading one.
   model?: string | null;
   vadModel?: string | null;
-  /// A `.bin` outside the catalogue — the fallback for a machine that will
-  /// never reach the internet. Outranks `model` when set.
+  /// The custom model's `.bin`, from outside the catalogue — the way in for a
+  /// machine that will never reach the internet. Used when `model` is
+  /// `CUSTOM_MODEL`, and remembered while it is not.
   modelPath?: string | null;
   profiles: StoredProfile[];
 }
@@ -194,6 +215,11 @@ export interface StoredConfig {
 // Mirrors `crates/app/src/models.rs`.
 
 export type ModelKind = "speech" | "vad";
+
+/// The id the custom model is selected by — `models::CUSTOM` on the Rust side.
+/// It is not a catalogue entry: there is nothing to download, only a path to
+/// point at, and it sits in `model` so the picker has a single answer.
+export const CUSTOM_MODEL = "custom";
 
 /// One catalogue entry and what the machine has of it.
 export interface ModelStatus {
@@ -212,7 +238,14 @@ export interface ModelStatus {
 
 /// Where the model in use came from. `development` is the `.scratch/models`
 /// search that predates this package and only ever fires in a checkout.
-export type ModelSource = "managed" | "manual" | "environment" | "development";
+export type ModelSource = "managed" | "custom" | "environment" | "development";
+
+/// What the page has selected, as `list_models` wants it.
+export interface ModelSelection {
+  model: string | null;
+  vadModel: string | null;
+  modelPath: string | null;
+}
 
 export interface ModelsView {
   /// Shown on the page: nobody can be expected to know where macOS puts this.
@@ -256,7 +289,23 @@ export const loadConfig = () => invoke<StoredConfig>("load_config");
 export const saveConfig = (config: StoredConfig) => invoke<void>("save_config", { config });
 /// The catalogue, what is installed, and which model is actually in use — one
 /// call, because the answers are only useful together.
-export const listModels = () => invoke<ModelsView>("list_models");
+/// Opens the system file dialog on a `.bin`, and answers with what was chosen.
+///
+/// `current` is what the field holds; the dialog opens there rather than
+/// wherever the operating system last was. `null` back is a cancelled dialog
+/// rather than a failure — the likeliest outcome of opening a picker, and the
+/// caller leaves the field alone.
+export const pickModelFile = (current: string | null) =>
+  invoke<string | null>("pick_model_file", { current });
+
+/// The catalogue and what a session would start with.
+///
+/// The selection travels with the request rather than being read from the
+/// stored configuration: Settings saves through a debounce, so the file is a
+/// second behind the radio button that was just clicked, and the "in use" line
+/// would contradict the page around it.
+export const listModels = (selection?: ModelSelection) =>
+  invoke<ModelsView>("list_models", { selection });
 /// Starts (or resumes) a download. Resolves as soon as it is *running*; the
 /// `model-progress` events carry the rest, including its failure.
 export const downloadModel = (id: string) => invoke<void>("download_model", { id });
@@ -287,6 +336,10 @@ export const onOverload = (fn: (e: OverloadEvent) => void): Promise<UnlistenFn> 
 
 export const onSessionState = (fn: (e: SessionState) => void): Promise<UnlistenFn> =>
   listen<SessionState>("session-state", (e) => fn(e.payload));
+
+/// Once a second, for as long as the app is open.
+export const onResources = (fn: (e: ResourceUsage) => void): Promise<UnlistenFn> =>
+  listen<ResourceUsage>("resources", (e) => fn(e.payload));
 
 export const onModelProgress = (fn: (e: ModelProgress) => void): Promise<UnlistenFn> =>
   listen<ModelProgress>("model-progress", (e) => fn(e.payload));

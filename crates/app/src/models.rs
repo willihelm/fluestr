@@ -25,8 +25,8 @@
 //! directory never holds a `.bin` that is not a whole model.
 //!
 //! **Nothing here is required.** The catalogue is a convenience, not a gate: an
-//! operator on a machine that will never see the internet can point the app at
-//! a `.bin` they carried in on a stick ([`Selection::path`]), and the
+//! operator on a machine that will never see the internet can select the custom
+//! model and point the app at a `.bin` they carried in on a stick, and the
 //! development search in [`crate::worker`] still works. See [`resolve`] for the
 //! order those are tried in.
 
@@ -129,6 +129,14 @@ pub const CATALOGUE: &[Entry] = &[
 pub const DEFAULT_SPEECH: &str = "small-q5_1";
 pub const DEFAULT_VAD: &str = "silero-v5.1.2";
 
+/// The id the custom model is selected by.
+///
+/// Not a catalogue entry: there is nothing to download, and the file it points
+/// at is whatever the operator carried in. It lives in the same `model` field
+/// as a catalogue id so that the picker has one answer rather than a choice
+/// and an override that can disagree with it.
+pub const CUSTOM: &str = "custom";
+
 /// The models directory, inside the app's data directory.
 pub const DIR_NAME: &str = "models";
 
@@ -158,13 +166,15 @@ fn part_path(dir: &Path, id: &str) -> PathBuf {
 /// this module cares about.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection {
-    /// Catalogue id of the speech model.
+    /// Catalogue id of the speech model, or [`CUSTOM`] for the one `path`
+    /// points at.
     pub speech: Option<String>,
     /// Catalogue id of the VAD model.
     pub vad: Option<String>,
-    /// A `.bin` from outside the catalogue, for a machine that cannot reach
-    /// the internet at all. Wins over `speech` when set — somebody who typed a
-    /// path meant it.
+    /// The `.bin` the custom model points at, for a machine that cannot reach
+    /// the internet at all. Only used when `speech` is [`CUSTOM`]: the path is
+    /// remembered while another model is selected, the way a catalogue model
+    /// stays downloaded while it is not the one running.
     pub path: Option<String>,
 }
 
@@ -185,8 +195,8 @@ pub struct Resolved {
 pub enum Source {
     /// Downloaded by the model manager into the app's own directory.
     Managed,
-    /// A path the operator typed. The offline fallback.
-    Manual,
+    /// The custom model: a path the operator typed. The offline way in.
+    Custom,
     /// `INTERCOM2CHAT_MODEL`. Developer escape hatch, and it outranks
     /// everything so that a test run is never at the mercy of whatever the
     /// developer last clicked in the UI.
@@ -202,8 +212,7 @@ pub enum Source {
 ///
 /// 1. `INTERCOM2CHAT_MODEL` — a test that sets it must get it, whatever is
 ///    configured.
-/// 2. The manual path, if the operator set one. Typing a path is an explicit
-///    act and outranks a picker they may have left on a default.
+/// 2. The custom model's path, if the custom model is the one selected.
 /// 3. The selected catalogue model, if it is installed.
 /// 4. The default catalogue model, if it happens to be installed — a machine
 ///    that downloaded one and never opened the picker should still run.
@@ -232,7 +241,17 @@ pub fn resolve(dir: &Path, selection: &Selection) -> Result<Resolved> {
         });
     }
 
-    if let Some(path) = selection.path.as_deref().filter(|p| !p.trim().is_empty()) {
+    if selection.speech.as_deref() == Some(CUSTOM) {
+        let path = selection
+            .path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| {
+                anyhow!(
+                    "the custom model is selected but no file is set — say where it is in Settings"
+                )
+            })?;
         let path = PathBuf::from(path);
         if !path.is_file() {
             bail!(
@@ -243,7 +262,7 @@ pub fn resolve(dir: &Path, selection: &Selection) -> Result<Resolved> {
         return Ok(Resolved {
             speech: path,
             vad,
-            source: Source::Manual,
+            source: Source::Custom,
         });
     }
 
@@ -714,15 +733,41 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_path_beats_the_picker() {
+    fn the_custom_model_runs_when_it_is_the_one_selected() {
         if !environment_is_clean() {
             return;
         }
-        // The offline fallback: somebody carried a model in on a stick and
-        // typed where it is. That is an explicit act, and a picker left on a
-        // default must not override it.
+        // The way in without a network: somebody carried a model in on a stick,
+        // said where it is and picked it in the list like any other.
         let dir = temp_dir();
         install(&dir, DEFAULT_SPEECH);
+        let elsewhere = dir.join("carried-in.bin");
+        std::fs::write(&elsewhere, b"not really a model").unwrap();
+
+        let resolved = resolve(
+            &dir,
+            &Selection {
+                speech: Some(CUSTOM.into()),
+                vad: None,
+                path: Some(elsewhere.display().to_string()),
+            },
+        )
+        .expect("the custom model");
+
+        assert_eq!(resolved.speech, elsewhere);
+        assert_eq!(resolved.source, Source::Custom);
+    }
+
+    #[test]
+    fn a_remembered_custom_path_does_not_override_the_selected_model() {
+        if !environment_is_clean() {
+            return;
+        }
+        // Switching back to a catalogue model must actually switch: the path
+        // stays in the box the way a downloaded model stays on disk, and a
+        // remembered path that silently won again is the bug this id replaces.
+        let dir = temp_dir();
+        let expected = install(&dir, DEFAULT_SPEECH);
         let elsewhere = dir.join("carried-in.bin");
         std::fs::write(&elsewhere, b"not really a model").unwrap();
 
@@ -734,14 +779,34 @@ mod tests {
                 path: Some(elsewhere.display().to_string()),
             },
         )
-        .expect("the typed path");
+        .expect("the selected catalogue model");
 
-        assert_eq!(resolved.speech, elsewhere);
-        assert_eq!(resolved.source, Source::Manual);
+        assert_eq!(resolved.speech, expected);
+        assert_eq!(resolved.source, Source::Managed);
     }
 
     #[test]
-    fn a_typed_path_that_is_not_there_is_an_error_not_a_fallback() {
+    fn the_custom_model_without_a_path_says_what_is_missing() {
+        if !environment_is_clean() {
+            return;
+        }
+        let dir = temp_dir();
+        install(&dir, DEFAULT_SPEECH);
+
+        let err = resolve(
+            &dir,
+            &Selection {
+                speech: Some(CUSTOM.into()),
+                vad: None,
+                path: None,
+            },
+        )
+        .expect_err("a custom model with nothing to run");
+        assert!(err.to_string().contains("no file is set"));
+    }
+
+    #[test]
+    fn a_custom_path_that_is_not_there_is_an_error_not_a_fallback() {
         if !environment_is_clean() {
             return;
         }
@@ -754,7 +819,7 @@ mod tests {
         let err = resolve(
             &dir,
             &Selection {
-                speech: None,
+                speech: Some(CUSTOM.into()),
                 vad: None,
                 path: Some("/nowhere/model.bin".into()),
             },

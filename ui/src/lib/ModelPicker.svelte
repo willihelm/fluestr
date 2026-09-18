@@ -16,20 +16,23 @@
   // - **A download can be interrupted.** 600 MB on a venue's network is not a
   //   reliable proposition, so what arrived is kept and the button says
   //   "Resume" rather than pretending the attempt never happened.
-  // - **There is a way out without a network at all.** The manual path takes a
-  //   `.bin` carried in on a stick, and it outranks the picker — somebody who
-  //   typed a path meant it.
+  // - **There is a way out without a network at all.** The custom model takes a
+  //   `.bin` carried in on a stick. It sits in the list as one more choice
+  //   rather than as an override, so what is selected is what runs.
 
   import {
+    CUSTOM_MODEL,
     cancelDownload,
     downloadModel,
     listModels,
     onModelProgress,
+    pickModelFile,
     removeModel,
     type ModelProgress,
     type ModelsView,
     type ModelStatus,
   } from "./bridge";
+  import { untrack } from "svelte";
   import type { ModelChoice } from "./profiles";
   import type { Flag } from "./SettingsPage.svelte";
 
@@ -57,12 +60,22 @@
 
   const refresh = async () => {
     try {
-      view = await listModels();
+      // `untrack`, so that this reads the selection without subscribing to it:
+      // the path field updates on every keystroke, and a view per keystroke
+      // would spend half of a typed path telling the operator it is not a file.
+      // The explicit calls below are what says when the answer can change.
+      view = await listModels(
+        untrack(() => ({
+          model: models.model ?? null,
+          vadModel: models.vadModel ?? null,
+          modelPath: models.modelPath ?? null,
+        })),
+      );
       error = null;
     } catch (e) {
       // The one failure that is not about a particular model: the platform
       // would not say where the app may keep data, so nothing can be
-      // downloaded at all and the manual path is the only way through.
+      // downloaded at all and the custom model is the only way through.
       error = String(e);
     }
   };
@@ -94,9 +107,7 @@
 
   const speech = $derived(view?.models.filter((m) => m.kind === "speech") ?? []);
   const vad = $derived(view?.models.filter((m) => m.kind === "vad") ?? []);
-  /// An operator who typed a path has taken the choice out of the picker's
-  /// hands, and a picker that still looks live would be lying about what runs.
-  const overridden = $derived((models.modelPath ?? "").trim() !== "");
+  const custom = $derived((models.model ?? null) === CUSTOM_MODEL);
 
   const megabytes = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
 
@@ -141,10 +152,35 @@
   const select = (model: ModelStatus) => {
     if (model.kind === "speech") models.model = model.id;
     else models.vadModel = model.id;
-    // The selection is stored by `App.svelte`'s debounced save; refreshing is
-    // what makes the "in use" line agree with the radio button that was just
-    // clicked.
-    setTimeout(refresh, 0);
+    // What runs changed, so the "in use" line has to be asked again — with the
+    // choice just made, which is why it is sent rather than read from the file.
+    refresh();
+  };
+
+  const selectCustom = () => {
+    models.model = CUSTOM_MODEL;
+    refresh();
+  };
+
+  /// The system file dialog, opened on whatever the field already holds — a
+  /// second try after the wrong `.bin` starts where the first one ended.
+  /// Typing an absolute path from memory is the kind of thing that works on
+  /// the machine it was written on, and choosing a file is what the operator
+  /// is actually doing; the field stays editable for a path sent in an email.
+  const browse = async () => {
+    try {
+      const chosen = await pickModelFile(models.modelPath ?? null);
+      // A cancelled dialog leaves everything as it was, including a path that
+      // is already there: picking nothing is not the same as clearing it.
+      if (chosen === null) return;
+      models.modelPath = chosen;
+      // Choosing a file is choosing the custom model. Leaving the radio where
+      // it was would put a path in the box that changes nothing.
+      models.model = CUSTOM_MODEL;
+      await refresh();
+    } catch (e) {
+      error = String(e);
+    }
   };
 
   const active = (model: ModelStatus) =>
@@ -175,8 +211,8 @@
       <p class="inuse">
         <span class="ok">●</span>
         In use: <code>{view.active?.split("/").pop()}</code>
-        {#if view.source === "manual"}
-          — from the path set below
+        {#if view.source === "custom"}
+          — the custom model
         {:else if view.source === "environment"}
           — from <code>INTERCOM2CHAT_MODEL</code>
         {:else if view.source === "development"}
@@ -191,20 +227,20 @@
       {/if}
     {/if}
 
-    {#each [{ title: "Speech", list: speech }, { title: "Speech detection", list: vad }] as section (section.title)}
+    {#each [{ title: "Speech", list: speech, custom: true }, { title: "Speech detection", list: vad, custom: false }] as section (section.title)}
       <h3>{section.title}</h3>
       <ul>
         {#each section.list as model (model.id)}
           {@const state = progress.get(model.id)}
           {@const busy = state?.stage === "downloading" || state?.stage === "verifying"}
-          <li class:selected={active(model) && !overridden}>
+          <li class:selected={active(model)}>
             <div class="row">
               <label class="choice">
                 <input
                   type="radio"
                   name={section.title}
                   checked={active(model)}
-                  disabled={!model.installed || locked || overridden}
+                  disabled={!model.installed || locked}
                   onchange={() => select(model)}
                 />
                 <span class="name">
@@ -253,29 +289,56 @@
             {/if}
           </li>
         {/each}
+
+        <!-- One more choice in the same list rather than an override below it:
+             a path that silently beat the picker meant the selected model and
+             the running model could disagree, with nothing on the page saying
+             which had won. -->
+        {#if section.custom}
+          <li class:selected={custom}>
+            <div class="row">
+              <label class="choice">
+                <input
+                  type="radio"
+                  name={section.title}
+                  checked={custom}
+                  disabled={locked}
+                  onchange={selectCustom}
+                />
+                <span class="name">Custom model</span>
+              </label>
+            </div>
+
+            <p class="note">
+              A <code>.bin</code> from outside this list, for a machine that will never reach
+              the internet: carry it in and say where it is.
+            </p>
+
+            <div class="path">
+              <label for="custom-model-path">Path to a model file</label>
+              <div class="row">
+                <input
+                  id="custom-model-path"
+                  type="text"
+                  placeholder="/Volumes/Stick/ggml-small-q5_1.bin"
+                  bind:value={
+                    () => models.modelPath ?? "",
+                    (v) => (models.modelPath = v.trim() === "" ? null : v)
+                  }
+                  disabled={locked}
+                  onchange={refresh}
+                />
+                <button onclick={browse} disabled={locked}>Choose …</button>
+              </div>
+            </div>
+          </li>
+        {/if}
       </ul>
     {/each}
 
-    <h3>Offline fallback</h3>
-    <label class="path">
-      <span>Path to a model file</span>
-      <input
-        type="text"
-        placeholder="/Volumes/Stick/ggml-small-q5_1.bin"
-        bind:value={
-          () => models.modelPath ?? "", (v) => (models.modelPath = v.trim() === "" ? null : v)
-        }
-        disabled={locked}
-        onchange={() => setTimeout(refresh, 0)}
-      />
-    </label>
-    <p class="hint">
-      For a machine that will never reach the internet: carry the <code>.bin</code> in and
-      say where it is. It overrides the choice above.
-      {#if !error}
-        Downloads go to <code>{view.dir}</code>.
-      {/if}
-    </p>
+    {#if !error}
+      <p class="hint">Downloads go to <code>{view.dir}</code>.</p>
+    {/if}
   {:else if !error}
     <p class="hint">Reading the model directory …</p>
   {/if}
@@ -422,9 +485,17 @@
     display: flex;
     flex-direction: column;
     gap: 0.1rem;
+    margin-top: 0.35rem;
     font-size: 0.7rem;
     color: var(--text-dim);
     max-width: 34rem;
+  }
+
+  /* The field takes the width the button leaves: a path is long and the button
+     is two words, and a half-visible path is the one thing this row is for. */
+  .path input[type="text"] {
+    flex: 1;
+    min-width: 0;
   }
 
   input[type="text"] {

@@ -44,7 +44,7 @@ architectural decisions look arbitrary without them.
 | Frontend | **Svelte + TypeScript** |
 | Whisper | **Sidecar process** (crash-isolated), pool of workers |
 | Models | **Downloaded on first start**, selectable in settings |
-| UI scope, MVP | Chat view with a group sidebar, live search and filter, levels and stream health, vocabulary editor, a separate Settings page for channel setup, and an optional read-only LAN viewer in a browser |
+| UI scope, MVP | Chat view with a group sidebar, live search and filter, levels and stream health, vocabulary editor, global alert terms with visual attention, a separate Settings page for channel setup, and an optional read-only LAN viewer in a browser |
 | Not in the MVP | Export, markers, diarisation, cloud, interactive multi-user control |
 
 ---
@@ -75,6 +75,7 @@ for now, with the reason recorded in the package.
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
 | P16 | Read-only LAN viewer | **Open** | — |
+| P17 | Alert terms & visual attention | **Open** | — |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
@@ -592,8 +593,8 @@ faster than reading eight labels, and it is the same colour on the meter strip.
 **The interaction model.** Channel configuration belongs on the dedicated
 Settings page, not in the live chat view: input mapping, label, language and
 channel colour are edited there. Its sections — profiles, input, channels,
-vocabulary, groups — are cards with the page background between them rather
-than one continuous surface divided by hairlines: it asks five separate
+vocabulary, alerts, groups — are cards with the page background between them rather
+than one continuous surface divided by hairlines: it asks six separate
 questions, and sections that touch read as one long form in which it is easy to
 answer the wrong one. The frame is one `.panel` rule in `app.css`, not five
 copies in five components. Vocabulary is likewise managed on Settings,
@@ -601,6 +602,13 @@ but globally: one active vocabulary/prompt applies to all channels and has no
 per-channel assignment. Each channel has a user-editable colour; a deterministic
 palette colour is preselected when the channel is created, with enough contrast
 for labels, badges and level meters.
+
+The Alerts section holds one global list of terms and phrases. A match is
+case-insensitive and Unicode-normalised; a one-word term matches a word, while
+a multi-word entry matches that phrase, so an alert for `cue` does not fire on
+`rescue`. It applies to every channel and is separate from vocabulary: one
+helps Whisper choose words, the other reacts to words Whisper has already
+produced.
 
 The chat page has a left sidebar for groups, and selecting one focuses the
 chat and the meters on its member channels. The sidebar *selects*; groups are
@@ -621,6 +629,13 @@ communication** button clears every transcript, across every group and session,
 from both the visible chat and persistent storage. It does not change channel,
 group or Settings configuration. Because this is irreversible, it requires a
 confirmation dialog and is available only after capture has been stopped.
+
+Every alert match is highlighted in the chat bubble, including in an already
+open group window and the read-only browser viewer. On the desktop, a new match
+in an unfocused window requests native user attention (the platform's visible
+window/Dock flash): the main window for any channel, and a group window only
+when the matching channel belongs to that group. It fires once for a newly
+matched bubble rather than repeatedly while that bubble is rendered.
 
 Every group can be opened in its own window from the sidebar. This window is a
 live view of that group's channels: it receives existing history, incoming
@@ -683,10 +698,35 @@ one is audio lost on the way *into* the pipeline, the other is audio that was
 captured cleanly and then could not be kept up with, and they call for
 different fixes.
 
+Beside the per-stream meters there is now a **CPU and memory indicator** for
+the app itself, in the status bar next to the session line. It answers the
+question the overload counter only answers too late — the counter says the
+machine has already stopped keeping up, this says it is about to — and it is
+the figure that decides how many channels a given laptop can be given.
+
+Three things about it are worth knowing:
+
+- **It counts the workers too.** Decoding happens in sidecar processes, so the
+  app's own process is the smallest part of what the app costs. What is
+  reported is this process and everything descended from it, which is what an
+  operator would see in Activity Monitor if they thought to add it up — and
+  because that sum is not what any one row there shows, the indicator says so
+  in its tooltip rather than letting the difference look like a bug.
+- **The percentage is a share of the machine.** macOS counts one fully busy
+  core as 100 %, so eight busy workers report 800 % and read as a failure. The
+  figure is divided by the core count, so 100 % means there is nothing left,
+  and the bar turns at 75 % rather than at 90: a warning that arrives once
+  every core is saturated arrives after the segments have started dropping.
+- **It runs whether or not a session does.** The load before Start is what
+  decides how many channels are sensible, and the fall after Stop is how the
+  memory a session held is seen to come back. Sampled once a second, not at the
+  meters' 20 Hz — walking the process table is real work, and at that rate the
+  indicator would be part of the load it reports.
+
 **Outstanding:** peak hold, silence indicator, clipping warning, worker queue
-depth, and a global status bar with active workers, queue length and
-throughput. `WorkerPool` already exposes `workers()` and `queue_depth()` for
-it.
+depth, and the rest of a global status bar — active workers, queue length and
+throughput beside the CPU and memory figures. `WorkerPool` already exposes
+`workers()` and `queue_depth()` for it.
 
 **Accepted when:** a deliberately clipped channel and a silent one are both
 immediately recognisable in the UI.
@@ -753,7 +793,7 @@ session loads completely afterwards.
 Curated model list with URL, SHA256, size and expected latency. Download with
 progress, resume and **checksum verification** into the app data directory.
 Settings UI for selection; a clear "no model" state instead of silent
-malfunction. Manual path to a `.bin` as an offline fallback.
+malfunction. A custom model — a path to a `.bin` — as the offline way in.
 
 **Recommendation matching "latency first": `ggml-small-q5_1` as the default**,
 `base` as the faster and `large-v3-turbo` as the more accurate option — which
@@ -787,12 +827,19 @@ Four decisions worth keeping in view:
   because appending in that case would splice two copies together and only the
   checksum at the end would notice.
 - **Resolution has one order and it is written down** ([`models::resolve`]):
-  the environment variable, then the manual path, then the selected catalogue
-  model, then the default one if it happens to be installed, then the old
-  `.scratch/models` search. The manual path beats the picker on purpose —
-  somebody who typed a path meant it — and a typed path that is not there is an
-  error rather than a quiet fall-through, because falling back would run a
-  different model than the operator chose and never say so.
+  the environment variable, then the custom model if it is the one selected,
+  then the selected catalogue model, then the default one if it happens to be
+  installed, then the old `.scratch/models` search. The custom model is picked
+  in the same list as the catalogue ones, under the reserved id `custom`,
+  rather than being a path that silently overrode the picker: an override meant
+  the selected model and the running model could disagree with nothing on the
+  page saying which had won, and the path is now simply remembered while
+  another model runs. Its path is chosen through the system file dialog
+  (`pick_model_file`, `tauri-plugin-dialog` driven from Rust so the frontend
+  keeps one way of talking to the backend) and the field stays typable for a
+  path that arrived in an email. A custom path that is not there is an error
+  rather than a quiet fall-through, because falling back would run a different
+  model than the operator chose and never say so.
 - **"Not downloaded yet" is a different sentence from "no model at all".** The
   first is what a cancelled download leaves behind, and collapsing the two
   would send an operator looking for a problem they do not have.
@@ -822,22 +869,23 @@ segment length, hysteresis parameters from P3b, theme. Session presets: a named
 channel mapping including labels, colours and language configuration, plus named
 groups and their channel memberships — an engineer does not want to remap eight
 channels or rebuild their working views before every show. Vocabulary lists and
-the active vocabulary are global settings, not part of a channel mapping.
+the active vocabulary are global settings, not part of a channel mapping. Alert
+terms are likewise one global setting: the vocabulary and alerts of a house
+should not drift with each individual channel or profile.
 Channel colours are automatically assigned from a deterministic palette when no
 saved choice exists, then persist as explicit user-editable values. The Settings
 page is the home for all of this configuration. Device recognition via a stable
 id, not the display name.
 
 **Accepted when:** a preset, including channel colours and non-exclusive group
-memberships, survives a restart and a reconnect of the interface. ✔ for the
-identity half — the reconnect is verified against real hardware in
+memberships, and the global vocabulary and alert terms survive a restart and a
+reconnect of the interface. ✔ for the identity half — the reconnect is verified against real hardware in
 `capture_live.rs`, which is `#[ignore]`d because CI has no interface.
 
 **Done:** the presets, as **profiles**. `config.json` in the app's
 configuration directory holds a list of profiles — device, default language,
 channel map with labels, languages and colours, groups with their memberships —
-plus the active
-vocabulary beside them and which profile was last in use. It is read at
+plus the active vocabulary, alert terms and which profile was last in use. It is read at
 startup, written on every edit after a short debounce, and there is no Save
 button: a setup an operator believes is stored and is not is worse than no
 persistence at all. Profiles are created, renamed, duplicated and deleted in
@@ -996,6 +1044,27 @@ to show.
 measurably improves the word error rate of the technical terms against the
 baseline on every applicable channel.
 
+### P17 — Alert terms & visual attention — **Open**
+
+The global Settings alert list is compiled once when it changes and applied to
+each final transcript before it reaches any view. The resulting match ranges
+travel with the transcript event, so the main chat, detached group windows and
+the LAN viewer highlight exactly the same text rather than each implementing a
+slightly different matcher. Alert metadata lives only as long as the live chat,
+like the transcript itself while P10 is deferred.
+
+The desktop uses the platform's native attention request for a new match in an
+unfocused window. This is deliberately not an audible alarm: the request is
+for the window to flash, as requested, and must not add noise to an intercom
+environment. Main chat sees every match; a detached group window is alerted
+only for its current members. The browser viewer shows highlights but cannot
+ask another device's operating system to flash its window.
+
+**Accepted when:** adding a term in Settings survives a restart, a matching
+incoming transcript highlights the exact match in every applicable chat view,
+and an unfocused main or applicable group window requests attention once; a
+non-matching word and a partial-word false positive do neither.
+
 ### P16 — Read-only LAN viewer — **Open**
 
 The operator can optionally enable a local-network viewer from Settings. The
@@ -1006,10 +1075,10 @@ binds only to the explicitly selected interface, and requires the token for
 both the initial snapshot and the live event stream.
 
 The browser receives the complete operational view: all chat history and new
-transcripts, every channel and group, levels, stream health, session state and
-the Settings configuration in read-only form (but never the access token
-itself). It may locally search, filter and choose groups because those actions
-only change its own view. It has no controls for Start/Stop, clearing
+transcripts, including alert-term highlights, every channel and group, levels,
+stream health, session state and the Settings configuration in read-only form
+(but never the access token itself). It may locally search, filter and choose
+groups because those actions only change its own view. It has no controls for Start/Stop, clearing
 communication, editing channels, groups, vocabulary, profiles or any other
 setting. This is enforced twice: the viewer build renders no mutation controls,
 and the LAN server exposes no mutation endpoint or Tauri command, so hiding a
@@ -1043,7 +1112,7 @@ P0 Scaffolding
                                        │                 │
                                        v                 v
                             P6 Tauri API (commands/events)
-                              ├─> P7 Chat UI ──> P8 Health/levels ──> P9 Search/filter
+                              ├─> P17 Alert terms ──> P7 Chat UI ──> P8 Health/levels ──> P9 Search/filter
                               │
                               └─> P16 LAN viewer      (P10 SQLite: deferred)
                                        │
@@ -1056,13 +1125,13 @@ P0 Scaffolding
 in the log. *Reached, including the pool — what P5 still owes is a load test on
 live audio.*
 
-**Milestone B (usable MVP):** + P6, P7, P11, P12, P16. Eight channels, chat
-UI, model download and optional read-only LAN viewer. *P3 is done, eight
+**Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17. Eight channels,
+chat UI, model download, alert terms and optional read-only LAN viewer. *P3 is done, eight
 channels run, the chat view the eight make necessary — Settings page, group
 sidebar, bounded list — is in place, and the setup now survives the window as
 a profile, and the model download is done. What is left for this milestone is
-the settings proper (every threshold is still a constant in the code) and the
-viewer.*
+the settings proper (every threshold is still a constant in the code), alerts
+and the viewer.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P8, P9, P13. *P10 and P3b left it on 2026-09-18.*
@@ -1097,7 +1166,10 @@ In this order, with the reason each one comes where it does.
    what the window holds — smaller, and it runs into the chat's DOM window,
    since a hit may lie outside the rendered range. Worth deciding before it is
    built.
-5. **P16** — the optional LAN viewer. It must use the same event and snapshot
+5. **P17** — alert terms and visual attention. Match once before events fan out
+   so highlights agree across the main chat, group windows and viewer, then use
+   the native attention request only for affected, unfocused desktop windows.
+6. **P16** — the optional LAN viewer. It must use the same event and snapshot
    model as the app, but it introduces an access boundary the desktop app does
    not have: implement the revocable token and server-side read-only contract
    before exposing any browser URL.
@@ -1137,6 +1209,11 @@ In this order, with the reason each one comes where it does.
     connected, the picker offers both and each profile keeps the one it was
     set to (P12).
 12. Run the P14 reference load test, record p95 latency.
+13. Add `cue` to Alerts, unfocus the main window and speak “Cue fünf” → the
+    exact word is highlighted in the chat and the window requests attention;
+    “rescue” does neither. Repeat from a channel in an open group to verify its
+    separate window, and verify the browser viewer highlights without gaining a
+    control or requesting desktop attention (P17).
 
 Step 7 used to read "kill the app hard, restart → the session loads completely
 from SQLite". That goes with P10: the chat lives in the window, and killing the

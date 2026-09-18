@@ -43,6 +43,18 @@ just dev                # run the app
 just check              # everything CI runs as well
 ```
 
+Or, in a terminal that has never seen rustup — no `just`, nothing on `PATH`:
+
+```sh
+./scripts/run.sh              # build and start, hot reload
+./scripts/run.sh --release    # build the bundle and start that instead
+```
+
+The script finds the toolchain, installs the frontend dependencies if they are
+missing, builds the sidecar and opens the window. Models are downloaded in the
+app itself (P11); the two `just` lines above are the older way in and what the
+integration tests still read.
+
 Without the VAD model the app still runs, but whisper captions room noise and
 silence as well — as `[BREAK]`, `(music)`, or as plausible sentences that were
 never spoken. The sidecar warns when it starts without one.

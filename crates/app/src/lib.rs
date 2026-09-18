@@ -10,6 +10,7 @@
 pub mod config;
 pub mod models;
 pub mod pool;
+pub mod resources;
 pub mod session;
 pub mod worker;
 
@@ -20,7 +21,7 @@ use session::{
     TranscriptEvent,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -35,6 +36,8 @@ pub const EVENT_OVERLOAD: &str = "overload";
 pub const EVENT_SESSION_STATE: &str = "session-state";
 /// How far a model download has got (P11).
 pub const EVENT_MODEL_PROGRESS: &str = "model-progress";
+/// What the app and its workers are costing the machine, once a second (P8).
+pub const EVENT_RESOURCES: &str = "resources";
 
 /// Sends session output over the Tauri bridge.
 struct TauriEvents(AppHandle);
@@ -159,9 +162,81 @@ fn save_config(state: tauri::State<'_, AppState>, config: Config) -> Result<(), 
 /// together: "small is installed" means nothing without "and it is the one in
 /// use", and the page would otherwise render a picker and its active state
 /// from two round trips that can disagree.
+/// The choice the page is currently showing, when it differs from the stored
+/// one.
+///
+/// The Settings page saves through a debounce, so the file answers with what
+/// was selected a second ago: asked without this, the view would tell an
+/// operator who just clicked a radio button that a different model is running.
+/// The page knows what it is showing, so it says, and the banner and the radio
+/// can never disagree.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionArg {
+    model: Option<String>,
+    vad_model: Option<String>,
+    model_path: Option<String>,
+}
+
+/// Asks for a model file with the system's own file dialog.
+///
+/// `current` is what the field holds, and the dialog opens on it: a second
+/// attempt after picking the wrong `.bin` should not start again at whatever
+/// the operating system last remembered, which on a stick full of models is
+/// the whole walk back through the directory tree.
+///
+/// `None` is a cancelled dialog, which is not an error and must not read as
+/// one: it is the most likely outcome of opening a picker, and the path in
+/// Settings stays exactly as it was.
+///
+/// `async` on purpose. A synchronous command runs on the main thread, which is
+/// the thread the dialog has to be driven from — blocking it there is a hung
+/// window rather than a picker.
 #[tauri::command]
-fn list_models(state: tauri::State<'_, AppState>) -> Result<ModelsView, String> {
-    Ok(models::view(&state.models_dir()?, &state.selection()))
+async fn pick_model_file(app: AppHandle, current: Option<String>) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app
+        .dialog()
+        .file()
+        // A whisper model is a `.bin`, and a dialog that offers every file on
+        // the disk invites the one mistake this field can make. "All files"
+        // stays available in the dialog itself for anything unusual.
+        .add_filter("Whisper model", &["bin"]);
+
+    // Both halves are checked against the disk before they are used. A typed
+    // path that is half-finished or points at an unplugged stick is exactly
+    // when somebody reaches for the button, and a dialog asked to open
+    // somewhere that is not there opens somewhere unpredictable instead.
+    if let Some(current) = current.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let current = Path::new(current);
+        if let Some(dir) = current.parent().filter(|dir| dir.is_dir()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if current.is_file() {
+            if let Some(name) = current.file_name().and_then(|name| name.to_str()) {
+                dialog = dialog.set_file_name(name);
+            }
+        }
+    }
+
+    dialog.blocking_pick_file().map(|file| file.to_string())
+}
+
+#[tauri::command]
+fn list_models(
+    state: tauri::State<'_, AppState>,
+    selection: Option<SelectionArg>,
+) -> Result<ModelsView, String> {
+    let selection = match selection {
+        Some(arg) => models::Selection {
+            speech: arg.model,
+            vad: arg.vad_model,
+            path: arg.model_path,
+        },
+        None => state.selection(),
+    };
+    Ok(models::view(&state.models_dir()?, &selection))
 }
 
 /// Fetches one catalogue model, resuming an interrupted attempt.
@@ -373,6 +448,7 @@ fn stop_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = AppState::default();
             // A missing configuration directory is not a reason to refuse to
@@ -406,12 +482,24 @@ pub fn run() {
                 }
             }
             app.manage(state);
+
+            // The resource indicator runs for as long as the window does, not
+            // only while a session does: an operator opening the app on a
+            // machine that is already loaded should see that before they press
+            // Start, and the figures after Stop are how the memory a session
+            // held is seen to come back.
+            let handle = app.handle().clone();
+            resources::spawn(move |usage| {
+                let _ = handle.emit(EVENT_RESOURCES, usage);
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_version,
             load_config,
             save_config,
+            pick_model_file,
             list_models,
             download_model,
             cancel_download,

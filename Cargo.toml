@@ -44,6 +44,13 @@ futures-util = { version = "0.3", default-features = false }
 sha2 = "0.10"
 hex = "0.4"
 
+# Resource usage (P8)
+# Default features off: this reads processes and nothing else, and the disk,
+# network and component probes are work per sample that nothing here looks at.
+# `multithread` stays off too — the sampler must not put a thread pool next to
+# the audio threads once a second.
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+
 # Audio (P1/P2)
 cpal = "0.16"
 # Pulled in by cpal already; audio-core uses them directly for the CoreAudio

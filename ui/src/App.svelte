@@ -4,6 +4,7 @@
   import SettingsPage from "./lib/SettingsPage.svelte";
   import GroupSidebar from "./lib/GroupSidebar.svelte";
   import ClearCommunication from "./lib/ClearCommunication.svelte";
+  import ResourceMeter from "./lib/ResourceMeter.svelte";
   import { toConfig, validate, mutedChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
   import {
@@ -21,12 +22,14 @@
     loadConfig,
     onLevels,
     onOverload,
+    onResources,
     onSessionState,
     onTranscript,
     saveConfig,
     startSession,
     stopSession,
     type DeviceOption,
+    type ResourceUsage,
     type SessionState,
     type StreamLevel,
     type TranscriptEvent,
@@ -84,6 +87,11 @@
   });
   let messages = $state<TranscriptEvent[]>([]);
   let levels = $state(new Map<number, StreamLevel>());
+  // What the app and its whisper workers cost the machine (P8). `null` until
+  // the first sample, a second after the window opens: a CPU percentage needs
+  // two points in time, and showing 0 % in the meantime would be a lie told at
+  // exactly the moment the model is being loaded.
+  let usage = $state<ResourceUsage | null>(null);
   // Segments the decode queue had to give up on, per stream. Shown rather than
   // only logged: an operator who spoke and saw no text needs to be able to
   // tell "the app fell behind" from "the channel was not listening".
@@ -233,6 +241,9 @@
       onOverload((event) => {
         overloaded = new Map(overloaded).set(event.streamId, event.dropped);
       }),
+      onResources((event) => {
+        usage = event;
+      }),
       onSessionState((event) => {
         status = event;
         // A failed session is over — but its threads and its loaded model are
@@ -365,15 +376,16 @@
       <span class="dim">Press Start to transcribe all configured channels.</span>
     {/if}
 
-    {#if view === "chat"}
-      <div class="right">
+    <div class="right">
+      <ResourceMeter {usage} />
+      {#if view === "chat"}
         <ClearCommunication
           {running}
           empty={messages.length === 0}
           clear={clearCommunication}
         />
-      </div>
-    {/if}
+      {/if}
+    </div>
   </div>
 
   {#if view === "settings"}
@@ -479,6 +491,9 @@
   }
 
   .right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     margin-left: auto;
   }
 
