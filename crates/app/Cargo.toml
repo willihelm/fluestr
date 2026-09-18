@@ -38,6 +38,7 @@ hex = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 if-addrs = { workspace = true }
+unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 hound = { workspace = true }

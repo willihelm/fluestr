@@ -11,6 +11,12 @@ describe("cleanTerms", () => {
     // showing both would suggest they do different things.
     expect(cleanTerms(["Feuer", " feuer "])).toEqual(["Feuer"]);
   });
+
+  it("keeps one of a term entered in both umlaut spellings", () => {
+    // Two rows a keyboard can produce and nobody can tell apart on screen.
+    // The backend compiles them to one term, so the list must show one.
+    expect(cleanTerms(["B\u00fchne", "Bu\u0308hne"])).toEqual(["B\u00fchne"]);
+  });
 });
 
 describe("sameTerms", () => {

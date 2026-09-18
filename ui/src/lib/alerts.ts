@@ -19,14 +19,22 @@ import type { AlertMatch } from "./bridge";
 /// blanks are the normal state of the list being edited rather than a mistake
 /// — dropping them here is what keeps a half-typed row out of the file and out
 /// of the matcher.
+/// Two terms the compiled matcher would not tell apart
+/// (`crates/app/src/alerts.rs`).
+const same = (a: string, b: string): boolean =>
+  a.normalize("NFC").toLowerCase() === b.normalize("NFC").toLowerCase();
+
 export const cleanTerms = (terms: string[]): string[] => {
   const kept: string[] = [];
   for (const term of terms) {
     const trimmed = term.trim();
     if (trimmed === "") continue;
-    // Case-insensitively, because the matcher is: "Feuer" and "feuer" are one
-    // term, and showing both in the list suggests they are not.
-    if (kept.some((k) => k.toLowerCase() === trimmed.toLowerCase())) continue;
+    // Case-insensitively and normalised, because the matcher is both: "Feuer"
+    // and "feuer" are one term, and so are the two spellings of "Bühne" that
+    // differ only in whether the umlaut is its own character. Showing both in
+    // the list suggests they do different things — and in the second case the
+    // operator cannot even see which row is which.
+    if (kept.some((k) => same(k, trimmed))) continue;
     kept.push(trimmed);
   }
   return kept;

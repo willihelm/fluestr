@@ -61,6 +61,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
 # able to name them.
 if-addrs = "0.13"
 
+# Alert terms (P17)
+# Composed and decomposed umlauts are the same word to an operator, and a term
+# typed on one keyboard has to match a transcript produced by the decoder.
+# Default features off: this normalises, it does not segment graphemes.
+unicode-normalization = { version = "0.1", default-features = false }
+
 # Resource usage (P8)
 # Default features off: this reads processes and nothing else, and the disk,
 # network and component probes are work per sample that nothing here looks at.

@@ -12,6 +12,12 @@
 //! running a matcher of its own that agrees with the others until the day a
 //! term contains an umlaut.
 //!
+//! Terms and transcripts are normalised to NFC before they meet. "Bühne"
+//! typed on a Mac keyboard and "Bu\u{308}hne" as the decoder emitted it are the
+//! same word to the operator who wrote the list, and an alert list that
+//! silently does not fire is worse than no alert list — it is the failure
+//! nobody notices until the sentence that mattered has scrolled away.
+//!
 //! Matching is case-insensitive and on whole words only. Whole words because
 //! the false positive is what destroys the feature: an operator who has been
 //! shown three highlights that were the middle of another word stops looking
@@ -20,6 +26,7 @@
 //! for a list an operator writes themselves: they can add the compound.
 
 use serde::Serialize;
+use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
 /// Where one alert term was found, as **UTF-16 code-unit** offsets into
 /// [`crate::session::TranscriptEvent::text`].
@@ -42,8 +49,8 @@ pub struct AlertMatch {
 /// without alert terms pays nothing per transcript.
 #[derive(Debug, Clone, Default)]
 pub struct Matcher {
-    /// Lower-cased, trimmed, non-empty, without duplicates. Longest first, so
-    /// that where two terms overlap the longer highlight is the one found
+    /// Normalised, lower-cased, trimmed, non-empty, without duplicates.
+    /// Longest first, so that where two terms overlap the longer highlight is the one found
     /// first; the merge below makes the result independent of the order, but
     /// finding the long one first keeps the common case a single range.
     terms: Vec<String>,
@@ -62,7 +69,7 @@ impl Matcher {
     {
         let mut compiled: Vec<String> = Vec::new();
         for term in terms {
-            let term = term.as_ref().trim().to_lowercase();
+            let term: String = fold(term.as_ref().trim()).collect();
             if term.is_empty() || compiled.contains(&term) {
                 continue;
             }
@@ -92,20 +99,29 @@ impl Matcher {
             return Vec::new();
         }
 
-        // Lower-casing can change a string's length — "İ" becomes two chars —
-        // so the offsets of the lower-cased copy are not the offsets of the
-        // text the UI will render. `origin` maps every byte of the copy back
-        // to the byte in `text` that produced it, with a final entry for the
-        // end so that a match reaching the last character can be mapped too.
+        // Normalising and lower-casing both change a string's length — "u" and
+        // a combining diaeresis become one char, "İ" becomes two — so the
+        // offsets of the folded copy are not the offsets of the text the UI
+        // will render. `origin` maps every byte of the copy back to the byte in
+        // `text` that produced it, with a final entry for the end so that a
+        // match reaching the last character can be mapped too.
+        //
+        // The unit is a cluster and no longer a char, because composition is
+        // what a starter and the marks after it do *together*: every byte a
+        // cluster folds to maps back to where that cluster began, and a match
+        // can only start or end where one does — the terms went through the
+        // same fold, so nothing ever lands inside one.
         let mut lowered = String::with_capacity(text.len());
         let mut origin: Vec<usize> = Vec::with_capacity(text.len() + 1);
+        let mut cluster = 0;
         for (at, ch) in text.char_indices() {
-            for lower in ch.to_lowercase() {
-                lowered.push(lower);
-                while origin.len() < lowered.len() {
-                    origin.push(at);
-                }
+            if at > cluster && !is_combining_mark(ch) {
+                fold_into(&text[cluster..at], cluster, &mut lowered, &mut origin);
+                cluster = at;
             }
+        }
+        if cluster < text.len() {
+            fold_into(&text[cluster..], cluster, &mut lowered, &mut origin);
         }
         origin.push(text.len());
 
@@ -137,6 +153,22 @@ impl Matcher {
         }
 
         merged
+    }
+}
+
+/// One term or one cluster of a transcript, as the matcher compares them:
+/// composed, then lower-cased, then composed again — because lower-casing a
+/// composed character can hand back a decomposed one.
+fn fold(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.nfc().flat_map(char::to_lowercase).nfc()
+}
+
+/// Appends one folded cluster to `lowered`, recording `at` as the origin of
+/// every byte it produced.
+fn fold_into(cluster: &str, at: usize, lowered: &mut String, origin: &mut Vec<usize>) {
+    lowered.extend(fold(cluster));
+    while origin.len() < lowered.len() {
+        origin.push(at);
     }
 }
 
@@ -214,6 +246,53 @@ mod tests {
             String::from_utf16(&units[hit.start..hit.end]).unwrap(),
             "Cue fünf"
         );
+    }
+
+    /// "Bühne" as one character, and as "u" plus a combining diaeresis. The
+    /// decoder emits one, a keyboard produces the other, and the operator
+    /// cannot see which they typed.
+    const COMPOSED: &str = "Bühne";
+    const DECOMPOSED: &str = "Bu\u{308}hne";
+
+    #[test]
+    fn a_composed_term_matches_a_decomposed_transcript() {
+        let matcher = Matcher::new([COMPOSED]);
+        assert_eq!(
+            found(&matcher, &format!("Achtung {DECOMPOSED} frei")),
+            [DECOMPOSED]
+        );
+    }
+
+    #[test]
+    fn a_decomposed_term_matches_a_composed_transcript() {
+        let matcher = Matcher::new([DECOMPOSED]);
+        assert_eq!(
+            found(&matcher, &format!("Achtung {COMPOSED} frei")),
+            [COMPOSED]
+        );
+    }
+
+    #[test]
+    fn the_two_spellings_are_one_term() {
+        assert_eq!(Matcher::new([COMPOSED, DECOMPOSED]).len(), 1);
+    }
+
+    #[test]
+    fn a_decomposed_hit_is_still_a_whole_word() {
+        // The mapping is per cluster, so a boundary check that fell between a
+        // letter and its own accent would show up here as a false positive.
+        let matcher = Matcher::new([COMPOSED]);
+        assert!(found(&matcher, "Bu\u{308}hnenbild").is_empty());
+    }
+
+    #[test]
+    fn a_decomposed_hit_reports_the_range_it_occupies_on_screen() {
+        // Not the range the composed spelling would have had: the UI slices
+        // the text that arrived, which is two code units longer here.
+        let text = format!("Achtung {DECOMPOSED}");
+        let hit = Matcher::new([COMPOSED]).find(&text)[0];
+        assert_eq!(hit.start, "Achtung ".len());
+        assert_eq!(hit.end, hit.start + DECOMPOSED.encode_utf16().count());
     }
 
     #[test]

@@ -10,12 +10,15 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-18, after the stable device id — a
-profile now identifies its interface by something a rename cannot break, which
-is the second half of P12's "survives a restart *and* a reconnect". Before it,
-the same day: the model manager, so a fresh machine reaches its first
-transcription without a terminal. P10 and P3b were set aside on that day too;
-see each package for what that costs and what it changes.
+**Status of this document:** 2026-09-18, after Unicode normalisation closed
+P17 — a term and a transcript that spell the same umlaut differently now match,
+which was the last piece of the alert list and the one failure of it nobody
+would have noticed. Earlier the same day: the stable device id, so a profile
+identifies its interface by something a rename cannot break, which is the
+second half of P12's "survives a restart *and* a reconnect"; and before that
+the model manager, so a fresh machine reaches its first transcription without a
+terminal. P10 and P3b were set aside on that day too; see each package for what
+that costs and what it changes.
 
 ---
 
@@ -75,7 +78,7 @@ for now, with the reason recorded in the package.
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
 | P16 | LAN remote client | **Partial** | Served, driven and verified against a mock app; not yet exercised from a second machine on a real network. No authentication — by decision, see the package |
-| P17 | Alert terms & visual attention | **Partial** | Unicode normalisation of terms and transcripts |
+| P17 | Alert terms & visual attention | **Done** | — |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
@@ -1134,7 +1137,7 @@ to show.
 measurably improves the word error rate of the technical terms against the
 baseline on every applicable channel.
 
-### P17 — Alert terms & visual attention — **Partial**
+### P17 — Alert terms & visual attention — **Done**
 
 The global Settings alert list is compiled once when it changes and applied to
 each final transcript before it reaches any view. The resulting match ranges
@@ -1152,7 +1155,8 @@ a detached group window is alerted only for its current members and its own
 group preference. The browser viewer shows highlights but cannot ask another
 device's operating system to flash its window.
 
-**Done:** the list, the matcher and the main window's attention request. The
+**Done:** the list, the matcher, Unicode normalisation and the main window's
+attention request. The
 terms are a row each in a new Settings section beside the vocabulary, stored
 globally in `config.json`, and pushed to the backend when they change rather
 than read from that file — the file is a debounce behind the term just typed.
@@ -1178,11 +1182,20 @@ members, since it never claimed to be a view of the session, and always
 flashing when that group asks for it, because it *is* that group's view and
 there is no "while it is selected" to qualify.
 
-**Outstanding:** Unicode normalisation. A term and a transcript that differ
-only in composed and decomposed umlauts do not match today. The third view the
-match ranges travel for — the remote client (P16) — arrived with that package
-and needed no matcher of its own, which was the point of doing the matching
-once in the sink.
+Terms and transcripts are normalised to NFC before they meet, so "Bühne" typed
+on a Mac keyboard matches the same word with the umlaut as its own combining
+character. That fold runs per cluster rather than per character, because
+composing is what a letter and the marks after it do together; every byte the
+fold produces maps back to the cluster it came from, which is what keeps the
+UTF-16 ranges pointing at the text the operator will actually see — a
+decomposed word is two code units longer on screen than the composed spelling
+the term was written in. The editor drops the second spelling of a term for the
+same reason it drops the second casing: the matcher compiles them to one, and
+two rows nobody can tell apart suggest they do different things.
+
+The third view the match ranges travel for — the remote client (P16) — arrived
+with that package and needed no matcher of its own, which was the point of
+doing the matching once in the sink.
 
 **Accepted when:** adding a term in Settings survives a restart, a matching
 incoming transcript highlights the exact match in every applicable chat view,
@@ -1403,13 +1416,7 @@ In this order, with the reason each one comes where it does.
    what the window holds — smaller, and it runs into the chat's DOM window,
    since a hit may lie outside the rendered range. Worth deciding before it is
    built.
-5. **P17's last piece** — Unicode normalisation of terms and transcripts
-   before the match. All three views exist now and all three highlight the same
-   characters, because the match happens once in the sink every view's copy of
-   an event comes from. What is left is that a term and a transcript differing
-   only in composed and decomposed umlauts do not match, which is a bug an
-   operator would read as the alert list not working.
-6. **The remote, on a real network.** P16 is built and tested against a mock
+5. **The remote, on a real network.** P16 is built and tested against a mock
    app; what it has not had is a second machine, a house network and somebody
    working from it. That is the one part of its acceptance that cannot be
    written, and it comes before authentication — which is the obvious next
