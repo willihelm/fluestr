@@ -1,11 +1,17 @@
-//! Up to eight channels, end to end: microphone → rings → 16 kHz → segments →
-//! pool → chat.
+//! Every channel of one device, end to end: microphone → rings → 16 kHz →
+//! segments → pool → chat.
 //!
 //! The pool behind the segmenters was always indifferent to how many streams
 //! fed it; what was single-stream was everything in front of it. Now the
 //! session builds one pipeline per configured channel — ring, resampler,
 //! speech detector, segmenter — over **one** capture of **one** multichannel
 //! device, and they all submit into the same prioritised queue.
+//!
+//! How many channels that may be is the device's question, not this module's:
+//! nothing here caps the count, and a channel the interface does not have is
+//! muted rather than refused. What decides how many of them keep up is how
+//! many decodes run at once, which is [`crate::pool::PoolConfig::workers`] and
+//! an operator's to set.
 //!
 //! # Threads
 //!
@@ -57,19 +63,12 @@ const PUMP_INTERVAL: Duration = Duration::from_millis(20);
 /// Level events per second — one event carrying **all** streams, not one per
 /// stream.
 ///
-/// Anything faster is invisible to the eye, and eight separate events at this
-/// rate is 160 crossings of the IPC bridge per second, each one waking the
-/// WebView. Bundling them makes the cost independent of the channel count.
+/// Anything faster is invisible to the eye, and one event per stream at this
+/// rate is 20 crossings of the IPC bridge per second per channel, each one
+/// waking the WebView — on a patch of any size, the cost the channel count
+/// would drive. Bundling them makes it independent of the channel count
+/// instead, which is what lets the count go as high as the device does.
 const LEVEL_HZ: u32 = 20;
-
-/// The channel count the queue bound, the worker count and the latency budget
-/// were reasoned for.
-///
-/// Not a limit: exceeding it is allowed and only warned about, because the
-/// numbers behind it are reasoned defaults rather than measured ones until the
-/// P14 reference load test exists. An operator who patches nine channels
-/// should find out from the queue-depth display, not from a refusal to start.
-const BUDGETED_STREAMS: usize = 8;
 
 /// Above this, whisper's own judgement that the audio held no speech is
 /// trusted and the segment is dropped.
@@ -343,10 +342,15 @@ impl Session {
     /// slice` have no app directory and no configuration file to resolve
     /// against, and giving them a stub configuration would only mean the path
     /// they exercise is not the one the app runs.
+    ///
+    /// `workers` is how many sidecars decode in parallel, as the Settings page
+    /// set it. `None` is [`crate::pool::DEFAULT_WORKERS`] — the same fallback
+    /// and for the same reason as `models`.
     pub fn start(
         config: SessionConfig,
         events: Arc<dyn EventSink>,
         models: Option<crate::models::Resolved>,
+        workers: Option<usize>,
     ) -> Result<(Self, SessionState)> {
         if config.streams.is_empty() {
             bail!("no channels configured");
@@ -388,16 +392,6 @@ impl Session {
                 config.streams.len(),
                 info.name,
                 info.channels
-            );
-        }
-
-        // Counted after muting: it is the streams that actually decode that
-        // the queue bound and the worker count were reasoned for.
-        if live.len() > BUDGETED_STREAMS {
-            tracing::warn!(
-                streams = live.len(),
-                budgeted = BUDGETED_STREAMS,
-                "more streams than the queue bound and worker count were reasoned for"
             );
         }
 
@@ -445,8 +439,23 @@ impl Session {
                  run `just vad-model`"
             );
         }
-        let (pool, results) = WorkerPool::spawn(PoolConfig::new(binary, model, vad_model.clone()))
-            .context("starting the sidecar")?;
+        let mut pool_config = PoolConfig::new(binary, model, vad_model.clone());
+        if let Some(asked) = workers {
+            // Clamped rather than refused: this number reaches here from a
+            // file, and a session that will not start is a worse answer to a
+            // mistyped one than a session that starts with a count this
+            // version will serve.
+            pool_config.workers = crate::pool::clamp_workers(asked);
+            if pool_config.workers != asked {
+                tracing::warn!(
+                    asked,
+                    using = pool_config.workers,
+                    max = crate::pool::MAX_WORKERS,
+                    "the configured worker count is out of range"
+                );
+            }
+        }
+        let (pool, results) = WorkerPool::spawn(pool_config).context("starting the sidecar")?;
         let pool = Arc::new(pool);
         let ready = pool.ready().clone();
 

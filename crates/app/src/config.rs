@@ -215,6 +215,24 @@ pub struct Config {
     /// and remembered while it does not.
     #[serde(default)]
     pub model_path: Option<String>,
+    /// How many whisper sidecars decode in parallel, or `None` for
+    /// [`crate::pool::DEFAULT_WORKERS`].
+    ///
+    /// Beside the profiles like the model, and for the model's reason: how
+    /// many decodes a machine can run at once is a property of its GPU and its
+    /// memory, not of the production. Carrying a profile to a laptop must not
+    /// carry a worker count that laptop cannot serve.
+    ///
+    /// It is here rather than derived from the channel count because the two
+    /// are not the same question. Channels are not capped (see
+    /// `session::BUDGETED_STREAMS`); what decides how many of them can be
+    /// transcribed without the queue dropping segments is how many decodes run
+    /// at once, and only the machine in front of the operator can answer that.
+    ///
+    /// Clamped into range on use rather than on load, so a file naming a
+    /// number this version will not serve keeps saying what it asked for.
+    #[serde(default)]
+    pub workers: Option<usize>,
     /// The words that must not be missed (P17), one per entry.
     ///
     /// Beside the profiles, like the vocabulary: "Feuer" means the same thing
@@ -266,6 +284,7 @@ impl Default for Config {
             model: None,
             vad_model: None,
             model_path: None,
+            workers: None,
             alerts: Vec::new(),
             remote: crate::remote::RemoteConfig::default(),
             profiles: Vec::new(),
@@ -426,6 +445,7 @@ mod tests {
             model: Some("small-q5_1".into()),
             vad_model: Some("silero-v5.1.2".into()),
             model_path: None,
+            workers: Some(4),
             alerts: vec!["Feuer".into(), "Arzt".into()],
             remote: crate::remote::RemoteConfig {
                 enabled: true,
@@ -558,6 +578,8 @@ mod tests {
         let config = load(&path);
 
         assert!(config.alerts.is_empty());
+        // And it decodes with the default worker count rather than none.
+        assert_eq!(config.workers, None);
         assert_eq!(config.profiles[0].groups[0].members, vec![0]);
         assert!(!config.profiles[0].groups[0].flash);
         // And its window opens like any other one: a setup that suddenly put
@@ -697,6 +719,7 @@ mod tests {
                 "vadModel",
                 "version",
                 "vocabulary",
+                "workers",
             ]
         );
         assert_eq!(

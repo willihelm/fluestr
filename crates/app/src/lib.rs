@@ -4,7 +4,7 @@
 //! the UI as events, and owns the configuration file the Settings page is
 //! saved to (P12), and the model manager's downloads (P11). The rest of the
 //! command surface (`update_stream_config`, group CRUD, `search_session`) is
-//! still to come — what is here carries up to eight channels of one
+//! still to come — what is here carries every configured channel of one
 //! multichannel device through the pipeline into the chat.
 
 pub mod alerts;
@@ -227,6 +227,16 @@ impl AppState {
         self.config_path()
             .map(|path| config::load(&path).selection())
             .unwrap_or_default()
+    }
+
+    /// How many sidecars the operator asked to decode in parallel, or `None`
+    /// for the default. Read from the file at the moment a session starts, for
+    /// the same reason the model choice is: it is the setting as it stands
+    /// now, not as it stood when the app came up.
+    pub(crate) fn workers(&self) -> Option<usize> {
+        self.config_path()
+            .ok()
+            .and_then(|path| config::load(&path).workers)
     }
 }
 
@@ -453,7 +463,7 @@ pub(crate) fn start_session<R: Runtime>(
         alerts: Arc::clone(&state.alerts),
         history: Arc::clone(&state.history),
     });
-    match Session::start(config, events.clone(), models) {
+    match Session::start(config, events.clone(), models, state.workers()) {
         Ok((session, running)) => {
             *slot = Some(session);
             // Announced as well as returned. The view that pressed Start

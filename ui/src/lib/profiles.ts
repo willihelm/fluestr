@@ -24,6 +24,7 @@ import { restoreGroup, type Group } from "./groups";
 import { cleanTerms } from "./alerts";
 import {
   CONFIG_VERSION,
+  MAX_WORKERS,
   REMOTE_DEFAULT_PORT,
   type DeviceOption,
   type StoredConfig,
@@ -51,6 +52,17 @@ export const NO_REMOTE: StoredRemote = {
 export const clampPort = (port: number): number => {
   if (!Number.isFinite(port)) return REMOTE_DEFAULT_PORT;
   return Math.min(65535, Math.max(1024, Math.trunc(port)));
+};
+
+/// A worker count a session can actually be started with.
+///
+/// Applied on the way into the file rather than while typing, for the reason
+/// `clampPort` is: a box that fights somebody typing a number one digit at a
+/// time is a box nobody can fill in. A cleared box is `null` — "never chose",
+/// which is the default — and never zero, which is a pool with nothing in it.
+export const clampWorkers = (workers: number | null): number | null => {
+  if (workers === null || !Number.isFinite(workers)) return null;
+  return Math.min(MAX_WORKERS, Math.max(1, Math.trunc(workers)));
 };
 
 export interface Profile {
@@ -259,6 +271,10 @@ export const toStoredConfig = (
   model: models.model ?? null,
   vadModel: models.vadModel ?? null,
   modelPath: models.modelPath?.trim() ? models.modelPath.trim() : null,
+  // Clamped here as well as in the box, because the box can be left in the
+  // middle of a number: the window closing is the case the last-ditch save
+  // exists for, and the backend would rather not be handed a `0`.
+  workers: clampWorkers(models.workers ?? null),
   alerts: cleanTerms(alerts),
   // Not the object as the page holds it: the port is a number box, and a box
   // an operator has cleared holds `null` until it is left. This save can
@@ -277,6 +293,11 @@ export interface ModelChoice {
   model?: string | null;
   vadModel?: string | null;
   modelPath?: string | null;
+  /// How many sidecars decode in parallel. `null` is "never chose", which is
+  /// `DEFAULT_WORKERS`. It travels with the models rather than beside them
+  /// because it is the same kind of setting and edited on the same page: what
+  /// this machine can run, as opposed to what this production needs.
+  workers?: number | null;
 }
 
 /// What `load_config` returned, as the UI holds it.
@@ -308,6 +329,7 @@ export const fromStoredConfig = (
       model: stored.model ?? null,
       vadModel: stored.vadModel ?? null,
       modelPath: stored.modelPath ?? null,
+      workers: stored.workers ?? null,
     },
     // A file written before P17 has no alert list, which is the same thing as
     // an empty one: nobody has to use this.

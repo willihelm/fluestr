@@ -92,7 +92,9 @@ fn every_submitted_segment_produces_exactly_one_result() {
         return;
     };
     // Smaller than the batch below, so the drop policy is exercised too.
-    config.queue_capacity = 4;
+    // Pinned rather than derived: a real pool sizes its queue to five seconds
+    // of work, which this batch would never fill.
+    config.queue_capacity = Some(4);
 
     let (pool, results) = WorkerPool::spawn(config).expect("pool");
     const COUNT: u64 = 24;
@@ -170,7 +172,9 @@ fn eight_streams_share_the_queue_without_starving_each_other() {
         eprintln!("no model — skipping");
         return;
     };
-    config.queue_capacity = 8;
+    // Pinned for the same reason as above: the fairness this asserts is only
+    // visible in a queue the batch can actually overflow.
+    config.queue_capacity = Some(8);
 
     let (pool, results) = WorkerPool::spawn(config).expect("pool");
     const STREAMS: u16 = 8;

@@ -243,6 +243,11 @@ export interface StoredConfig {
   /// machine that will never reach the internet. Used when `model` is
   /// `CUSTOM_MODEL`, and remembered while it is not.
   modelPath?: string | null;
+  /// How many whisper sidecars decode in parallel, or `null` for
+  /// `DEFAULT_WORKERS`. Beside the profiles like the model, and for the
+  /// model's reason: how many decodes a machine can run at once is a property
+  /// of its GPU and its memory, not of the production.
+  workers?: number | null;
   /// The words that must not be missed (P17), one per entry. Beside the
   /// profiles like the vocabulary: "Feuer" means the same thing in every
   /// production. Optional because a file written before P17 has none.
@@ -575,6 +580,17 @@ export interface StoredRemote {
 
 /// What a configuration written before P16 is read as: off, on no address.
 export const REMOTE_DEFAULT_PORT = 8787;
+
+/// Sidecars decoding in parallel when nobody has chosen. Mirrors
+/// `DEFAULT_WORKERS` in `crates/app/src/pool.rs`: two, because parallel
+/// whisper instances share one GPU and start to slow each other down well
+/// before the channel count is reached.
+export const DEFAULT_WORKERS = 2;
+
+/// The most this page will ask for. Mirrors `MAX_WORKERS` in
+/// `crates/app/src/pool.rs`, which clamps again on the way into a session —
+/// each worker is a separate process holding its own copy of the model.
+export const MAX_WORKERS = 8;
 
 export const listInterfaces = () => call<Interface[]>("list_interfaces");
 export const remoteStatus = () => call<RemoteStatus>("remote_status");

@@ -48,16 +48,56 @@ use whisper_protocol::Response;
 ///
 /// Two, not eight: parallel whisper instances share one GPU and start to slow
 /// each other down well before the stream count is reached. This is the number
-/// to revisit against the P14 reference load test, not by intuition.
+/// to revisit against the P14 reference load test, not by intuition — and,
+/// since the channel count is not capped, the one an operator running more
+/// channels than this was reasoned for has to be able to raise from Settings
+/// without a rebuild. See [`MAX_WORKERS`].
 pub const DEFAULT_WORKERS: usize = 2;
 
-/// Segments that may wait for a worker before the pool starts dropping.
+/// The most workers a session may be started with.
 ///
-/// At ~320 ms a decode and two workers that is roughly five seconds of
-/// backlog. A transcript that is five seconds late has already lost most of
-/// its value on an intercom channel, so a deeper queue would not buy anything
-/// an operator could use.
-pub const DEFAULT_QUEUE_CAPACITY: usize = 32;
+/// The ceiling is memory and the GPU, not the queue: each worker is a separate
+/// whisper process holding its own copy of the model resident — ~600 MB for
+/// `small-q5_1` — and they contend for one GPU. Eight is already past the
+/// point where adding another is expected to help; what this actually stops is
+/// a mistyped number asking the machine for a hundred sidecars.
+pub const MAX_WORKERS: usize = 8;
+
+/// A worker count from the configuration file, brought into range.
+///
+/// The Settings page clamps too, so this is for the file a human has edited —
+/// and for the one a future version wrote. Zero is the case that matters: the
+/// pool refuses to spawn with no workers at all, which would turn a plausible
+/// typo into a session that will not start.
+pub fn clamp_workers(workers: usize) -> usize {
+    workers.clamp(1, MAX_WORKERS)
+}
+
+/// Segments that may wait per worker before the pool starts dropping.
+///
+/// The bound that matters is a **duration**, not a count: a transcript that is
+/// five seconds late has already lost most of its value on an intercom
+/// channel, so a deeper queue would not buy anything an operator could use —
+/// it would only turn a visible drop into text that arrives after the moment
+/// it described. At ~320 ms a decode, sixteen segments is about five seconds
+/// of work for one worker, which is where that number comes from.
+///
+/// Per worker rather than in total, because the whole queue drains in
+/// parallel: the same five seconds is 32 segments behind two workers and 128
+/// behind eight. A fixed total would quietly mean a different latency budget
+/// at every worker count — and, at the high end, would start discarding
+/// bursts the pool could have absorbed well inside the time it was willing to
+/// spend.
+pub const BACKLOG_PER_WORKER: usize = 16;
+
+/// How deep the queue is for a pool of `workers`.
+///
+/// Takes the workers that actually came up, not the number that was asked
+/// for: a sidecar that fails to start costs throughput, and a queue sized for
+/// a worker that is not there would hold segments nobody is going to decode.
+pub fn queue_capacity_for(workers: usize) -> usize {
+    BACKLOG_PER_WORKER * workers.max(1)
+}
 
 /// How long one decode may take before its worker counts as wedged.
 ///
@@ -113,7 +153,11 @@ pub struct PoolConfig {
     pub vad_model: Option<PathBuf>,
     pub workers: usize,
     pub threads_per_worker: usize,
-    pub queue_capacity: usize,
+    /// How many segments may wait, or `None` to derive it from the workers
+    /// that came up — see [`queue_capacity_for`], which is what every session
+    /// uses. Set only by the tests that need a queue small enough to overflow
+    /// on purpose.
+    pub queue_capacity: Option<usize>,
     pub decode_timeout: Duration,
 }
 
@@ -125,7 +169,7 @@ impl PoolConfig {
             vad_model,
             workers: DEFAULT_WORKERS,
             threads_per_worker: DEFAULT_THREADS_PER_WORKER,
-            queue_capacity: DEFAULT_QUEUE_CAPACITY,
+            queue_capacity: None,
             decode_timeout: DEFAULT_DECODE_TIMEOUT,
         }
     }
@@ -429,15 +473,22 @@ impl WorkerPool {
                 Err(_) => tracing::warn!("a worker-start thread panicked"),
             }
         }
+        // Sized here rather than in [`PoolConfig`] because this is the first
+        // point that knows how many workers there really are.
+        let capacity = config
+            .queue_capacity
+            .unwrap_or_else(|| queue_capacity_for(workers.len()));
+
         tracing::info!(
             workers = workers.len(),
             requested = config.workers,
+            queue = capacity,
             model = %ready.model,
             gpu = ready.gpu,
             "worker pool up"
         );
 
-        let queue = Arc::new(Queue::new(config.queue_capacity));
+        let queue = Arc::new(Queue::new(capacity));
         let (outcomes, results) = mpsc::channel();
         let live = Arc::new(AtomicUsize::new(workers.len()));
 
@@ -808,6 +859,29 @@ impl Reorder {
 mod tests {
     use super::*;
     use audio_core::LanguageMode;
+
+    /// The queue is a latency budget, so what has to hold as the pool grows
+    /// is the *time* it represents, not the number of segments in it. Eight
+    /// workers clearing 128 segments at ~320 ms apiece is the same five
+    /// seconds as two clearing 32 — and the old fixed 32 would have been 1.3.
+    #[test]
+    fn the_queue_holds_the_same_backlog_however_many_workers_there_are() {
+        let seconds = |workers: usize| queue_capacity_for(workers) as f32 * 0.32 / workers as f32;
+
+        assert_eq!(queue_capacity_for(2), 32, "unchanged at the default");
+        assert_eq!(queue_capacity_for(8), 128);
+        for workers in 1..=MAX_WORKERS {
+            assert!(
+                (seconds(workers) - 5.12).abs() < 0.01,
+                "{workers} workers: {} s of backlog",
+                seconds(workers)
+            );
+        }
+        // A pool cannot come up with no workers, but the queue is sized from
+        // what actually started rather than from what was asked for, so this
+        // must not be a zero-length queue that drops every segment.
+        assert_eq!(queue_capacity_for(0), BACKLOG_PER_WORKER);
+    }
 
     fn job(stream: u16, seq: u64) -> Job {
         Job {

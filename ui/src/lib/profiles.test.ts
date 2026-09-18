@@ -318,7 +318,12 @@ describe("the configuration as a whole", () => {
     expect(restored.profiles).toHaveLength(1);
     // "Never chose", which resolves to the recommended model — not
     // `undefined`, which would travel straight back into the next save.
-    expect(restored.models).toEqual({ model: null, vadModel: null, modelPath: null });
+    expect(restored.models).toEqual({
+      model: null,
+      vadModel: null,
+      modelPath: null,
+      workers: null,
+    });
   });
 
   it("keeps a file written before profiles had a default language readable", () => {
@@ -560,7 +565,7 @@ describe("adopting a configuration", () => {
       [profile],
       profile.key,
       "Standby, Cue, Go.",
-      { model: "small-q5_1", vadModel: "silero-v5.1.2", modelPath: null },
+      { model: "small-q5_1", vadModel: "silero-v5.1.2", modelPath: null, workers: 4 },
       ["Feuer", "Arzt"],
       { enabled: true, address: "192.168.178.27", port: 8787 },
     );
@@ -606,6 +611,21 @@ describe("adopting a configuration", () => {
     });
 
     expect(low.remote?.port).toBe(1024);
+  });
+
+  // The worker count comes from a number box too, and the same last-ditch save
+  // can catch it mid-edit. Zero is the one that matters: the pool refuses to
+  // spawn with nothing in it, so a session that would have started does not.
+  it("never writes a worker count the pool cannot spawn with", () => {
+    const profile = newProfile([], { name: "Probe", id: "probe" });
+    const write = (workers: number | null) =>
+      toStoredConfig([profile], profile.key, "", { workers }).workers;
+
+    expect(write(0)).toBe(1);
+    expect(write(99)).toBe(8);
+    expect(write(2.7)).toBe(2);
+    // Cleared is "never chose" — the default — and not a number at all.
+    expect(write(null)).toBeNull();
   });
 
   // Twice, because a translation can be stable on the second pass and not on

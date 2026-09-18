@@ -7,7 +7,9 @@ Baue eine Offline-Desktop-App für Windows und macOS, die mehrere Audioeingänge
 Primärer Use Case:
 - Intercom-Streams für Audio-Techniker.
 - Nahezu Live-Transkription.
-- Bis zu 8 gleichzeitige Streams.
+- Beliebig viele gleichzeitige Streams — so viele Kanäle, wie das Interface hat.
+  Wie viele davon mitkommen, entscheidet nicht die Kanalzahl, sondern wie viele
+  Dekodierungen parallel laufen; das ist in den Einstellungen einstellbar.
 - Häufigster Zielrechner: Apple Silicon.
 
 Nicht-Ziele für den ersten MVP:

@@ -22,6 +22,8 @@
 
   import {
     CUSTOM_MODEL,
+    DEFAULT_WORKERS,
+    MAX_WORKERS,
     cancelDownload,
     downloadModel,
     listModels,
@@ -343,6 +345,45 @@
       </ul>
     {/each}
 
+    <!-- The one setting on this page that is not about which file runs but
+         about how many copies of it do. It lives here rather than beside the
+         channel map because it is the same kind of question as the model: what
+         this machine can run, not what this production needs. -->
+    <h3>Decoding</h3>
+    <div class="workers">
+      <label for="worker-count">Parallel decodes</label>
+      <input
+        id="worker-count"
+        type="number"
+        min="1"
+        max={MAX_WORKERS}
+        step="1"
+        placeholder={String(DEFAULT_WORKERS)}
+        bind:value={
+          () => models.workers ?? null,
+          // Cleared is "never chose", which is the default — not zero, which
+          // would be a pool with nothing in it. Not clamped on the keystroke:
+          // somebody typing over a 2 passes through states this box has no
+          // business correcting. `profiles.ts` clamps on the way to the file.
+          (v) => (models.workers = v === null || Number.isNaN(v) ? null : v)
+        }
+        disabled={locked}
+      />
+      <p class="note">
+        How many whisper processes transcribe at once. The channel count is not
+        limited — this is what decides how many of them keep up, because a
+        segment that finds every worker busy waits, and a queue that stays full
+        drops the oldest. {DEFAULT_WORKERS} unless you change it.
+      </p>
+      <p class="note">
+        Raise it one step at a time and watch the channel meters for "not
+        transcribed", which is the queue giving up. Each worker is a separate
+        process holding its own copy of the model, and they share one GPU: past
+        a point another worker makes every decode slower rather than the
+        backlog shorter.
+      </p>
+    </div>
+
     {#if !error}
       <p class="hint">Downloads go to <code>{view.dir}</code>.</p>
     {/if}
@@ -505,6 +546,25 @@
     min-width: 0;
   }
 
+  .workers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    max-width: 34rem;
+  }
+
+  .workers label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+
+  /* Wide enough for two digits and the spinner, and no wider: a box the width
+     of the panel says a long number is expected here. */
+  .workers input[type="number"] {
+    width: 5rem;
+  }
+
+  input[type="number"],
   input[type="text"] {
     background: var(--bg);
     color: var(--text);
