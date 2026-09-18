@@ -21,12 +21,13 @@
   import { fromStoredConfig } from "./profiles";
   import { mergeHistory, toBubbles } from "./bubbles";
   import { attentionFor } from "./attention";
-  import { setWindowOnTop, setWindowTitle } from "./windows";
+  import { canPin, setWindowOnTop, setWindowTitle } from "./windows";
   import type { Channel } from "./streams";
   import {
     loadConfig,
     onCleared,
     onConfigChanged,
+    onReconnected,
     onLevels,
     onOverload,
     onSessionState,
@@ -194,7 +195,17 @@
 
     first().catch((e) => (failure = String(e)));
 
+    // A remote view that lost the socket missed everything said while it was
+    // gone, and nothing on the wire can tell it what. So it opens again: the
+    // same configuration read and the same snapshot, merged into what it still
+    // holds. In the app this never fires — an `invoke` has no connection to
+    // lose.
+    const reconnected = onReconnected(() => {
+      first().catch((e) => (failure = String(e)));
+    });
+
     return () => {
+      reconnected();
       for (const subscription of subscriptions) {
         subscription.then((unlisten) => unlisten()).catch(() => {});
       }
@@ -235,26 +246,32 @@
            the question is "keep this one where I can see it", and that is
            asked of the window in front of the operator, not of a page in
            another one. It is remembered per group, so the next time this group
-           is opened it comes up the same way. -->
-      <button
-        class="pin"
-        class:on={onTop}
-        onclick={pin}
-        aria-pressed={onTop}
-        title={onTop
-          ? "In front of other windows — click to let it back into the stack"
-          : "Keep this window in front of other windows"}
-      >
-        <!-- Drawn rather than an emoji: an emoji is somebody else's colour
-             and somebody else's weight at every font size, and this sits in a
-             row of dim monochrome text. `currentColor` means it is lit and
-             dimmed by the same rule as everything beside it. -->
-        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
-          <path
-            d="M10.23 1.55a.75.75 0 0 0-1.06 0L8.11 2.61l5.28 5.28 1.06-1.06a.75.75 0 0 0 0-1.06zM7.05 3.67 2.68 5.16a.75.75 0 0 0-.29 1.24l1.95 1.95-3.09 4.55a.3.3 0 0 0 .41.41l4.55-3.09 1.95 1.95a.75.75 0 0 0 1.24-.29l1.49-4.37z"
-          />
-        </svg>
-      </button>
+           is opened it comes up the same way.
+
+           Only where there are windows to be in front of (P16). Hidden rather
+           than disabled in a browser tab: a control that cannot do anything is
+           worse than no control, and there is nothing here to fix. -->
+      {#if canPin}
+        <button
+          class="pin"
+          class:on={onTop}
+          onclick={pin}
+          aria-pressed={onTop}
+          title={onTop
+            ? "In front of other windows — click to let it back into the stack"
+            : "Keep this window in front of other windows"}
+        >
+          <!-- Drawn rather than an emoji: an emoji is somebody else's colour
+               and somebody else's weight at every font size, and this sits in a
+               row of dim monochrome text. `currentColor` means it is lit and
+               dimmed by the same rule as everything beside it. -->
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
+            <path
+              d="M10.23 1.55a.75.75 0 0 0-1.06 0L8.11 2.61l5.28 5.28 1.06-1.06a.75.75 0 0 0 0-1.06zM7.05 3.67 2.68 5.16a.75.75 0 0 0-.29 1.24l1.95 1.95-3.09 4.55a.3.3 0 0 0 .41.41l4.55-3.09 1.95 1.95a.75.75 0 0 0 1.24-.29l1.49-4.37z"
+            />
+          </svg>
+        </button>
+      {/if}
 
       {#if failure}
         <span class="error">{failure}</span>

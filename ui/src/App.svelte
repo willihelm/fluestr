@@ -10,10 +10,13 @@
   import { forgetChannels, visibleStreams } from "./lib/groups";
   import {
     adoptDeviceIds,
+    canonical,
     connectedDevice,
     fromStoredConfig,
     newProfile,
+    reuseKeys,
     toStoredConfig,
+    NO_REMOTE,
     type ModelChoice,
     type Profile,
   } from "./lib/profiles";
@@ -21,13 +24,19 @@
   import { cleanTerms, sameTerms } from "./lib/alerts";
   import { mergeHistory, toBubbles } from "./lib/bubbles";
   import { attentionFor } from "./lib/attention";
+  import { beforeLeaving, whenEditingEnds } from "./lib/editing";
   import {
     clearCommunication as clearOnBackend,
     closeGroupWindows,
+    connectionState,
+    isRemote,
     listDevices,
     loadConfig,
     onCleared,
+    onConfigChanged,
+    onConnection,
     onGroupOnTop,
+    onReconnected,
     onLevels,
     onOverload,
     onResources,
@@ -42,6 +51,9 @@
     type DeviceOption,
     type ResourceUsage,
     type SessionState,
+    type Connection,
+    type StoredConfig,
+    type StoredRemote,
     type StreamLevel,
     type TranscriptEvent,
   } from "./lib/bridge";
@@ -81,6 +93,18 @@
   // the recommended one — so a fresh machine is not asked a question it has no
   // way to answer yet.
   let models = $state<ModelChoice>({});
+  // Whether this machine serves the browser peer, and on which address (P16).
+  // Beside the models rather than inside a profile: which network the machine
+  // is on belongs to the machine and to the house it is standing in, not to the
+  // production being carried to it. The listener follows this through
+  // `save_config` — there is no separate command to switch it on, because the
+  // configuration has one writer.
+  let remote = $state<StoredRemote>({ ...NO_REMOTE });
+  // Whether this view can still reach the app. Always "connected" in the app's
+  // own windows; on a remote it is the difference between a live chat and a
+  // frozen picture of one, which has to be said rather than looked like
+  // nothing being said.
+  let connection = $state<Connection>(connectionState());
   // Nothing is saved before the configuration has been read: an empty UI
   // saving itself over a file it has not seen yet is how a setup is lost.
   let loaded = $state(false);
@@ -190,13 +214,25 @@
       let stored = null;
       try {
         stored = await loadConfig();
+        // What the app has, before this view has changed anything. Without
+        // this seed the first save writes the file back to itself, which every
+        // other view then hears as a change worth adopting — a burst of work
+        // on every window for a configuration nobody touched.
+        agreed = canonical(stored);
       } catch (e) {
         saveError = String(e);
       }
 
       const restored = stored
         ? fromStoredConfig(stored)
-        : { profiles: [], activeKey: null, vocabulary: null, models: {}, alerts: [] };
+        : {
+            profiles: [],
+            activeKey: null,
+            vocabulary: null,
+            models: {},
+            alerts: [],
+            remote: { ...NO_REMOTE },
+          };
 
       if (restored.profiles.length === 0) {
         // First start: one profile on the default device, with one channel, so
@@ -224,24 +260,33 @@
       if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
       models = restored.models;
       alerts = restored.alerts;
+      remote = restored.remote;
 
       loaded = true;
 
-      // What the backend already holds. Normally nothing — this window is the
-      // one that has been here all along — but a reloaded WebView comes back
-      // to the chat it was showing instead of to an empty one, and it is the
-      // same catch-up a group window opens with, from the same place.
-      const snapshot = await sessionSnapshot();
-      messages = mergeHistory(snapshot.transcripts, messages);
-      sessionStarts = new Map([
-        ...snapshot.sessions.map((s): [number, number] => [s.sessionId, s.startedAtMs]),
-        ...sessionStarts,
-      ]);
-      if (status.state === "idle" && snapshot.state) status = snapshot.state;
+      await catchUp();
     };
 
     first().catch((e) => (status = { state: "failed", message: String(e) }));
   });
+
+  /// What the backend already holds.
+  ///
+  /// Normally nothing — this window is the one that has been here all along —
+  /// but a reloaded WebView comes back to the chat it was showing instead of
+  /// to an empty one, a remote page opens in the middle of a show, and a
+  /// remote that lost its socket missed whatever was said while it was gone.
+  /// All three are the same catch-up, from the same place, merged into
+  /// whatever is already held.
+  const catchUp = async () => {
+    const snapshot = await sessionSnapshot();
+    messages = mergeHistory(snapshot.transcripts, messages);
+    sessionStarts = new Map([
+      ...snapshot.sessions.map((s): [number, number] => [s.sessionId, s.startedAtMs]),
+      ...sessionStarts,
+    ]);
+    if (status.state === "idle" && snapshot.state) status = snapshot.state;
+  };
 
   // A group window is a view onto a group of the profile that is running, and
   // the stream ids its transcripts carry are positions in *that* profile's
@@ -265,22 +310,123 @@
   // believes is stored and is not is worse than no persistence at all.
   // Debounced, so typing a label is one write; the write itself is atomic on
   // the backend, so an unlucky moment costs nothing.
+  /// The configuration this view knows the app already has, in a form that
+  /// does not depend on field order — see `canonical`.
+  ///
+  /// One value, doing the whole of the last-write-wins arrangement (P16), and
+  /// the rule it enforces is: **never write what is already there**.
+  ///
+  /// It is seeded from the file at startup, set to what is written on every
+  /// save, and set to what arrives on every adopted save. The save effect then
+  /// skips a configuration that equals it. Without that, adopting is itself a
+  /// state change, which schedules a save, which is announced to the peer that
+  /// sent it, which adopts it in turn — two views writing the same
+  /// configuration at each other several times a second, forever, with every
+  /// field on the Settings page rebuilt under the cursor on each pass.
+  ///
+  /// A guard rather than a flag on the adoption, because it is true of any
+  /// save and not only of that one: an edit that ends up where it started is
+  /// not a change either.
+  let agreed: string | null = null;
+
+  /// Writes a configuration, unless it is already what the app has.
+  ///
+  /// The guard is what keeps two views from bouncing one configuration off
+  /// each other: adopting another peer's save is a state change like any
+  /// other and schedules a save of its own, and writing that back is the start
+  /// of a conversation nothing ends. The backend refuses a no-op save as well,
+  /// which is what makes that true of every peer rather than only of this one
+  /// — this half is here so the round trip is not made at all.
+  const write = (config: StoredConfig) => {
+    const written = canonical(config);
+    if (written === agreed) return;
+
+    // Set before the write, not after it: the echo can arrive while the save
+    // is still resolving, and an echo that is not recognised is this page
+    // adopting its own keystroke. A save that then fails says so in the strip
+    // at the top, and no echo follows it, because nothing was written.
+    agreed = written;
+    saveConfig(config)
+      .then(() => (saveError = null))
+      .catch((e) => {
+        saveError = String(e);
+        // And taken back again, or this view believes the app holds something
+        // it refused: the save effect skips a configuration that equals
+        // `agreed`, so the edit would sit here unwritten until some unrelated
+        // field changed. Only if nothing has been written since — a later save
+        // owns the value now, and this one is simply the older failure.
+        if (agreed === written) agreed = null;
+      });
+  };
+
+  /// The configuration as this view currently holds it, for the one save that
+  /// cannot wait for anything — see `beforeLeaving`.
+  let latest: StoredConfig | null = null;
+
   $effect(() => {
     if (!loaded || activeKey === null) return;
 
     // Built here rather than in the timer: this is what reads every field, and
     // reading them is what makes this effect run again when one of them
     // changes.
-    const config = toStoredConfig(profiles, activeKey, vocabulary, models, alerts);
+    const config = toStoredConfig(profiles, activeKey, vocabulary, models, alerts, remote);
+    latest = config;
 
+    let stopWaiting: (() => void) | null = null;
     const timer = setTimeout(() => {
-      saveConfig(config)
-        .then(() => (saveError = null))
-        .catch((e) => (saveError = String(e)));
+      // Not while a field is being typed into. Writing the configuration is
+      // what every view rebuilds its Settings page from, and rebuilding the
+      // field under the cursor is how a label comes to be typed one character
+      // at a time. Leaving the field is the operator saying they are done with
+      // it, and it is something they were going to do anyway — see
+      // `editing.ts`. A change that is not typed at all — a colour, a
+      // language, a device — saves as soon as the debounce is up, because
+      // there is nothing half-finished about it.
+      stopWaiting = whenEditingEnds(() => write(config));
     }, SAVE_DEBOUNCE_MS);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      // Another keystroke: the wait is re-armed below with the newer
+      // configuration rather than saving the one it was holding.
+      stopWaiting?.();
+    };
   });
+
+  // The net under that rule. A window closed with the cursor still in a label
+  // would otherwise take the label with it, and the one thing the Settings
+  // page must never do is lose a setup the operator believes is stored.
+  $effect(() => beforeLeaving(() => latest && write(latest)));
+
+  /// Takes on a configuration somebody else wrote.
+  ///
+  /// The configuration is last-write-wins and every save is announced to every
+  /// view, so this is the half that makes the side which *lost* see it happen
+  /// rather than sit on a stale form until its next keystroke overwrites the
+  /// other peer's work.
+  ///
+  /// Keys are carried over by position — see `reuseKeys`. Without that, a
+  /// channel renamed on the remote would come back as an all-new profile with
+  /// an all-new active key, which this window would read as somebody switching
+  /// production: the selected group would fall back to the all-channels view,
+  /// every detached group window would close, and every field on the Settings
+  /// page would be torn down and rebuilt under the cursor.
+  const adopt = (stored: StoredConfig) => {
+    const incoming = canonical(stored);
+    // Its own echo. Every save comes back this way, including this window's,
+    // and it has been through the backend — so it is compared in a form that
+    // does not depend on which order the two sides write their fields in.
+    if (incoming === agreed) return;
+    agreed = incoming;
+
+    const restored = fromStoredConfig(stored);
+    profiles = reuseKeys(restored.profiles, profiles);
+    activeKey = profiles[stored.active]?.key ?? profiles[0]?.key ?? null;
+    if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
+    models = restored.models;
+    alerts = restored.alerts;
+    remote = restored.remote;
+  };
 
   // The compiled alert list lives on the backend, where every transcript is
   // matched against it before it reaches any view (P17). Pushed from here
@@ -358,6 +504,11 @@
         if (!target || target.onTop === onTop) return;
         target.onTop = onTop;
       }),
+      // A save made somewhere else: the LAN remote (P16), and in principle any
+      // other view that writes the configuration. The group windows have
+      // followed this all along; the main window has to as well now that it is
+      // no longer the only writer.
+      onConfigChanged(adopt),
       onSessionState((event) => {
         status = event;
         noteSession(event);
@@ -380,7 +531,18 @@
       status = { state: "failed", message: `event bridge unavailable: ${e}` };
     });
 
+    // A remote page that lost the socket missed everything said while it was
+    // gone. It opens again: the same snapshot, merged into what it still
+    // holds. In the app this never fires — an `invoke` has no connection to
+    // lose.
+    const reconnected = onReconnected(() => {
+      catchUp().catch((e) => console.warn("the chat was not caught up:", e));
+    });
+    const watching = onConnection((state) => (connection = state));
+
     return () => {
+      reconnected();
+      watching();
       for (const subscription of subscriptions) {
         subscription.then((unlisten) => unlisten()).catch(() => {});
       }
@@ -518,6 +680,21 @@
     {/if}
   </header>
 
+  <!-- A remote page that has lost the socket is a picture of a chat, not a
+       chat: nothing new arrives and nothing pressed here reaches the session.
+       Said at the top of the window rather than left to be inferred from
+       silence, which on an intercom is also what a quiet room looks like
+       (P16). Never shown in the app, where there is no connection to lose. -->
+  {#if isRemote && connection !== "connected"}
+    <div class="bar offline">
+      <span class="error">●</span>
+      <span>
+        Not connected to Intercom2Chat. What is on screen is what arrived
+        before the connection went; it is being retried.
+      </span>
+    </div>
+  {/if}
+
   <div class="bar status">
     {#if status.state === "running"}
       <span class="ok">●</span>
@@ -561,6 +738,7 @@
       bind:vocabulary
       bind:alerts
       bind:models
+      bind:remote
       {deviceChannels}
       locked={running || busy}
       {saveError}
@@ -674,6 +852,12 @@
   .status {
     font-size: 0.85rem;
     gap: 0.5rem;
+  }
+
+  .offline {
+    font-size: 0.85rem;
+    gap: 0.5rem;
+    background: #3a1f1f;
   }
 
   .empty {

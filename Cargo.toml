@@ -44,6 +44,23 @@ futures-util = { version = "0.3", default-features = false }
 sha2 = "0.10"
 hex = "0.4"
 
+# The LAN remote client (P16)
+# The browser peer is served over HTTP and driven over one WebSocket. axum
+# because the socket and the static build share a router, and because hyper is
+# already in the tree behind reqwest — the model downloads brought it.
+# Default features off: this serves one page and one socket on a house network,
+# and nothing here wants form, multipart or JSON extractors.
+axum = { version = "0.8", default-features = false, features = [
+    "http1",
+    "tokio",
+    "ws",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
+# Which addresses this machine can be reached on. The operator picks one
+# deliberately — the listener never binds 0.0.0.0 — so the picker has to be
+# able to name them.
+if-addrs = "0.13"
+
 # Resource usage (P8)
 # Default features off: this reads processes and nothing else, and the disk,
 # network and component probes are work per sample that nothing here looks at.

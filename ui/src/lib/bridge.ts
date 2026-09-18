@@ -1,4 +1,10 @@
-// Typed view of the Tauri bridge.
+// Typed view of the backend.
+//
+// Every call here goes through one command layer on the other side
+// (`crates/app/src/commands.rs`), and reaches it over whichever transport this
+// frontend is running on: an `invoke` in the app's own WebView, a WebSocket
+// frame from a browser served over the LAN (P16). See `transport.ts` — nothing
+// below this line knows which of the two it is.
 //
 // Hand-written for now. P6 still owes types generated from the Rust structs
 // with `ts-rs` or `specta`, which is what stops the two sides drifting apart —
@@ -7,7 +13,10 @@
 // field names.
 
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
+import { call, emit, isRemote, on } from "./transport";
+import { flashPage } from "./flash";
+import { closeGroupTabs, openGroupTab } from "./windows";
 
 /// One language whisper can be given, as the sidecar reports it. `code` is
 /// ISO 639-1 ("de"), `name` is whisper's own spelling ("german").
@@ -238,6 +247,11 @@ export interface StoredConfig {
   /// profiles like the vocabulary: "Feuer" means the same thing in every
   /// production. Optional because a file written before P17 has none.
   alerts?: string[];
+  /// The LAN remote client (P16): whether it is served, and on which address.
+  /// Optional because a file written before it existed has none, which reads
+  /// as "off" — a version that never offered a listener must not be read as
+  /// having asked for one.
+  remote?: StoredRemote;
   profiles: StoredProfile[];
 }
 
@@ -311,13 +325,13 @@ export interface ModelProgress {
   message: string | null;
 }
 
-export const appVersion = () => invoke<string>("app_version");
+export const appVersion = () => call<string>("app_version");
 /// The stored configuration, or an empty one. Only fails when the app cannot
 /// work out where its configuration directory is — which is also the case in
 /// which nothing can be saved, so it has to be visible.
-export const loadConfig = () => invoke<StoredConfig>("load_config");
+export const loadConfig = () => call<StoredConfig>("load_config");
 /// Writes the whole configuration, atomically on the other side.
-export const saveConfig = (config: StoredConfig) => invoke<void>("save_config", { config });
+export const saveConfig = (config: StoredConfig) => call<void>("save_config", { config });
 /// The catalogue, what is installed, and which model is actually in use — one
 /// call, because the answers are only useful together.
 /// Opens the system file dialog on a `.bin`, and answers with what was chosen.
@@ -329,6 +343,15 @@ export const saveConfig = (config: StoredConfig) => invoke<void>("save_config", 
 export const pickModelFile = (current: string | null) =>
   invoke<string | null>("pick_model_file", { current });
 
+/// Whether there is a file dialog to open at all.
+///
+/// One of the three things that stay on the desktop (P16): the picker is the
+/// host machine's, and a browser on another machine has no view of the disk
+/// the model would have to be on. The remote's way in is the managed
+/// downloads, and the path field is still editable — what it cannot offer is
+/// the button.
+export const canPickModelFile = !isRemote;
+
 /// The catalogue and what a session would start with.
 ///
 /// The selection travels with the request rather than being read from the
@@ -336,19 +359,19 @@ export const pickModelFile = (current: string | null) =>
 /// second behind the radio button that was just clicked, and the "in use" line
 /// would contradict the page around it.
 export const listModels = (selection?: ModelSelection) =>
-  invoke<ModelsView>("list_models", { selection });
+  call<ModelsView>("list_models", { selection });
 /// Starts (or resumes) a download. Resolves as soon as it is *running*; the
 /// `model-progress` events carry the rest, including its failure.
-export const downloadModel = (id: string) => invoke<void>("download_model", { id });
+export const downloadModel = (id: string) => call<void>("download_model", { id });
 /// Stops a download and keeps what arrived, so pressing download again
 /// continues instead of starting over.
-export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
-export const removeModel = (id: string) => invoke<void>("remove_model", { id });
+export const cancelDownload = (id: string) => call<void>("cancel_download", { id });
+export const removeModel = (id: string) => call<void>("remove_model", { id });
 /// Compiles the alert list on the backend, where every transcript is matched
 /// against it. Sent when the list changes and once at startup — not read from
 /// the configuration file, which is a debounce behind the term just typed.
 export const setAlertTerms = (terms: string[]) =>
-  invoke<void>("set_alert_terms", { terms });
+  call<void>("set_alert_terms", { terms });
 
 /// Asks the platform to draw attention to this window, if it is not already
 /// the focused one — that check is the backend's, because the window is.
@@ -356,8 +379,17 @@ export const setAlertTerms = (terms: string[]) =>
 /// `urgent` is an alert term: it keeps asking until the app is looked at. A
 /// group's flash-on-message is a single bounce. Never a sound, in either case:
 /// this is an intercom room.
-export const requestAttention = (urgent: boolean) =>
-  invoke<void>("request_attention", { urgent });
+///
+/// In a browser there is no window and no platform to ask (P16), so the page
+/// asks with what a tab owns: its own surface and its title in the tab strip.
+/// Same two requests, same rules — see `flash.ts`.
+export const requestAttention = (urgent: boolean): Promise<void> => {
+  if (isRemote) {
+    flashPage(urgent);
+    return Promise.resolve();
+  }
+  return invoke<void>("request_attention", { urgent });
+};
 
 // --- The chat, and the windows onto it (P7) -------------------------------
 
@@ -380,7 +412,7 @@ export interface Snapshot {
   state: SessionState | null;
 }
 
-export const sessionSnapshot = () => invoke<Snapshot>("session_snapshot");
+export const sessionSnapshot = () => call<Snapshot>("session_snapshot");
 
 /// Empties the chat, in every window at once.
 ///
@@ -389,15 +421,25 @@ export const sessionSnapshot = () => invoke<Snapshot>("session_snapshot");
 /// group window showing what the main window was just told is gone. Every
 /// window then empties its own list on `communication-cleared`, including the
 /// one that asked.
-export const clearCommunication = () => invoke<void>("clear_communication");
+export const clearCommunication = () => call<void>("clear_communication");
 
 /// Opens a group in a window of its own, or focuses the one already open.
 ///
 /// `group` is the group's position in the active profile — the same position
 /// the configuration file stores membership by, and what the window's label is
 /// built from. `name` is only the window's title.
-export const openGroupWindow = (group: number, name: string, onTop: boolean) =>
-  invoke<void>("open_group_window", { group, name, onTop });
+/// In a browser it is a tab instead (P16), named after the group so that asking
+/// for the same group twice reuses the tab that is already open rather than
+/// stacking a second one on it — which is exactly what the window label does
+/// on the desktop. `onTop` has no meaning there: nothing can be put in front
+/// of anything else inside a browser.
+export const openGroupWindow = (group: number, name: string, onTop: boolean): Promise<void> => {
+  if (isRemote) {
+    openGroupTab(group, name);
+    return Promise.resolve();
+  }
+  return invoke<void>("open_group_window", { group, name, onTop });
+};
 
 /// A group window asking for its "keep this window in front" setting to be
 /// remembered.
@@ -419,50 +461,117 @@ export const requestGroupOnTop = (group: number, onTop: boolean) =>
   emit("group-on-top", { group, onTop } satisfies GroupOnTop);
 
 export const onGroupOnTop = (fn: (e: GroupOnTop) => void): Promise<UnlistenFn> =>
-  listen<GroupOnTop>("group-on-top", (e) => fn(e.payload));
+  on<GroupOnTop>("group-on-top", (payload) => fn(payload));
 
 /// Closes every detached group window. Called when the active profile changes:
 /// a group window filters by stream id, and those are positions in the active
 /// profile's channel list.
-export const closeGroupWindows = () => invoke<void>("close_group_windows");
+export const closeGroupWindows = (): Promise<void> => {
+  if (isRemote) {
+    closeGroupTabs();
+    return Promise.resolve();
+  }
+  return invoke<void>("close_group_windows");
+};
 
-export const listDevices = () => invoke<DeviceOption[]>("list_devices");
+export const listDevices = () => call<DeviceOption[]>("list_devices");
 /// Every language the sidecar accepts — around a hundred, in whisper's own
 /// order. Asked for rather than listed in the UI, so that adding a language is
 /// a whisper.cpp version and never a change here. Needs no model, so it
 /// answers on a machine that has downloaded nothing.
-export const listLanguages = () => invoke<Language[]>("list_languages");
+export const listLanguages = () => call<Language[]>("list_languages");
 /// Resolves with the running state, so the UI does not have to wait for an
 /// event to learn that the session it just asked for actually started.
 export const startSession = (config: SessionConfig) =>
-  invoke<SessionState>("start_session", { config });
-export const stopSession = () => invoke<void>("stop_session");
+  call<SessionState>("start_session", { config });
+export const stopSession = () => call<void>("stop_session");
 
 export const onTranscript = (fn: (e: TranscriptEvent) => void): Promise<UnlistenFn> =>
-  listen<TranscriptEvent>("transcript", (e) => fn(e.payload));
+  on<TranscriptEvent>("transcript", (payload) => fn(payload));
 
 export const onLevels = (fn: (e: LevelsEvent) => void): Promise<UnlistenFn> =>
-  listen<LevelsEvent>("levels", (e) => fn(e.payload));
+  on<LevelsEvent>("levels", (payload) => fn(payload));
 
 export const onOverload = (fn: (e: OverloadEvent) => void): Promise<UnlistenFn> =>
-  listen<OverloadEvent>("overload", (e) => fn(e.payload));
+  on<OverloadEvent>("overload", (payload) => fn(payload));
 
 export const onSessionState = (fn: (e: SessionState) => void): Promise<UnlistenFn> =>
-  listen<SessionState>("session-state", (e) => fn(e.payload));
+  on<SessionState>("session-state", (payload) => fn(payload));
 
 /// The chat was emptied, by this window or by another one.
 export const onCleared = (fn: () => void): Promise<UnlistenFn> =>
-  listen<null>("communication-cleared", () => fn());
+  on<null>("communication-cleared", () => fn());
 
 /// The configuration was written. What a detached group window follows: a
 /// group renamed, refilled or given its flash setting on the Settings page
 /// reaches the window showing it this way and no other.
 export const onConfigChanged = (fn: (config: StoredConfig) => void): Promise<UnlistenFn> =>
-  listen<StoredConfig>("config-changed", (e) => fn(e.payload));
+  on<StoredConfig>("config-changed", (payload) => fn(payload));
 
 /// Once a second, for as long as the app is open.
 export const onResources = (fn: (e: ResourceUsage) => void): Promise<UnlistenFn> =>
-  listen<ResourceUsage>("resources", (e) => fn(e.payload));
+  on<ResourceUsage>("resources", (payload) => fn(payload));
 
 export const onModelProgress = (fn: (e: ModelProgress) => void): Promise<UnlistenFn> =>
-  listen<ModelProgress>("model-progress", (e) => fn(e.payload));
+  on<ModelProgress>("model-progress", (payload) => fn(payload));
+
+// --- The LAN remote client (P16) ------------------------------------------
+//
+// Mirrors `crates/app/src/remote.rs`. The settings themselves are part of the
+// configuration file like everything else on the Settings page — there is no
+// "enable the remote" command, because the configuration has one writer and a
+// second mutation path is how the file and the listener come to disagree.
+// What is asked for here is only what the configuration cannot know: which
+// addresses exist, and whether the listener actually came up on one.
+
+/// One address this machine can be reached on.
+export interface Interface {
+  /// The operating system's name for it — `en0`, `en7`. Shown because a
+  /// machine on two networks has two plausible addresses, and this is what
+  /// tells them apart.
+  name: string;
+  address: string;
+  /// `127.0.0.1`: reaches no other machine, which makes it the one address
+  /// that is safe everywhere and useless for the thing this is for.
+  loopback: boolean;
+}
+
+/// Whether the remote is being served, and to how many browsers.
+export interface RemoteStatus {
+  running: boolean;
+  /// What to type into the other machine's browser, or `null` while nothing is
+  /// served.
+  url: string | null;
+  /// The one number that answers "did it work" from the machine that cannot
+  /// see the other screen.
+  clients: number;
+  /// Why it is not running although the configuration asks for it — a port
+  /// that is taken, an address that has gone away. `null` when there is
+  /// nothing to say.
+  error: string | null;
+}
+
+/// Whether the listener is enabled, and where it binds.
+///
+/// Part of `StoredConfig`, so it is saved, loaded and broadcast like the rest
+/// of the Settings page. `address` is one address and never `0.0.0.0`: an app
+/// that serves every interface at once is an app on the venue's guest wifi
+/// without anyone having said so.
+export interface StoredRemote {
+  enabled: boolean;
+  address: string;
+  port: number;
+}
+
+/// What a configuration written before P16 is read as: off, on no address.
+export const REMOTE_DEFAULT_PORT = 8787;
+
+export const listInterfaces = () => call<Interface[]>("list_interfaces");
+export const remoteStatus = () => call<RemoteStatus>("remote_status");
+
+/// The listener came up, went down, or gained or lost a browser.
+export const onRemoteStatus = (fn: (status: RemoteStatus) => void): Promise<UnlistenFn> =>
+  on<RemoteStatus>("remote-status", (payload) => fn(payload));
+
+export { isRemote } from "./transport";
+export { onConnection, connectionState, onReconnected, type Connection } from "./transport";

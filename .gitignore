@@ -23,3 +23,6 @@ fixtures/generated/
 
 # macOS
 .DS_Store
+
+# Playwright MCP: console logs and page snapshots from manual runs
+.playwright-mcp/

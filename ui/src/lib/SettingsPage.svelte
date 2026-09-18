@@ -5,7 +5,8 @@
     | "groups"
     | "vocabulary"
     | "alerts"
-    | "models";
+    | "models"
+    | "remote";
 
   /// How urgently a section wants attention, shown as a dot on its rail item.
   ///
@@ -61,9 +62,16 @@
   import AlertEditor from "./AlertEditor.svelte";
   import GroupMembership from "./GroupMembership.svelte";
   import ModelPicker from "./ModelPicker.svelte";
+  import RemoteSettings from "./RemoteSettings.svelte";
   import { lengthWarning } from "./vocabulary";
   import { connectedDevice, type ModelChoice, type Profile } from "./profiles";
-  import { listLanguages, type DeviceOption, type Language } from "./bridge";
+  import {
+    isRemote,
+    listLanguages,
+    type DeviceOption,
+    type Language,
+    type StoredRemote,
+  } from "./bridge";
   import { onMount } from "svelte";
 
   interface Props {
@@ -78,6 +86,11 @@
     /// rather than inside one: what a machine can run depends on the machine,
     /// not on the production being carried to it.
     models: ModelChoice;
+    /// Whether this machine serves the browser peer, and on which address
+    /// (P16). Beside the models rather than inside a profile, and for the
+    /// models' reason: which network this machine is on belongs to the
+    /// machine, not to the production carried to it.
+    remote: StoredRemote;
     deviceChannels: number;
     locked: boolean;
     saveError: string | null;
@@ -94,6 +107,7 @@
     vocabulary = $bindable(),
     alerts = $bindable(),
     models = $bindable(),
+    remote = $bindable(),
     deviceChannels,
     locked,
     saveError,
@@ -166,6 +180,10 @@
     vocabulary: lengthWarning(vocabulary) === null ? null : "warn",
     // Never flagged: an empty alert list is the normal state, not a problem.
     alerts: null,
+    // Never flagged: the listener reports its own trouble inside the section,
+    // where the address that caused it is. A dot on the rail would be pointing
+    // at a setting that is off on most machines and fine on the rest.
+    remote: null,
     models: modelFlag,
   });
 
@@ -201,7 +219,14 @@
     {
       scope: "This machine",
       note: "Stays behind when the profile travels.",
-      items: [{ id: "models", title: "Models" }],
+      items: [
+        { id: "models", title: "Models" },
+        // Only in the app. The remote's own Settings page shows everything
+        // else, but the listener it is connected through is the host machine's
+        // — and a browser switching off the thing serving it is a page pulling
+        // the floor out from under itself.
+        ...(isRemote ? [] : [{ id: "remote" as Section, title: "Remote client" }]),
+      ],
     },
   ]);
 </script>
@@ -308,6 +333,12 @@
       <div class="sheet" hidden={section !== "models"}>
         <ModelPicker bind:models {locked} onstatus={(flag) => (modelFlag = flag)} />
       </div>
+
+      {#if !isRemote}
+        <div class="sheet" hidden={section !== "remote"}>
+          <RemoteSettings bind:remote />
+        </div>
+      {/if}
     </div>
   </div>
 </div>

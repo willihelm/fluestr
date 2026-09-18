@@ -226,6 +226,20 @@ pub struct Config {
     /// normal state; nobody has to use this.
     #[serde(default)]
     pub alerts: Vec<String>,
+    /// The LAN remote client (P16): whether it is served, and on which
+    /// address.
+    ///
+    /// Beside the profiles like the vocabulary and the model, and for the
+    /// model's reason rather than the vocabulary's: which interface this
+    /// machine can be reached on is a property of the machine and of the house
+    /// it is standing in, not of the production. Carrying a profile to another
+    /// venue must not carry an address that venue does not have.
+    ///
+    /// `#[serde(default)]` — off, on no address — because a file written
+    /// before P16 has no such field, and a version that never offered a
+    /// listener must not be read as having asked for one.
+    #[serde(default)]
+    pub remote: crate::remote::RemoteConfig,
     pub profiles: Vec<Profile>,
 }
 
@@ -253,12 +267,25 @@ impl Default for Config {
             vad_model: None,
             model_path: None,
             alerts: Vec::new(),
+            remote: crate::remote::RemoteConfig::default(),
             profiles: Vec::new(),
         }
     }
 }
 
 impl Config {
+    /// This configuration in the form the file holds it.
+    ///
+    /// Every configuration that reaches the disk goes through here, whichever
+    /// end it came from — which is what makes "is this the same as what is
+    /// already stored" a question with an answer. A view that sends a
+    /// configuration the file would have tidied up would otherwise differ from
+    /// the stored one forever, and every save would look like a change.
+    pub fn sanitised(mut self) -> Self {
+        self.sanitise();
+        self
+    }
+
     /// Brings a file that has been edited, truncated or written by another
     /// version into a state the rest of the app can rely on.
     fn sanitise(&mut self) {
@@ -400,6 +427,11 @@ mod tests {
             vad_model: Some("silero-v5.1.2".into()),
             model_path: None,
             alerts: vec!["Feuer".into(), "Arzt".into()],
+            remote: crate::remote::RemoteConfig {
+                enabled: true,
+                address: "192.168.1.20".into(),
+                port: 8787,
+            },
             profiles: vec![
                 Profile {
                     name: "Probebühne".into(),
@@ -634,5 +666,93 @@ mod tests {
         save(&path, &config).expect("saving");
 
         assert_eq!(load(&path).vocabulary, Some(String::new()));
+    }
+
+    /// The fields the frontend has to write, exactly.
+    ///
+    /// The configuration is announced to every view after it is saved, and a
+    /// view recognises the echo of its own save by comparing what came back
+    /// with what it sent (P16). That comparison is order-independent, so what
+    /// it cannot survive is a field one side writes and the other does not:
+    /// every save would then read as somebody else's change, the Settings page
+    /// would adopt its own keystroke, and the field being typed in would be
+    /// rebuilt under the cursor.
+    ///
+    /// Pinned here rather than left to be discovered, because adding a field
+    /// to this struct without adding it to `toStoredConfig` in `profiles.ts`
+    /// is a one-line change with that as its symptom.
+    #[test]
+    fn the_file_holds_exactly_what_the_frontend_writes() {
+        let json = serde_json::to_value(a_config()).expect("serialising");
+
+        assert_eq!(
+            keys(&json),
+            [
+                "active",
+                "alerts",
+                "model",
+                "modelPath",
+                "profiles",
+                "remote",
+                "vadModel",
+                "version",
+                "vocabulary",
+            ]
+        );
+        assert_eq!(
+            keys(&json["profiles"][0]),
+            ["channels", "device", "deviceId", "groups", "language", "name"]
+        );
+        assert_eq!(
+            keys(&json["profiles"][0]["channels"][0]),
+            ["channel", "color", "label", "language"]
+        );
+        // The second profile, because it is the one with groups in it.
+        assert_eq!(
+            keys(&json["profiles"][1]["groups"][0]),
+            ["flash", "members", "name", "onTop"]
+        );
+        assert_eq!(keys(&json["remote"]), ["address", "enabled", "port"]);
+    }
+
+    /// An object's field names, sorted — the same order the frontend's
+    /// comparison puts them in.
+    fn keys(value: &serde_json::Value) -> Vec<&str> {
+        let mut names: Vec<&str> = value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// Tidying has to be a fixpoint.
+    ///
+    /// `save_config` compares what it was sent with what the file holds and
+    /// does nothing when they agree (P16). Both sides of that comparison have
+    /// been tidied, so a tidy that changed something every time it ran would
+    /// make every save look like a change — which is the save storm the
+    /// comparison exists to prevent.
+    #[test]
+    fn tidying_a_tidy_configuration_changes_nothing() {
+        let once = a_config().sanitised();
+        assert_eq!(once.clone().sanitised(), once);
+    }
+
+    /// A configuration that only differs by what the tidy would remove is not
+    /// a change: a view that sends a group member the channel list no longer
+    /// has must not have that written back at it forever.
+    #[test]
+    fn a_configuration_that_only_needs_tidying_is_not_a_change() {
+        let stored = a_config().sanitised();
+
+        let mut sent = stored.clone();
+        // A member position the channel list does not reach. The tidy drops
+        // it, here and on the way in, so the two agree.
+        sent.profiles[1].groups[0].members.push(99);
+
+        assert_eq!(sent.sanitised(), stored);
     }
 }

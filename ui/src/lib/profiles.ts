@@ -24,10 +24,34 @@ import { restoreGroup, type Group } from "./groups";
 import { cleanTerms } from "./alerts";
 import {
   CONFIG_VERSION,
+  REMOTE_DEFAULT_PORT,
   type DeviceOption,
   type StoredConfig,
   type StoredProfile,
+  type StoredRemote,
 } from "./bridge";
+
+/// What a configuration that has never held a remote setting is read as (P16):
+/// off, on no address. Not a constant on the backend's side alone, because the
+/// Settings page needs something to render before the first save.
+export const NO_REMOTE: StoredRemote = {
+  enabled: false,
+  address: "",
+  port: REMOTE_DEFAULT_PORT,
+};
+
+/// A port a browser can actually be pointed at.
+///
+/// Below 1024 needs privileges the app does not have and would fail to bind;
+/// above 65535 is not a port. Applied on the way out of the Settings page
+/// rather than while typing, because a field that fights the keystrokes of
+/// somebody typing "8787" one digit at a time is a field nobody can fill in —
+/// and applied again on the way into the file, because a number box that has
+/// been cleared binds to `null`, which the backend reads as no port at all.
+export const clampPort = (port: number): number => {
+  if (!Number.isFinite(port)) return REMOTE_DEFAULT_PORT;
+  return Math.min(65535, Math.max(1024, Math.trunc(port)));
+};
 
 export interface Profile {
   /// Stable for the lifetime of the window, like a channel's — it is what the
@@ -215,6 +239,11 @@ export const toStoredConfig = (
   /// cleaned on the way out: the editor's empty row is how a term is added,
   /// and it has no business in the file.
   alerts: string[] = [],
+  /// The LAN remote client (P16). Beside the profiles like the model, and for
+  /// the model's reason: which interface this machine can be reached on is a
+  /// property of the machine and of the house it is standing in, not of the
+  /// production being carried to it.
+  remote: StoredRemote = NO_REMOTE,
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -231,6 +260,11 @@ export const toStoredConfig = (
   vadModel: models.vadModel ?? null,
   modelPath: models.modelPath?.trim() ? models.modelPath.trim() : null,
   alerts: cleanTerms(alerts),
+  // Not the object as the page holds it: the port is a number box, and a box
+  // an operator has cleared holds `null` until it is left. This save can
+  // happen before that — the window closing is the case the last-ditch save
+  // exists for — and `null` fails the backend's `u16` outright.
+  remote: { ...remote, port: clampPort(remote.port) },
   profiles: profiles.map(toStored),
 });
 
@@ -258,6 +292,7 @@ export const fromStoredConfig = (
   vocabulary: string | null;
   models: ModelChoice;
   alerts: string[];
+  remote: StoredRemote;
 } => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
@@ -277,5 +312,79 @@ export const fromStoredConfig = (
     // A file written before P17 has no alert list, which is the same thing as
     // an empty one: nobody has to use this.
     alerts: stored.alerts ?? [],
+    // A file written before P16 has no remote block, and reading its absence
+    // as anything but "off" is the one way this feature could start serving a
+    // network nobody asked it to.
+    remote: stored.remote ?? NO_REMOTE,
   };
 };
+
+/// Carries the keys a view already holds onto the configuration it has just
+/// read back (P16).
+///
+/// Keys are handed out per window and mean nothing outside it, so a
+/// configuration read a second time — because another peer saved it — comes
+/// back with all new ones. Two things break if they are simply taken on.
+/// Everything the view keyed on is suddenly pointing at something that no
+/// longer exists: the selected group falls back to the all-channels view, and
+/// the active profile looks like a different profile, which is what closes the
+/// detached group windows. And every keyed block on the Settings page is torn
+/// down and rebuilt — which takes the focus out of the field being typed in,
+/// on every save, which is every keystroke.
+///
+/// By **position**, which is what the file stores membership and the active
+/// profile by anyway. A rename or a channel edit keeps every position and
+/// therefore every key, so the page is updated in place and the cursor stays
+/// where it was; adding, deleting or reordering shifts them, and the view
+/// treats that as the setup change it is.
+///
+/// Group membership is expressed in channel keys, so carrying those over means
+/// rewriting the membership to match. That is the whole of the work here, and
+/// it is the reason this is one function rather than three.
+export const reuseKeys = (fresh: Profile[], previous: Profile[]): Profile[] =>
+  fresh.map((profile, index) => {
+    const before = previous[index];
+    if (!before) return profile;
+
+    const channels = profile.channels.map((channel, position) => {
+      const same = before.channels[position];
+      return same ? { ...channel, key: same.key } : channel;
+    });
+    // Fresh key to carried-over key. A channel with no counterpart keeps the
+    // key it was read with, and maps to itself.
+    const carried = new Map(profile.channels.map((c, i) => [c.key, channels[i].key]));
+
+    return {
+      ...profile,
+      key: before.key,
+      channels,
+      groups: profile.groups.map((group, position) => {
+        const same = before.groups[position];
+        return {
+          ...group,
+          key: same ? same.key : group.key,
+          members: group.members.map((member) => carried.get(member) ?? member),
+        };
+      }),
+    };
+  });
+
+/// A configuration as a string that does not depend on the order its fields
+/// happen to be written in.
+///
+/// What it is for is recognising the echo of one's own save (P16). Every save
+/// is announced to every view including the one that caused it, and the
+/// announcement has been through the backend — which serialises the struct in
+/// its own field order and fills in what the file left out. Comparing the raw
+/// JSON would call every one of those a foreign change, which is the same
+/// thing as having no echo suppression at all.
+export const canonical = (config: StoredConfig): string =>
+  JSON.stringify(config, (_key, value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : value,
+  );

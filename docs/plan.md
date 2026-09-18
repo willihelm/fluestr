@@ -74,8 +74,8 @@ for now, with the reason recorded in the package.
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
-| P16 | Read-only LAN viewer | **Open** | — |
-| P17 | Alert terms & visual attention | **Partial** | The main chat and the detached group windows; the LAN viewer (P16) is still missing |
+| P16 | LAN remote client | **Partial** | Served, driven and verified against a mock app; not yet exercised from a second machine on a real network. No authentication — by decision, see the package |
+| P17 | Alert terms & visual attention | **Partial** | Unicode normalisation of terms and transcripts |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
@@ -90,10 +90,14 @@ utterance, with the alert terms marked where they were said and an unfocused
 window asking once per bubble to be looked at; Clear all communication as the only action that empties the
 chat; all of that setup stored as named profiles that come back at the next
 start, keyed on an interface the app recognises after a rename and can tell
-from a second unit of the same model; and a model manager that fetches,
+from a second unit of the same model; a model manager that fetches,
 checksums and selects the models the
 whole thing runs on, so a machine that has never seen this repository can be
-brought to its first transcription from inside the window. What the
+brought to its first transcription from inside the window; and, optionally, the
+same UI served to a browser on the local network, where it is a full peer —
+the same chat, the same alert highlighting, the same Start, Stop and Settings —
+so the session can run where the audio interface is and be worked from
+somewhere else. What the
 eight-channel case still lacks is a measurement of its own: the latency and CPU
 numbers were all taken with one stream running.
 
@@ -1174,10 +1178,11 @@ members, since it never claimed to be a view of the session, and always
 flashing when that group asks for it, because it *is* that group's view and
 there is no "while it is selected" to qualify.
 
-**Outstanding:** the LAN viewer (P16), which is the third view the match ranges
-travel for. Unicode normalisation is also still missing: a term and a
-transcript that differ only in composed and decomposed umlauts do not match
-today.
+**Outstanding:** Unicode normalisation. A term and a transcript that differ
+only in composed and decomposed umlauts do not match today. The third view the
+match ranges travel for — the remote client (P16) — arrived with that package
+and needed no matcher of its own, which was the point of doing the matching
+once in the sink.
 
 **Accepted when:** adding a term in Settings survives a restart, a matching
 incoming transcript highlights the exact match in every applicable chat view,
@@ -1185,38 +1190,146 @@ and an unfocused main or applicable group window requests attention once; a
 non-matching word and a partial-word false positive do neither. With a group's
 flash-on-message setting enabled, an unfocused view of that group requests
 attention for a non-alert message; disabled groups do not. ✔ for the main
-window, the detached group windows and their lists; the browser view waits on
-P16.
+window, the detached group windows and their lists, and for the browser — which
+has no window to bounce and flashes its own surface and its tab title instead.
 
-### P16 — Read-only LAN viewer — **Open**
+### P16 — LAN remote client — **Partial**
 
-The operator can optionally enable a local-network viewer from Settings. The
-app then serves a browser view on the selected LAN interface; there is no cloud
-service and no data leaves the local network. Settings show a shareable viewer
-URL and a revocable, high-entropy access token. The listener is off by default,
-binds only to the explicitly selected interface, and requires the token for
-both the initial snapshot and the live event stream.
+The operator can optionally enable a local-network client from Settings. The
+app then serves a browser build of the same UI on the selected LAN interface;
+there is no cloud service and no data leaves the local network. Settings show
+a shareable URL. The listener is off by default and binds only to the
+explicitly selected interface.
 
-The browser receives the complete operational view: all chat history and new
-transcripts, including alert-term highlights, every channel and group, levels,
-stream health, session state and the Settings configuration in read-only form
-(but never the access token itself). It may locally search, filter and choose
-groups because those actions only change its own view. It has no controls for Start/Stop, clearing
-communication, editing channels, groups, vocabulary, profiles or any other
-setting. This is enforced twice: the viewer build renders no mutation controls,
-and the LAN server exposes no mutation endpoint or Tauri command, so hiding a
-button is never the security boundary.
+The point of it is a second machine: the session runs where the audio
+interface is, and the operator works from somewhere else. The browser is
+therefore a full peer rather than an observer. It receives the complete
+operational view — all chat history and new transcripts including alert-term
+highlights, every channel and group, levels, stream health, session state and
+the configuration — and it can do what the local app can: start and stop,
+clear communication, edit channels, groups, vocabulary, alert terms and
+profiles.
 
-Initial state is sent as a snapshot, followed by ordered incremental events;
-reconnecting repeats the snapshot so a viewer that slept does not silently
-miss communication. A group opened in a local app window and a browser viewer
-are independent views of the same backend state, not separate sessions.
+There is no authentication yet. Anyone who reaches the chosen interface can
+control the session, which is why the listener is off by default and the
+interface is picked deliberately. The transport is arranged so that a token
+check is one middleware in front of the socket when it is wanted, not a
+redesign. What that decision does *not* cover, and what is therefore checked
+already: a WebSocket upgrade is not subject to the same-origin policy, so the
+socket refuses an upgrade whose stated origin is not the address this app is
+serving on — otherwise any page anybody on the network opened could drive the
+session out of the operator's own browser.
 
-**Accepted when:** a second device on the chosen LAN can open the authenticated
-viewer and see the same existing and incoming communication, levels and group
-views as the operator; attempts to invoke a mutation endpoint or control action
-are rejected; disabling the viewer or rotating its token immediately revokes
-existing browser access.
+Every mutation exists exactly once. The Tauri commands become thin wrappers
+over a command layer that takes typed arguments and returns typed results, and
+the socket dispatches into that same layer — so the remote cannot quietly fall
+behind the desktop as commands are added, and no action has two
+implementations to keep in agreement. Configuration is last-write-wins: a save
+from either side is broadcast to every client at once, so the side that lost
+sees it happen instead of holding a stale form.
+
+Three things stay local because the browser has no equivalent. The native file
+picker for models is desktop-only, so remote model management covers the
+managed downloads and not an arbitrary file on the host. OS attention requests
+are desktop-only, so the remote flashes in the page and in the tab title
+instead. Detached group windows are desktop-only, so the remote uses in-page
+panels or its own browser tabs. A group opened in a local window and the same
+group on the remote are independent views of one backend state, not separate
+sessions.
+
+Initial state arrives as a snapshot over the socket, followed by ordered
+incremental events; reconnecting repeats the snapshot. That snapshot is bounded
+by the same in-memory history the local app gets, so a client that slept longer
+than the buffer resumes from what is left rather than from nothing. Levels are
+downsampled for remote clients, so a slow link falls behind on meters and never
+on transcripts.
+
+**How it was built.** The command layer came first, as the ordering above
+demanded. Every mutation now lives exactly once in `crates/app/src/commands.rs`
+as one arm of a `Command` enum; the Tauri bridge is a single `command` that
+hands its request to `dispatch`, and the socket hands it the same request.
+Adding a command is one arm and one typed wrapper in `bridge.ts` — there is
+nowhere left to add it to only one of the two views. Three things stayed
+`#[tauri::command]`s because a browser has no equivalent for them, and an enum
+arm answering "not on this transport" would have suggested the remote was
+missing something: the native file picker, the platform's attention request,
+and the detached group windows.
+
+The listener is `axum` on the one address the operator picked, serving the
+frontend out of Tauri's own asset resolver — the same bundle the app runs in
+its WebView, embedded in the binary, so there is no second copy on disk to fall
+a version behind.
+
+In a checkout it serves the Vite dev server instead, and it checks for that
+*first*. The asset resolver answers in development too, out of whatever was
+last left in `ui/dist`, so preferring it means the operator's window is running
+the dev server and the remote is running a build from some earlier afternoon:
+two builds of this app driving one session. That cost half a day. It does not
+look like a stale build — it looks like a bug that will not be fixed, because
+every fix lands in the window and none of them reaches the browser, which is
+where it is being tested. A released app has no dev URL and is unaffected.
+
+The other half of that is *when* a save happens. The Settings page has no Save
+button — a setup an operator believes is stored and is not is worse than no
+persistence at all — so it writes on a debounce as the state changes. With
+several views onto one configuration that is no longer free: the write is what
+every view rebuilds its page from, so a save landing while a label is being
+typed rebuilds the field under the cursor, and the label has to be typed one
+character at a time with the focus chased back into the box after each. The
+save therefore waits for the field to be left. Not for a button — leaving the
+field is the operator saying they are done with it, and they were going to do
+it anyway. Only fields that are *typed into* wait: a colour, a language or a
+device is one discrete act with nothing half-finished about it, and making it
+wait would be making it wait for nothing. A window closed with the cursor still
+in the box writes on the way out, as a best effort, which is the difference
+between usually keeping that last edit and never keeping it.
+
+One rule turned out to carry the whole of last-write-wins: **a save that
+changes nothing is not a save.** Adopting another peer's configuration is a
+state change like any other, so it schedules that view's own save — and a view
+that writes back what it was just given turns one edit into a conversation
+nothing ends. Two peers then bounce the configuration off each other several
+times a second, and because every view rebuilds its Settings page from it, the
+field being typed in is torn down under the cursor on each pass. The views hold
+what they know the app already has and skip a save that equals it, but care in
+one view is not a property of the system: `save_config` compares what it is
+sent with what the file holds — both tidied, so the comparison has an answer —
+and a configuration that changes nothing is neither written nor announced,
+whoever sent it and whatever version they are running.
+
+Whether it runs is a consequence of the configuration file and of nothing else:
+`save_config` applies the remote block, at every save and once at startup.
+There is deliberately no "enable the remote" command, because the configuration
+has one writer and a second mutation path is how the file and the listener come
+to disagree about whether the app is serving. What the configuration cannot
+know — whether the listener actually came up, on a port that may be taken, and
+how many browsers are connected — is reported separately as a `remote-status`
+event.
+
+The frontend learned one new seam, `transport.ts`, and nothing above it knows
+which transport it is on. A browser reconnects with backoff and re-reads the
+snapshot, which is the same call it makes when it opens rather than a second
+mechanism that could disagree with it; while it is down it says so, because a
+silent remote and a quiet intercom look identical. The main window now follows
+`config-changed` like the group windows always have — it is no longer the only
+writer — and carries the keys it handed out across an adopted configuration by
+position, so a channel renamed on the remote does not read as a profile switch
+and close the operator's group windows.
+
+**Outstanding:** authentication, which the transport is shaped for and which
+nothing yet asks for. The acceptance below has been verified against a mock app
+over a real socket — commands dispatch, events arrive, and disabling the
+listener drops the connections it was serving — but not yet from a second
+machine on a real network, which is the one part of it that cannot be written.
+
+**Accepted when:** a second device on the chosen LAN opens the URL, sees the
+same existing and incoming communication, levels and group views as the
+operator, and can start and stop the session and change configuration with the
+change appearing on the operator’s screen; a remote config save reaches the
+local app as an ordinary config update; disabling the listener immediately
+drops the connections it was serving. ✔ for the command round trip, the event
+stream and the drop on disable, against a mock app; the second machine waits on
+the whole-system verification below.
 
 ---
 
@@ -1237,7 +1350,7 @@ P0 Scaffolding
                             P6 Tauri API (commands/events)
                               ├─> P17 Alert terms ──> P7 Chat UI ──> P8 Health/levels ──> P9 Search/filter
                               │
-                              └─> P16 LAN viewer      (P10 SQLite: deferred)
+                              └─> P16 LAN remote client   (P10 SQLite: deferred)
                                        │
                                        └── P12 Settings
                                        v
@@ -1249,12 +1362,13 @@ in the log. *Reached, including the pool — what P5 still owes is a load test o
 live audio.*
 
 **Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17. Eight channels,
-chat UI, model download, alert terms and optional read-only LAN viewer. *P3 is done, eight
+chat UI, model download, alert terms and the optional LAN remote client. *P3 is done, eight
 channels run, the chat view the eight make necessary — Settings page, group
 sidebar, bounded list — is in place, and the setup now survives the window as
-a profile, and the model download is done. What is left for this milestone is
-the settings proper (every threshold is still a constant in the code), alerts
-and the viewer.*
+a profile, the model download is done, the alert terms are in, and the remote
+client serves the same UI to a browser on the house network. What is left for
+this milestone is the settings proper — every threshold is still a constant in
+the code.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P8, P9, P13. *P10 and P3b left it on 2026-09-18.*
@@ -1289,15 +1403,18 @@ In this order, with the reason each one comes where it does.
    what the window holds — smaller, and it runs into the chat's DOM window,
    since a hit may lie outside the rendered range. Worth deciding before it is
    built.
-5. **P17** — done for the main window: the match happens once, in the sink
-   every view's copy of an event comes from, and the ranges travel with the
-   event. What is left needs the views themselves — a group window from P7 and
-   the viewer from P16 — plus Unicode normalisation of terms and transcripts
-   before the match.
-6. **P16** — the optional LAN viewer. It must use the same event and snapshot
-   model as the app, but it introduces an access boundary the desktop app does
-   not have: implement the revocable token and server-side read-only contract
-   before exposing any browser URL.
+5. **P17's last piece** — Unicode normalisation of terms and transcripts
+   before the match. All three views exist now and all three highlight the same
+   characters, because the match happens once in the sink every view's copy of
+   an event comes from. What is left is that a term and a transcript differing
+   only in composed and decomposed umlauts do not match, which is a bug an
+   operator would read as the alert list not working.
+6. **The remote, on a real network.** P16 is built and tested against a mock
+   app; what it has not had is a second machine, a house network and somebody
+   working from it. That is the one part of its acceptance that cannot be
+   written, and it comes before authentication — which is the obvious next
+   thing to want, and the wrong thing to build against an arrangement nobody
+   has used yet.
 
 ## Whole-system verification
 
@@ -1326,9 +1443,16 @@ In this order, with the reason each one comes where it does.
 9. Open a group in its own window, then speak on one member and one non-member
    channel → only the member transcript appears in that window; global
    Start/Stop is reflected there without creating another capture session.
-10. Enable the LAN viewer and open its URL from a second device → it sees the
-    same history, incoming lines, groups, meters and session state; no control
-    can be invoked, and rotating the token disconnects it.
+10. Enable the remote client in Settings, pick the house interface, and open
+    its URL from a second device → it sees the same history, incoming lines,
+    groups, meters and session state. Start and stop the session from the
+    browser and watch the operator's screen follow; rename a channel there and
+    watch the Settings page on the app take it on without the operator's own
+    edits being thrown away; open a group from the browser's sidebar and check
+    it comes up as a tab showing only that group's channels. Pull the network
+    for ten seconds → the page says it is not connected, and on its return the
+    chat is complete rather than missing the gap. Switch the listener off →
+    the browser drops immediately.
 11. Rename the interface in Audio MIDI Setup and restart → the profile still
     finds it and starts, under its new name. With two identical interfaces
     connected, the picker offers both and each profile keeps the one it was
@@ -1339,8 +1463,9 @@ In this order, with the reason each one comes where it does.
     “rescue” does neither. Repeat from a channel in an open group to verify its
     separate window. Then enable that group's **Flash on every new message**
     setting and speak a non-alert message → its window requests attention;
-    disable it and repeat → it does not. Verify the browser viewer highlights
-    without gaining a control or requesting desktop attention (P17).
+    disable it and repeat → it does not. Verify that the browser highlights the
+    same characters and flashes its own surface and tab title rather than
+    asking the platform (P17, P16).
 
 Step 7 used to read "kill the app hard, restart → the session loads completely
 from SQLite". That goes with P10: the chat lives in the window, and killing the

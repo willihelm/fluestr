@@ -26,6 +26,7 @@
     downloadModel,
     listModels,
     onModelProgress,
+    canPickModelFile,
     pickModelFile,
     removeModel,
     type ModelProgress,
@@ -328,7 +329,13 @@
                   disabled={locked}
                   onchange={refresh}
                 />
-                <button onclick={browse} disabled={locked}>Choose …</button>
+                <!-- Only where there is a dialog to open (P16). The path
+                     itself stays editable from the remote — a model file on
+                     the host machine can be named, it just cannot be browsed
+                     to from another one. -->
+                {#if canPickModelFile}
+                  <button onclick={browse} disabled={locked}>Choose …</button>
+                {/if}
               </div>
             </div>
           </li>

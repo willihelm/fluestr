@@ -8,27 +8,28 @@
 //! multichannel device through the pipeline into the chat.
 
 pub mod alerts;
+pub mod commands;
 pub mod config;
 pub mod history;
 pub mod models;
 pub mod pool;
+pub mod remote;
 pub mod resources;
 pub mod session;
 pub mod worker;
 
 use alerts::Matcher;
-use config::Config;
-use history::{History, Snapshot};
-use models::{ModelsView, Progress};
+use history::History;
+use remote::Hub;
+use serde::Serialize;
 use session::{
-    DeviceOption, EventSink, LevelsEvent, OverloadEvent, Session, SessionConfig, SessionState,
-    TranscriptEvent,
+    EventSink, LevelsEvent, OverloadEvent, Session, SessionConfig, SessionState, TranscriptEvent,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Event names on the bridge. Constants because the UI subscribes by string
 /// and a typo there fails silently — nothing arrives, nothing complains.
@@ -50,6 +51,11 @@ pub const EVENT_CLEARED: &str = "communication-cleared";
 /// setting on the Settings page has to reach the window that is showing it,
 /// and that window has no other way to hear about it.
 pub const EVENT_CONFIG: &str = "config-changed";
+/// Whether the LAN remote client is being served, and to how many browsers
+/// (P16). Its own event rather than part of the configuration change that
+/// caused it: whether the listener actually came up is not something the
+/// configuration knows, and the client count moves on its own afterwards.
+pub const EVENT_REMOTE_STATUS: &str = "remote-status";
 
 /// What a detached group window's label starts with, followed by the group's
 /// position in the active profile.
@@ -61,23 +67,41 @@ pub const EVENT_CONFIG: &str = "config-changed";
 /// of stacking a second one on it.
 pub const GROUP_WINDOW_PREFIX: &str = "group-";
 
-/// Sends session output over the Tauri bridge.
+/// Sends one event to every view there is.
+///
+/// Both transports, always: the Tauri bridge for the app's own windows, and
+/// the hub for whatever browsers the LAN remote is serving (P16). One function
+/// rather than two calls at each emit site, because the second of the two is
+/// what gets forgotten — and a forgotten one is a remote that silently stops
+/// receiving one kind of event while everything else keeps working.
+pub(crate) fn broadcast<R: Runtime, S: Serialize + Clone>(
+    app: &AppHandle<R>,
+    event: &str,
+    payload: S,
+) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.remote.publish(event, &payload);
+    }
+    let _ = app.emit(event, payload);
+}
+
+/// Sends session output to every view.
 ///
 /// The alert matcher rides along (P17): this is the one place every view's
 /// copy of a transcript comes from, so it is where the alert ranges are worked
-/// out. A detached group window and the LAN viewer (P16) then highlight the
+/// out. A detached group window and the LAN remote (P16) then highlight the
 /// same characters as the main chat because they are given the same numbers,
 /// not because three matchers happen to agree.
-struct TauriEvents {
-    app: AppHandle,
+struct TauriEvents<R: Runtime> {
+    app: AppHandle<R>,
     alerts: Arc<Mutex<Matcher>>,
-    /// What a window opened later is caught up from — see [`history`]. Written
+    /// What a view opened later is caught up from — see [`history`]. Written
     /// here because this is the one place every view's copy comes from, so it
     /// is also the only place that can record what they were all sent.
     history: Arc<Mutex<History>>,
 }
 
-impl EventSink for TauriEvents {
+impl<R: Runtime> EventSink for TauriEvents<R> {
     fn transcript(&self, mut event: TranscriptEvent) {
         // A poisoned lock here would cost every later transcript its
         // highlighting, and silently. The text still has to reach the chat —
@@ -95,15 +119,15 @@ impl EventSink for TauriEvents {
             Ok(mut history) => history.push(event.clone()),
             Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
         }
-        let _ = self.app.emit(EVENT_TRANSCRIPT, event);
+        broadcast(&self.app, EVENT_TRANSCRIPT, event);
     }
 
     fn levels(&self, event: LevelsEvent) {
-        let _ = self.app.emit(EVENT_LEVELS, event);
+        broadcast(&self.app, EVENT_LEVELS, event);
     }
 
     fn overload(&self, event: OverloadEvent) {
-        let _ = self.app.emit(EVENT_OVERLOAD, event);
+        broadcast(&self.app, EVENT_OVERLOAD, event);
     }
 
     fn state(&self, event: SessionState) {
@@ -111,13 +135,18 @@ impl EventSink for TauriEvents {
             Ok(mut history) => history.note_state(&event),
             Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
         }
-        let _ = self.app.emit(EVENT_SESSION_STATE, event);
+        broadcast(&self.app, EVENT_SESSION_STATE, event);
     }
 }
 
+/// Everything the commands work on.
+///
+/// `pub` because [`commands`] reaches it through the `AppHandle` rather than
+/// through a Tauri command argument: the LAN remote's socket has a handle and
+/// no command context, and one way of reaching this is better than two.
 #[derive(Default)]
-struct AppState {
-    session: Mutex<Option<Session>>,
+pub struct AppState {
+    pub(crate) session: Mutex<Option<Session>>,
     /// Where the configuration file lives, resolved once at setup.
     ///
     /// Resolved there rather than per command because it depends on the app's
@@ -136,30 +165,37 @@ struct AppState {
     /// Keyed by id rather than being a single flag because the speech model
     /// and the VAD are two different downloads an operator may reasonably
     /// start together — and cancelling one of them must not stop the other.
-    downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub(crate) downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// The compiled alert list (P17).
     ///
     /// Compiled once when it changes rather than per transcript, and shared
     /// with every session's event sink through the `Arc` — so a term added
     /// mid-show takes effect on the next segment without restarting anything.
-    alerts: Arc<Mutex<Matcher>>,
+    pub(crate) alerts: Arc<Mutex<Matcher>>,
     /// The transcripts already emitted, and the session state around them.
     ///
     /// Shared with every session's event sink through the `Arc`, like the
     /// alert list, and for the same reason: it has to outlive any one session,
     /// because Start is non-destructive and the chat spans several of them.
-    history: Arc<Mutex<History>>,
+    /// It is also what a reconnecting remote client is caught up from (P16).
+    pub(crate) history: Arc<Mutex<History>>,
     /// The sidecar's language list, once it has been asked for.
     ///
     /// Cached because it is a table compiled into whisper.cpp — it cannot
     /// change while the app runs — and because fetching it means spawning a
     /// process, which should not happen every time Settings is opened.
-    languages: Mutex<Option<Vec<whisper_protocol::Language>>>,
+    pub(crate) languages: Mutex<Option<Vec<whisper_protocol::Language>>>,
+    /// The LAN remote client's listener and its broadcast channel (P16).
+    ///
+    /// Always here, even while the remote is switched off: [`broadcast`] emits
+    /// through it on every event, and a state that had to be checked for
+    /// existence first would be checked at every emit site.
+    pub(crate) remote: Arc<Hub>,
 }
 
 impl AppState {
     /// The configuration path, or the reason there is none.
-    fn config_path(&self) -> Result<PathBuf, String> {
+    pub(crate) fn config_path(&self) -> Result<PathBuf, String> {
         self.config_path
             .lock()
             .map_err(|_| "configuration path poisoned".to_string())?
@@ -167,7 +203,7 @@ impl AppState {
             .ok_or_else(|| "no configuration directory on this system".to_string())
     }
 
-    fn models_dir(&self) -> Result<PathBuf, String> {
+    pub(crate) fn models_dir(&self) -> Result<PathBuf, String> {
         self.models_dir
             .lock()
             .map_err(|_| "model directory poisoned".to_string())?
@@ -179,85 +215,20 @@ impl AppState {
     /// as "nothing chosen", which lands on the default — the model picker is
     /// not the place to surface a broken configuration file, and `load_config`
     /// already did.
-    fn selection(&self) -> models::Selection {
+    pub(crate) fn selection(&self) -> models::Selection {
         self.config_path()
             .map(|path| config::load(&path).selection())
             .unwrap_or_default()
     }
 }
 
-#[tauri::command]
-fn app_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
-/// The stored configuration, or the default one.
-///
-/// Infallible on purpose where it can be: a first start, an unreadable file
-/// and a file from a newer version all come back as an empty configuration and
-/// a log line rather than as an error the UI would have to render instead of
-/// the app. What it cannot paper over is not knowing where to look, which is
-/// the one case that also makes saving impossible and therefore has to be
-/// visible.
-#[tauri::command]
-fn load_config(state: tauri::State<'_, AppState>) -> Result<Config, String> {
-    Ok(config::load(&state.config_path()?))
-}
-
-/// Writes the whole configuration.
-///
-/// The whole of it, not a patch: it is a few kilobytes that a human edits at
-/// human speed, and a partial update would need the two sides to agree on
-/// which half is authoritative — which is exactly the drift the single file
-/// exists to avoid.
-#[tauri::command]
-fn save_config(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    config: Config,
-) -> Result<(), String> {
-    let path = state.config_path()?;
-    config::save(&path, &config).map_err(|err| {
-        // With the chain of causes, which the UI string flattens away.
-        tracing::error!(error = ?err, "saving the configuration failed");
-        err.to_string()
-    })?;
-
-    // Announced to every window, which is how a detached group window (P7)
-    // learns that its group was renamed, refilled or switched to another
-    // profile. The main window is the one that saved and ignores its own echo.
-    //
-    // After the write, not before: a window that reacted to a configuration
-    // the disk then refused would be showing something nothing else agrees
-    // with.
-    let _ = app.emit(EVENT_CONFIG, config);
-    Ok(())
-}
-
-// --- The model manager (P11) ---------------------------------------------
-
-/// The catalogue, what of it is installed, and which model a session would
-/// actually start with.
-///
-/// One command rather than three, because the three answers are only useful
-/// together: "small is installed" means nothing without "and it is the one in
-/// use", and the page would otherwise render a picker and its active state
-/// from two round trips that can disagree.
-/// The choice the page is currently showing, when it differs from the stored
-/// one.
-///
-/// The Settings page saves through a debounce, so the file answers with what
-/// was selected a second ago: asked without this, the view would tell an
-/// operator who just clicked a radio button that a different model is running.
-/// The page knows what it is showing, so it says, and the banner and the radio
-/// can never disagree.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SelectionArg {
-    model: Option<String>,
-    vad_model: Option<String>,
-    model_path: Option<String>,
-}
+// --- The three things that stay on the desktop (P16) ----------------------
+//
+// Not in [`commands`], because a browser has no equivalent for any of them and
+// an arm answering "not on this transport" would suggest the remote is missing
+// something. What is true is that a tab is not a window: the remote picks no
+// files, flashes in the page and its tab title rather than asking the
+// platform, and opens a group in a tab of its own.
 
 /// Asks for a model file with the system's own file dialog.
 ///
@@ -274,7 +245,7 @@ struct SelectionArg {
 /// the thread the dialog has to be driven from — blocking it there is a hung
 /// window rather than a picker.
 #[tauri::command]
-async fn pick_model_file(app: AppHandle, current: Option<String>) -> Option<String> {
+async fn pick_model_file<R: Runtime>(app: AppHandle<R>, current: Option<String>) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
 
     let mut dialog = app
@@ -304,163 +275,6 @@ async fn pick_model_file(app: AppHandle, current: Option<String>) -> Option<Stri
     dialog.blocking_pick_file().map(|file| file.to_string())
 }
 
-#[tauri::command]
-fn list_models(
-    state: tauri::State<'_, AppState>,
-    selection: Option<SelectionArg>,
-) -> Result<ModelsView, String> {
-    let selection = match selection {
-        Some(arg) => models::Selection {
-            speech: arg.model,
-            vad: arg.vad_model,
-            path: arg.model_path,
-        },
-        None => state.selection(),
-    };
-    Ok(models::view(&state.models_dir()?, &selection))
-}
-
-/// Fetches one catalogue model, resuming an interrupted attempt.
-///
-/// Returns as soon as the download is *running*, not when it finishes: this is
-/// minutes of work, and a command that blocked for it would freeze the window
-/// and hit Tauri's own timeouts. Progress arrives as `model-progress` events,
-/// which is also what a resumed or cancelled download reports through.
-#[tauri::command]
-async fn download_model(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
-    let dir = state.models_dir()?;
-    let entry = models::entry(&id).ok_or_else(|| format!("no such model: {id}"))?;
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut downloads = state
-            .downloads
-            .lock()
-            .map_err(|_| "download state poisoned".to_string())?;
-        // Pressing the button twice must not start two writers on one part
-        // file. They would interleave, and only the checksum at the end would
-        // notice — after both had run to completion.
-        if downloads.contains_key(&id) {
-            return Err(format!("{id} is already downloading"));
-        }
-        downloads.insert(id.clone(), Arc::clone(&cancel));
-    }
-
-    tauri::async_runtime::spawn(async move {
-        let progress_app = app.clone();
-        let result = models::download(entry, &dir, cancel, move |progress| {
-            let _ = progress_app.emit(EVENT_MODEL_PROGRESS, progress);
-        })
-        .await;
-
-        // Cleared before the failure is reported, so that the retry the
-        // operator is about to press is not refused as "already downloading".
-        if let Some(state) = app.try_state::<AppState>() {
-            if let Ok(mut downloads) = state.downloads.lock() {
-                downloads.remove(&id);
-            }
-        }
-
-        if let Err(err) = result {
-            // Cancelling is not a failure and has already reported itself.
-            if err.to_string() == "cancelled" {
-                tracing::info!(id, "download cancelled");
-                return;
-            }
-            tracing::error!(id, error = ?err, "downloading a model failed");
-            let _ = app.emit(
-                EVENT_MODEL_PROGRESS,
-                Progress {
-                    id,
-                    received: 0,
-                    total: entry.bytes,
-                    stage: models::Stage::Failed,
-                    message: Some(err.to_string()),
-                },
-            );
-        }
-    });
-
-    Ok(())
-}
-
-/// Stops a download in flight. What has arrived is kept, so pressing download
-/// again continues rather than starts over.
-#[tauri::command]
-fn cancel_download(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
-    let downloads = state
-        .downloads
-        .lock()
-        .map_err(|_| "download state poisoned".to_string())?;
-    if let Some(cancel) = downloads.get(&id) {
-        cancel.store(true, Ordering::Relaxed);
-    }
-    Ok(())
-}
-
-/// Deletes an installed model, and any half-finished download of it.
-///
-/// Worth having rather than leaving to the Finder: these are the largest files
-/// the app ever writes, in a directory macOS does its best to hide.
-#[tauri::command]
-fn remove_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
-    models::remove(&state.models_dir()?, &id).map_err(|err| {
-        tracing::error!(error = ?err, "removing a model failed");
-        err.to_string()
-    })
-}
-
-/// Every language the sidecar can be given, for the picker on the channel
-/// setup.
-///
-/// Fetched from whisper.cpp rather than listed here, so that no language list
-/// exists anywhere in this repository: adding one is a whisper.cpp version,
-/// never a code change of ours.
-#[tauri::command]
-fn list_languages(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<whisper_protocol::Language>, String> {
-    let mut cached = state
-        .languages
-        .lock()
-        .map_err(|_| "language list poisoned")?;
-    if let Some(languages) = cached.as_ref() {
-        return Ok(languages.clone());
-    }
-
-    let languages = worker::list_languages().map_err(|err| {
-        tracing::error!(error = ?err, "asking the sidecar for its language list failed");
-        err.to_string()
-    })?;
-    *cached = Some(languages.clone());
-    Ok(languages)
-}
-
-// --- Alert terms & attention (P17) ---------------------------------------
-
-/// Compiles the alert list. Sent by the UI whenever it changes, and once at
-/// startup with what the configuration file held.
-///
-/// The list is not read from the configuration file here, for the same reason
-/// `list_models` takes its selection as an argument: Settings saves through a
-/// debounce, so the file is a second behind the term that was just typed —
-/// and a term that only starts working a second after it was entered is a term
-/// nobody can tell is working.
-#[tauri::command]
-fn set_alert_terms(state: tauri::State<'_, AppState>, terms: Vec<String>) -> Result<(), String> {
-    let matcher = Matcher::new(terms);
-    tracing::info!(terms = matcher.len(), "alert list compiled");
-    *state
-        .alerts
-        .lock()
-        .map_err(|_| "the alert list is poisoned".to_string())? = matcher;
-    Ok(())
-}
-
 /// Asks the platform to draw attention to this window.
 ///
 /// The window it was called from, not "the main window": a detached group
@@ -476,7 +290,7 @@ fn set_alert_terms(state: tauri::State<'_, AppState>, terms: Vec<String>) -> Res
 /// A focused window is left alone — the operator is already looking at it, and
 /// macOS would bounce the dock icon of the app in front of them.
 #[tauri::command]
-fn request_attention(window: tauri::Window, urgent: bool) -> Result<(), String> {
+fn request_attention<R: Runtime>(window: tauri::Window<R>, urgent: bool) -> Result<(), String> {
     if window.is_focused().unwrap_or(false) {
         return Ok(());
     }
@@ -489,45 +303,6 @@ fn request_attention(window: tauri::Window, urgent: bool) -> Result<(), String> 
     window
         .request_user_attention(Some(kind))
         .map_err(|err| err.to_string())
-}
-
-// --- The chat, and the windows onto it (P7) -------------------------------
-
-/// The chat as it stands: every transcript still held, the sessions' zero
-/// points, and the session state.
-///
-/// Asked for once by every window as it opens. The main window uses it to come
-/// back from a reload with its chat intact; a detached group window uses it
-/// because it is opened in the middle of a show and would otherwise start
-/// blank while the room is full of things that were already said.
-#[tauri::command]
-fn session_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
-    Ok(state
-        .history
-        .lock()
-        .map_err(|_| "the chat history is poisoned".to_string())?
-        .snapshot())
-}
-
-/// Empties the chat — every transcript, in every group and from every session.
-///
-/// A backend command rather than each window clearing itself, which is what it
-/// was while there was only one window. With several views onto one chat, the
-/// action has to happen in the one place they are all caught up from,
-/// otherwise a group window would keep showing what the main window was just
-/// told had been deleted.
-///
-/// Changes no configuration: channels, colours, groups and the vocabulary all
-/// survive it. The confirmation is the caller's — see `ClearCommunication`.
-#[tauri::command]
-fn clear_communication(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state
-        .history
-        .lock()
-        .map_err(|_| "the chat history is poisoned".to_string())?
-        .clear();
-    let _ = app.emit(EVENT_CLEARED, ());
-    Ok(())
 }
 
 /// Opens a group in a window of its own, or focuses the one already open.
@@ -548,8 +323,8 @@ fn clear_communication(app: AppHandle, state: tauri::State<'_, AppState>) -> Res
 /// after it appears. It is stored with the group, so it can also change while
 /// the window is open — the window then applies it to itself.
 #[tauri::command]
-fn open_group_window(
-    app: AppHandle,
+fn open_group_window<R: Runtime>(
+    app: AppHandle<R>,
     group: usize,
     name: String,
     on_top: bool,
@@ -595,7 +370,7 @@ fn open_group_window(
 /// during a show, so closing the windows costs an operator a layout they were
 /// about to rebuild anyway.
 #[tauri::command]
-fn close_group_windows(app: AppHandle) -> Result<(), String> {
+fn close_group_windows<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     for (label, window) in app.webview_windows() {
         if label.starts_with(GROUP_WINDOW_PREFIX) {
             let _ = window.close();
@@ -604,23 +379,24 @@ fn close_group_windows(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn list_devices() -> Result<Vec<DeviceOption>, String> {
-    session::list_devices().map_err(|e| e.to_string())
-}
+// --- Starting a session ---------------------------------------------------
 
 /// Starts a session and returns its running state.
 ///
 /// Blocks until the model is loaded, which on a machine's very first start
 /// includes the one-off Metal shader compilation (~8 s). Returning the state
-/// rather than only emitting it means the button the operator pressed gets its
-/// own answer; the events carry what happens after that.
-#[tauri::command]
-fn start_session(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
+/// rather than only emitting it means the button that was pressed gets its own
+/// answer, wherever it was pressed; the events carry what happens after that.
+///
+/// Lives here rather than in [`commands`] because it is the one command that
+/// builds the event sink, which is this module's own type.
+pub(crate) fn start_session<R: Runtime>(
+    app: &AppHandle<R>,
     config: SessionConfig,
 ) -> Result<SessionState, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "the application state is not ready".to_string())?;
     let mut slot = state.session.lock().map_err(|_| "session state poisoned")?;
 
     // A session whose pipeline has already ended — device unplugged, sidecar
@@ -659,22 +435,22 @@ fn start_session(
     };
 
     let events: Arc<dyn EventSink> = Arc::new(TauriEvents {
-        app,
+        app: app.clone(),
         alerts: Arc::clone(&state.alerts),
         history: Arc::clone(&state.history),
     });
     match Session::start(config, events.clone(), models) {
         Ok((session, running)) => {
             *slot = Some(session);
-            // Announced as well as returned. The window that pressed Start
-            // learns from the answer, but it is not the only window any more:
-            // a detached group window (P7) has nothing but the event, and
-            // without this it goes on saying "not running" through a running
-            // session — and, having no zero point for it, times every line
-            // as "+0:12" instead of as a time of day.
+            // Announced as well as returned. The view that pressed Start
+            // learns from the answer, but it is not the only view any more: a
+            // detached group window (P7) and a browser (P16) have nothing but
+            // the event, and without this they go on saying "not running"
+            // through a running session — and, having no zero point for it,
+            // time every line as "+0:12" instead of as a time of day.
             //
             // The sink is also what records the state in the history, so a
-            // window opened later is caught up on it too.
+            // view opened later is caught up on it too.
             events.state(running.clone());
             Ok(running)
         }
@@ -690,19 +466,6 @@ fn start_session(
             Err(message)
         }
     }
-}
-
-#[tauri::command]
-fn stop_session(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let session = state
-        .session
-        .lock()
-        .map_err(|_| "session state poisoned")?
-        .take();
-    if let Some(session) = session {
-        session.stop();
-    }
-    Ok(())
 }
 
 pub fn run() {
@@ -742,6 +505,21 @@ pub fn run() {
             }
             app.manage(state);
 
+            // The LAN remote client, if the configuration asks for one (P16).
+            // Read from the file here rather than waiting for the UI's first
+            // save, so that an operator who left it on last night finds it on
+            // this morning without opening Settings. Off is the normal state
+            // and costs a file read.
+            let handle = app.handle().clone();
+            if let Some(state) = handle.try_state::<AppState>() {
+                if let Ok(path) = state.config_path() {
+                    let wanted = config::load(&path).remote;
+                    if wanted.enabled {
+                        remote::apply(&handle, &wanted);
+                    }
+                }
+            }
+
             // The resource indicator runs for as long as the window does, not
             // only while a session does: an operator opening the app on a
             // machine that is already loaded should see that before they press
@@ -749,30 +527,20 @@ pub fn run() {
             // held is seen to come back.
             let handle = app.handle().clone();
             resources::spawn(move |usage| {
-                let _ = handle.emit(EVENT_RESOURCES, usage);
+                broadcast(&handle, EVENT_RESOURCES, usage);
             });
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            app_version,
-            load_config,
-            save_config,
+            // Everything both views share goes through the one command layer
+            // (P16) — see [`commands`].
+            commands::command,
+            // What only a window can do.
             pick_model_file,
-            list_models,
-            download_model,
-            cancel_download,
-            remove_model,
-            list_devices,
-            list_languages,
-            set_alert_terms,
             request_attention,
-            session_snapshot,
-            clear_communication,
             open_group_window,
-            close_group_windows,
-            start_session,
-            stop_session
+            close_group_windows
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Tauri application");

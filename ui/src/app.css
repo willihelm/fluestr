@@ -84,3 +84,44 @@ body {
 .panel header .action {
   margin-left: auto;
 }
+
+/* --- A page asking to be looked at (P16) ---------------------------------
+
+   The app asks the platform: macOS bounces the Dock icon. A page served over
+   the LAN has no platform to ask — it is one browser tab among the operator's
+   others — so it asks with its own surface, and with its title in the tab
+   strip. See `flash.ts`, which owns when and for how long.
+
+   An inset rather than a flood: the chat has to stay readable while it is
+   asking, because the whole point is that something in it needs reading. Red
+   for an alert term, the accent for a group's quieter flash-on-message, which
+   is the same distinction the two platform requests make. */
+body.flashing {
+  animation: attention 0.6s ease-in-out infinite alternate;
+}
+
+body.flashing.urgent {
+  --attention: #ff6b6b;
+}
+
+body.flashing:not(.urgent) {
+  --attention: var(--accent);
+}
+
+@keyframes attention {
+  from {
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+  to {
+    box-shadow: inset 0 0 0 4px var(--attention);
+  }
+}
+
+/* An operator who has asked for no animation is still asked to look, with a
+   border that is simply there rather than one that pulses. */
+@media (prefers-reduced-motion: reduce) {
+  body.flashing {
+    animation: none;
+    box-shadow: inset 0 0 0 4px var(--attention);
+  }
+}

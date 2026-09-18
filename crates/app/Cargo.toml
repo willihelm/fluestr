@@ -35,9 +35,18 @@ reqwest = { workspace = true }
 futures-util = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+if-addrs = { workspace = true }
 
 [dev-dependencies]
 hound = { workspace = true }
 # The download tests are async and need a runtime of their own; at runtime the
-# app borrows Tauri's.
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# app borrows Tauri's. `macros` on top of what the crate already depends on.
+tokio = { workspace = true, features = ["macros"] }
+# A mock Tauri app, so the LAN remote (P16) can be served and talked to without
+# a window. What the socket test needs is an `AppHandle`, which is the one
+# thing the command layer cannot be reached without.
+tauri = { version = "2", features = ["test"] }
+# A WebSocket client for that test. Already in the tree behind axum's `ws`.
+tokio-tungstenite = "0.29"

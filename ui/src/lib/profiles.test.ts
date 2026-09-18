@@ -9,15 +9,18 @@
 import { describe, expect, it } from "vitest";
 import {
   adoptDeviceIds,
+  canonical,
   connectedDevice,
   duplicate,
   fromStored,
   fromStoredConfig,
   newProfile,
+  reuseKeys,
   toStored,
   toStoredConfig,
   type Profile,
 } from "./profiles";
+import type { StoredConfig } from "./bridge";
 import { restoreChannel, DEFAULT_LANGUAGE } from "./streams";
 import { restoreGroup } from "./groups";
 import type { DeviceOption, StoredProfile } from "./bridge";
@@ -424,5 +427,204 @@ describe("alert terms and flashing", () => {
     });
 
     expect(alerts).toEqual([]);
+  });
+});
+
+// Adopting a configuration another peer wrote (P16). What matters is not that
+// the values arrive — `fromStoredConfig` already does that — but that the
+// keys this window has handed out survive it, because everything on screen is
+// pointed at them: the selected group, and the profile identity that decides
+// whether the detached group windows close.
+describe("reuseKeys", () => {
+  const profileWith = (name: string, groups: string[]): Profile => ({
+    ...fromStored({
+      name,
+      device: "Scarlett",
+      deviceId: "uid",
+      language: "de",
+      channels: [{ channel: 0, label: "Regie", language: "de", color: "#fff" }],
+      groups: groups.map((g) => ({ name: g, members: [0] })),
+    }),
+  });
+
+  it("keeps the keys of the channels too, and the membership that names them", () => {
+    const before = [profileWith("Oper", ["Regie"])];
+    const after = [profileWith("Oper", ["Regie"])];
+
+    const [adopted] = reuseKeys(after, before);
+
+    expect(adopted.channels.map((c) => c.key)).toEqual(before[0].channels.map((c) => c.key));
+    // The group still names a channel that is actually in the list. Without
+    // the remap it would be holding the key the fresh read handed out, which
+    // nothing in the adopted profile has any more — a group that silently
+    // watches nothing.
+    expect(adopted.groups[0].members).toEqual([adopted.channels[0].key]);
+  });
+
+  it("keeps the keys of the profiles and groups in the same positions", () => {
+    const before = [profileWith("Oper", ["Regie", "Ton"])];
+    const after = [profileWith("Oper — umbenannt", ["Regie", "Ton"])];
+
+    const [adopted] = reuseKeys(after, before);
+
+    expect(adopted.key).toBe(before[0].key);
+    expect(adopted.groups.map((g) => g.key)).toEqual(before[0].groups.map((g) => g.key));
+    // The values are the new ones; only the identities are carried over.
+    expect(adopted.name).toBe("Oper — umbenannt");
+  });
+
+  it("leaves a profile with no counterpart with the keys it was read with", () => {
+    const before = [profileWith("Oper", [])];
+    const after = [profileWith("Oper", []), profileWith("Probebühne", [])];
+
+    const adopted = reuseKeys(after, before);
+
+    expect(adopted[0].key).toBe(before[0].key);
+    expect(adopted[1].key).toBe(after[1].key);
+  });
+
+  it("carries over as many groups as there are positions to match", () => {
+    const before = [profileWith("Oper", ["Regie"])];
+    const after = [profileWith("Oper", ["Regie", "Ton"])];
+
+    const [adopted] = reuseKeys(after, before);
+
+    expect(adopted.groups[0].key).toBe(before[0].groups[0].key);
+    expect(adopted.groups[1].key).toBe(after[0].groups[1].key);
+  });
+});
+
+// Recognising the echo of one's own save (P16). Every save is announced to
+// every view including the one that caused it, and the announcement has been
+// through the backend, which writes the same configuration in its own field
+// order. A comparison that called that a foreign change would be no echo
+// suppression at all — and the visible cost is the Settings page rebuilding
+// the field being typed in, on every keystroke.
+describe("canonical", () => {
+  const config = toStoredConfig([], -1, "Standby, Cue, Go.");
+
+  it("does not depend on the order the fields were written in", () => {
+    const shuffled = Object.fromEntries(
+      Object.entries(config).reverse(),
+    ) as unknown as typeof config;
+
+    expect(canonical(shuffled)).toBe(canonical(config));
+  });
+
+  it("still tells two different configurations apart", () => {
+    expect(canonical({ ...config, vocabulary: "something else" })).not.toBe(
+      canonical(config),
+    );
+  });
+
+  // Nested, because the profiles are where the two sides are most likely to
+  // disagree about order and where every real edit happens.
+  it("reaches into the profiles", () => {
+    const one = toStoredConfig([newProfile([], { name: "Scarlett", id: "uid" })], 0, "");
+    const other = structuredClone(one);
+    other.profiles[0] = Object.fromEntries(
+      Object.entries(other.profiles[0]).reverse(),
+    ) as unknown as (typeof other.profiles)[0];
+
+    expect(canonical(other)).toBe(canonical(one));
+  });
+});
+
+// The invariant the whole last-write-wins arrangement rests on (P16): reading
+// a configuration and writing it straight back has to produce the same
+// configuration. A view that adopts another peer's save and then writes back
+// something *different* is a view that has started an argument nothing settles
+// — the two bounce one configuration off each other several times a second,
+// and every field on the Settings page is rebuilt under the cursor on each
+// pass. A new field that `fromStoredConfig` drops, or that `toStoredConfig`
+// spells differently, is exactly that bug, and this is what catches it.
+describe("adopting a configuration", () => {
+  const rich = (): StoredConfig => {
+    const profile = newProfile([], { name: "Scarlett 18i20", id: "uid-1" });
+    profile.name = "Oper grosses Haus";
+    profile.channels = [
+      { ...profile.channels[0], label: "Regie", channel: 0 },
+      { ...profile.channels[0], key: 9_001, label: "Ton", channel: 3 },
+    ];
+    profile.groups = [
+      {
+        key: 9_100,
+        name: "Regie",
+        members: [profile.channels[0].key],
+        flash: true,
+        onTop: true,
+      },
+    ];
+
+    return toStoredConfig(
+      [profile],
+      profile.key,
+      "Standby, Cue, Go.",
+      { model: "small-q5_1", vadModel: "silero-v5.1.2", modelPath: null },
+      ["Feuer", "Arzt"],
+      { enabled: true, address: "192.168.178.27", port: 8787 },
+    );
+  };
+
+  it("and writing it straight back produces the same configuration", () => {
+    const stored = rich();
+    const read = fromStoredConfig(stored);
+    const written = toStoredConfig(
+      read.profiles,
+      read.activeKey!,
+      read.vocabulary ?? "",
+      read.models,
+      read.alerts,
+      read.remote,
+    );
+
+    expect(canonical(written)).toBe(canonical(stored));
+  });
+
+  // The port comes from a number box, and a number box that has been cleared
+  // binds to `null`. The blur clamp normally catches it, but the save that
+  // runs when the window is closed with the cursor still in the field does
+  // not go through a blur — and `null` is what the backend refuses outright,
+  // in exactly the save that exists as a last resort.
+  it("writes a port the backend can read even when the field was cleared", () => {
+    const profile = newProfile([], { name: "Probe", id: "probe" });
+    const written = toStoredConfig([profile], profile.key, "", {}, [], {
+      enabled: true,
+      address: "192.168.178.27",
+      port: null as unknown as number,
+    });
+
+    expect(written.remote?.port).toBe(8787);
+  });
+
+  it("holds a port to what can actually be bound", () => {
+    const profile = newProfile([], { name: "Probe", id: "probe" });
+    const low = toStoredConfig([profile], profile.key, "", {}, [], {
+      enabled: true,
+      address: "192.168.178.27",
+      port: 80,
+    });
+
+    expect(low.remote?.port).toBe(1024);
+  });
+
+  // Twice, because a translation can be stable on the second pass and not on
+  // the first — which is the shape that makes a loop settle in testing and run
+  // forever in front of an operator.
+  it("is stable however many times it happens", () => {
+    let stored = rich();
+    for (let pass = 0; pass < 3; pass++) {
+      const read = fromStoredConfig(stored);
+      const next = toStoredConfig(
+        read.profiles,
+        read.activeKey!,
+        read.vocabulary ?? "",
+        read.models,
+        read.alerts,
+        read.remote,
+      );
+      expect(canonical(next)).toBe(canonical(stored));
+      stored = next;
+    }
   });
 });
