@@ -14,6 +14,7 @@ const group = (key: number, members: number[]): Group => ({
   key,
   name: `Group ${key}`,
   members,
+  flash: false,
 });
 
 describe("group membership", () => {

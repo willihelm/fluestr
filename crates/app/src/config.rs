@@ -85,6 +85,19 @@ pub struct StoredGroup {
     /// than refused: a hand-edited file should cost a group its member, not
     /// the operator their whole setup.
     pub members: Vec<usize>,
+    /// Whether a view of this group asks for the window's attention on *every*
+    /// message, not only on an alert term (P17).
+    ///
+    /// Per group because that is the scope at which the question is asked: the
+    /// stage manager's group is worth looking up for whatever is said on it,
+    /// the general talkback is not, and one setting for both would have to be
+    /// off.
+    ///
+    /// `#[serde(default)]` — off — because a file written before this existed
+    /// has no such field, and inheriting "flash on everything" from a version
+    /// that never offered it is the one wrong way to read its absence.
+    #[serde(default)]
+    pub flash: bool,
 }
 
 /// One production's setup: which interface, which channels, which views.
@@ -187,6 +200,17 @@ pub struct Config {
     /// and remembered while it does not.
     #[serde(default)]
     pub model_path: Option<String>,
+    /// The words that must not be missed (P17), one per entry.
+    ///
+    /// Beside the profiles, like the vocabulary: "Feuer" means the same thing
+    /// in every production the machine is carried to, and a copy per profile
+    /// is a copy that is missing a term in exactly the profile that needed it.
+    ///
+    /// Stored as a list rather than as one block of text — each entry is a
+    /// term, and a file a human may have to read should say so. Empty is the
+    /// normal state; nobody has to use this.
+    #[serde(default)]
+    pub alerts: Vec<String>,
     pub profiles: Vec<Profile>,
 }
 
@@ -213,6 +237,7 @@ impl Default for Config {
             model: None,
             vad_model: None,
             model_path: None,
+            alerts: Vec::new(),
             profiles: Vec::new(),
         }
     }
@@ -359,6 +384,7 @@ mod tests {
             model: Some("small-q5_1".into()),
             vad_model: Some("silero-v5.1.2".into()),
             model_path: None,
+            alerts: vec!["Feuer".into(), "Arzt".into()],
             profiles: vec![
                 Profile {
                     name: "Probebühne".into(),
@@ -395,6 +421,7 @@ mod tests {
                     groups: vec![StoredGroup {
                         name: "Bühne".into(),
                         members: vec![1],
+                        flash: true,
                     }],
                 },
             ],
@@ -450,6 +477,41 @@ mod tests {
 
         assert_eq!(load(&path), Config::default());
         assert!(dir.join("config.bad.json").exists());
+    }
+
+    #[test]
+    fn a_file_from_before_the_alert_list_still_loads() {
+        // Every field P17 added is optional on the way in, so a setup built
+        // with an earlier version comes back whole — with no alert terms and
+        // with no group flashing, which is what "never asked for" means.
+        let path = temp_dir().join(FILE_NAME);
+        fs::write(
+            &path,
+            // `r##`, because the colour below ends in `"#` and would otherwise
+            // close an `r#` string in the middle of the fixture.
+            r##"{
+              "version": 1,
+              "active": 0,
+              "vocabulary": null,
+              "profiles": [
+                {
+                  "name": "Probebühne",
+                  "device": "Scarlett 2i2",
+                  "channels": [
+                    { "channel": 0, "label": "Regie", "language": "de", "color": "#6ea8fe" }
+                  ],
+                  "groups": [{ "name": "Bühne", "members": [0] }]
+                }
+              ]
+            }"##,
+        )
+        .expect("writing the older file");
+
+        let config = load(&path);
+
+        assert!(config.alerts.is_empty());
+        assert_eq!(config.profiles[0].groups[0].members, vec![0]);
+        assert!(!config.profiles[0].groups[0].flash);
     }
 
     #[test]

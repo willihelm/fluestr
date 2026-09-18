@@ -21,6 +21,7 @@
 
 import { newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
 import { restoreGroup, type Group } from "./groups";
+import { cleanTerms } from "./alerts";
 import {
   CONFIG_VERSION,
   type DeviceOption,
@@ -94,6 +95,7 @@ export const toStored = (profile: Profile): StoredProfile => {
     })),
     groups: profile.groups.map((g) => ({
       name: g.name,
+      flash: g.flash,
       // `flatMap` rather than a filter: a key with no position is a channel
       // that is no longer there, and dropping it is what `forgetChannels`
       // already does live.
@@ -130,6 +132,9 @@ export const fromStored = (stored: StoredProfile): Profile => {
       restoreGroup(
         g.name,
         g.members.filter((p) => p >= 0 && p < channels.length).map((p) => channels[p].key),
+        // A file written before flashing existed has no such field, and its
+        // groups start quiet.
+        g.flash ?? false,
       ),
     ),
   };
@@ -202,6 +207,10 @@ export const toStoredConfig = (
   activeKey: number,
   vocabulary: string,
   models: ModelChoice = {},
+  /// The alert terms (P17). Beside the profiles like the vocabulary, and
+  /// cleaned on the way out: the editor's empty row is how a term is added,
+  /// and it has no business in the file.
+  alerts: string[] = [],
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -217,6 +226,7 @@ export const toStoredConfig = (
   model: models.model ?? null,
   vadModel: models.vadModel ?? null,
   modelPath: models.modelPath?.trim() ? models.modelPath.trim() : null,
+  alerts: cleanTerms(alerts),
   profiles: profiles.map(toStored),
 });
 
@@ -243,6 +253,7 @@ export const fromStoredConfig = (
   activeKey: number | null;
   vocabulary: string | null;
   models: ModelChoice;
+  alerts: string[];
 } => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
@@ -259,5 +270,8 @@ export const fromStoredConfig = (
       vadModel: stored.vadModel ?? null,
       modelPath: stored.modelPath ?? null,
     },
+    // A file written before P17 has no alert list, which is the same thing as
+    // an empty one: nobody has to use this.
+    alerts: stored.alerts ?? [],
   };
 };

@@ -17,6 +17,8 @@
     type Profile,
   } from "./lib/profiles";
   import { DEFAULT_VOCABULARY, toConfig as vocabularyConfig } from "./lib/vocabulary";
+  import { cleanTerms, sameTerms } from "./lib/alerts";
+  import { toBubbles } from "./lib/bubbles";
   import {
     listDevices,
     loadConfig,
@@ -25,7 +27,9 @@
     onResources,
     onSessionState,
     onTranscript,
+    requestAttention,
     saveConfig,
+    setAlertTerms,
     startSession,
     stopSession,
     type DeviceOption,
@@ -61,6 +65,11 @@
   let profiles = $state<Profile[]>([]);
   let activeKey = $state<number | null>(null);
   let vocabulary = $state(DEFAULT_VOCABULARY);
+  // The words that must not be missed (P17). Beside the profiles like the
+  // vocabulary, and empty by default: nobody has to use this, and an app that
+  // ships with someone else's idea of an emergency is worse than one with
+  // none. The matching itself happens on the backend — see `lib/alerts.ts`.
+  let alerts = $state<string[]>([]);
   // Which model transcribes (P11). Empty is "never chose", which resolves to
   // the recommended one — so a fresh machine is not asked a question it has no
   // way to answer yet.
@@ -144,6 +153,17 @@
   let shown = $derived(
     visible === null ? messages : messages.filter((m) => visible.has(m.streamId)),
   );
+  // The whole session grouped the way the main chat groups it, which is what
+  // an attention request is counted per (P17): a sentence arrives as three
+  // segments, and three flashes for one sentence is the noise this feature
+  // must not add. Every channel, not the selected group's — the main window
+  // is the view of the whole session.
+  //
+  // A second pass over the messages next to the chat's own. It is the same
+  // order of work as the append the list already does, and it buys the one
+  // thing a per-segment rule cannot get right; what would change that is
+  // loading a session from disk, which P10 was set aside for.
+  let bubbles = $derived(toBubbles(messages));
 
   // Startup: the devices that are there, and the setup from last time.
   //
@@ -169,7 +189,7 @@
 
       const restored = stored
         ? fromStoredConfig(stored)
-        : { profiles: [], activeKey: null, vocabulary: null, models: {} };
+        : { profiles: [], activeKey: null, vocabulary: null, models: {}, alerts: [] };
 
       if (restored.profiles.length === 0) {
         // First start: one profile on the default device, with one channel, so
@@ -196,6 +216,7 @@
       // back.
       if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
       models = restored.models;
+      alerts = restored.alerts;
 
       loaded = true;
     };
@@ -214,12 +235,39 @@
     // Built here rather than in the timer: this is what reads every field, and
     // reading them is what makes this effect run again when one of them
     // changes.
-    const config = toStoredConfig(profiles, activeKey, vocabulary, models);
+    const config = toStoredConfig(profiles, activeKey, vocabulary, models, alerts);
 
     const timer = setTimeout(() => {
       saveConfig(config)
         .then(() => (saveError = null))
         .catch((e) => (saveError = String(e)));
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  });
+
+  // The compiled alert list lives on the backend, where every transcript is
+  // matched against it before it reaches any view (P17). Pushed from here
+  // whenever it changes rather than read from the file by the backend: the
+  // file is a debounce behind the term that was just typed, and a term that
+  // starts working a second late is a term nobody can tell is working.
+  //
+  // Sent even when it is empty — that is how clearing the list takes effect,
+  // and how a restart of the window matches a backend that still holds the
+  // terms from before it.
+  let compiled: string[] | null = null;
+  $effect(() => {
+    if (!loaded) return;
+    const terms = cleanTerms(alerts);
+    // Typing a term is one keystroke at a time, and every intermediate state
+    // is a list: without this, "Feuer" is five compilations, four of which
+    // highlight a word nobody is looking for.
+    if (compiled !== null && sameTerms(compiled, terms)) return;
+
+    const timer = setTimeout(() => {
+      setAlertTerms(terms)
+        .then(() => (compiled = terms))
+        .catch((e) => console.warn("the alert list was not compiled:", e));
     }, SAVE_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
@@ -248,6 +296,7 @@
     const subscriptions = [
       onTranscript((event) => {
         messages = [...messages, event];
+        attend(event);
       }),
       onLevels((event) => {
         levels = new Map(event.streams.map((s) => [s.streamId, s]));
@@ -286,6 +335,41 @@
       }
     };
   });
+
+  /// Asks the window to flash for a transcript that warrants it (P17).
+  ///
+  /// Two reasons, and they are not the same request. An alert term is urgent
+  /// and the main chat sees every one of them, whichever group is on screen —
+  /// it is the view of the whole session, and a word that must not be missed
+  /// must not be missed because a group happened to be selected. A group's
+  /// flash-on-message is the quieter request, and it follows the view: only
+  /// while that group is the one on screen, and never for the all-channels
+  /// view, which has no group setting to follow.
+  ///
+  /// Counted per **bubble**, not per segment. The event that just arrived is
+  /// in the last bubble either way; what decides is whether it brought the
+  /// first alert into that bubble, or opened it. Without that, one sentence
+  /// spoken across three segments is three flashes.
+  ///
+  /// Whether the window is focused is the backend's question, because the
+  /// window is: an operator already looking at the chat is not asked to look
+  /// at it. And never a sound — this is a room that is already full of speech.
+  const attend = (event: TranscriptEvent) => {
+    const bubble = bubbles[bubbles.length - 1];
+    if (!bubble) return;
+
+    // The first alert in this bubble: every range it holds is one this event
+    // brought.
+    const urgent = event.alerts.length > 0 && bubble.alerts.length === event.alerts.length;
+    const flashing =
+      bubble.parts === 1 &&
+      group?.flash === true &&
+      visible !== null &&
+      visible.has(event.streamId);
+
+    if (!urgent && !flashing) return;
+    requestAttention(urgent).catch((e) => console.warn("no attention request:", e));
+  };
 
   // One global Start for every configured channel — there is deliberately no
   // per-channel Start button. And it is non-destructive: the chat keeps what
@@ -418,6 +502,7 @@
       bind:profiles
       bind:activeKey
       bind:vocabulary
+      bind:alerts
       bind:models
       {deviceChannels}
       locked={running || busy}
@@ -442,7 +527,15 @@
             This group has no channels yet. Add some on the Settings page.
           </p>
         {:else}
-          <ChatList messages={shown} {colors} starts={sessionStarts} />
+          <!-- The flash follows the view, like the attention request: only
+               while a group that asked for it is the one on screen. The
+               all-channels view has no group setting to follow. -->
+          <ChatList
+            messages={shown}
+            {colors}
+            starts={sessionStarts}
+            flash={group?.flash === true}
+          />
         {/if}
       </div>
     </div>

@@ -45,7 +45,8 @@
   <p class="hint">
     A group is a view onto some of the channels, selected in the sidebar of the chat.
     A channel can be in any number of groups; removing it from one leaves it in the
-    others and in the setup.
+    others and in the setup. Flashing asks the window for attention on every message
+    of that group, not only on an alert term — for the one view worth looking up for.
   </p>
 
   {#if groups.length === 0}
@@ -62,6 +63,13 @@
               ×
             </button>
           </div>
+
+          <!-- Under the name and above the members, because it is a property
+               of the group and not of any channel in it. -->
+          <label class="flash">
+            <input type="checkbox" bind:checked={group.flash} />
+            <span>Flash on every message</span>
+          </label>
 
           <div class="members">
             {#each channels as channel (channel.key)}
@@ -111,6 +119,15 @@
 
   .name input {
     flex: 1;
+  }
+
+  .flash {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 0.4rem;
   }
 
   .members {

@@ -47,6 +47,18 @@ export interface SessionConfig {
   vocabulary: string | null;
 }
 
+/// Where an alert term occurs in a transcript (P17), in **UTF-16 code units**
+/// — which is what `String.prototype.slice` counts, so these can be used as
+/// they arrive.
+///
+/// Matched on the backend, once, so that every view highlights the same
+/// characters: the main chat, a detached group window and the LAN viewer (P16)
+/// are given the same numbers rather than each running a matcher of its own.
+export interface AlertMatch {
+  start: number;
+  end: number;
+}
+
 export interface TranscriptEvent {
   // Sequence numbers are per stream and start again at zero with every
   // session, so `(streamId, seq)` repeats as soon as a second session runs —
@@ -62,6 +74,9 @@ export interface TranscriptEvent {
   detectedLanguage: string | null;
   decodeMs: number;
   latencyMs: number;
+  /// Non-overlapping and in order. Empty whenever the alert list is empty,
+  /// which is the normal state.
+  alerts: AlertMatch[];
 }
 
 export interface StreamLevel {
@@ -164,6 +179,10 @@ export interface StoredChannel {
 
 export interface StoredGroup {
   name: string;
+  /// Whether a view of this group asks for the window's attention on every
+  /// message rather than only on an alert term (P17). Optional because a file
+  /// written before it existed has none, which reads as off.
+  flash?: boolean;
   /// Positions in `StoredProfile.channels`, not the channel keys membership
   /// uses while the setup is being edited. `profiles.ts` owns the conversion.
   members: number[];
@@ -211,6 +230,10 @@ export interface StoredConfig {
   /// machine that will never reach the internet. Used when `model` is
   /// `CUSTOM_MODEL`, and remembered while it is not.
   modelPath?: string | null;
+  /// The words that must not be missed (P17), one per entry. Beside the
+  /// profiles like the vocabulary: "Feuer" means the same thing in every
+  /// production. Optional because a file written before P17 has none.
+  alerts?: string[];
   profiles: StoredProfile[];
 }
 
@@ -317,6 +340,21 @@ export const downloadModel = (id: string) => invoke<void>("download_model", { id
 /// continues instead of starting over.
 export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
 export const removeModel = (id: string) => invoke<void>("remove_model", { id });
+/// Compiles the alert list on the backend, where every transcript is matched
+/// against it. Sent when the list changes and once at startup — not read from
+/// the configuration file, which is a debounce behind the term just typed.
+export const setAlertTerms = (terms: string[]) =>
+  invoke<void>("set_alert_terms", { terms });
+
+/// Asks the platform to draw attention to this window, if it is not already
+/// the focused one — that check is the backend's, because the window is.
+///
+/// `urgent` is an alert term: it keeps asking until the app is looked at. A
+/// group's flash-on-message is a single bounce. Never a sound, in either case:
+/// this is an intercom room.
+export const requestAttention = (urgent: boolean) =>
+  invoke<void>("request_attention", { urgent });
+
 export const listDevices = () => invoke<DeviceOption[]>("list_devices");
 /// Every language the sidecar accepts — around a hundred, in whisper's own
 /// order. Asked for rather than listed in the UI, so that adding a language is

@@ -12,7 +12,8 @@
 // breaks that. The cost is a split bubble where a channel was interrupted,
 // which is honest — someone else did speak in between.
 
-import type { TranscriptEvent } from "./bridge";
+import { shift } from "./alerts";
+import type { AlertMatch, TranscriptEvent } from "./bridge";
 
 /// Silence that ends a bubble. Below this the speaker simply carried on;
 /// above it, the next segment is a new turn even from the same channel.
@@ -40,6 +41,12 @@ export interface Bubble {
   /// case here — a merged bubble genuinely can be both, and picking one of
   /// them to display would be a guess.
   languages: string[];
+  /// Where the alert terms are in `text` (P17), in UTF-16 code units.
+  ///
+  /// Carried through the merge rather than matched again here: the ranges came
+  /// from the backend's one matcher, and a bubble is its segments joined, so
+  /// each part's ranges move along by whatever was joined in front of them.
+  alerts: AlertMatch[];
   /// Of the most recent part: how fresh the text at the bottom is, which is
   /// what the number is read for.
   decodeMs: number;
@@ -48,6 +55,18 @@ export interface Bubble {
 }
 
 const keyOf = (e: TranscriptEvent) => `${e.sessionId}-${e.streamId}-${e.seq}`;
+
+/// A segment's alert ranges, placed where its text lands in the bubble.
+///
+/// Two moves in one: the text is trimmed before it goes in — whisper puts a
+/// space in front of everything it returns — and then it sits `at` characters
+/// into the joined string. The ranges were matched against the untrimmed
+/// segment, so they have to make both.
+///
+/// `?? []` because an event from a backend that predates P17 has no ranges at
+/// all, and the chat is the wrong place to discover that.
+const placed = (e: TranscriptEvent, at: number): AlertMatch[] =>
+  shift(e.alerts ?? [], at - (e.text.length - e.text.trimStart().length));
 
 const open = (e: TranscriptEvent): Bubble => ({
   key: keyOf(e),
@@ -58,6 +77,7 @@ const open = (e: TranscriptEvent): Bubble => ({
   tEndMs: e.tEndMs,
   text: e.text.trim(),
   languages: e.detectedLanguage ? [e.detectedLanguage] : [],
+  alerts: placed(e, 0),
   decodeMs: e.decodeMs,
   latencyMs: e.latencyMs,
   parts: 1,
@@ -73,6 +93,10 @@ const continues = (bubble: Bubble, e: TranscriptEvent): boolean =>
 
 const append = (bubble: Bubble, e: TranscriptEvent): Bubble => {
   const next = e.text.trim();
+  // Where this segment's text lands in the joined string: after what is
+  // already there and the single space between them. Nothing is appended for
+  // an empty segment, so its ranges — there are none — do not move either.
+  const offset = next === "" ? 0 : bubble.text.length + 1;
   return {
     ...bubble,
     tEndMs: e.tEndMs,
@@ -84,6 +108,7 @@ const append = (bubble: Bubble, e: TranscriptEvent): Bubble => {
       e.detectedLanguage && !bubble.languages.includes(e.detectedLanguage)
         ? [...bubble.languages, e.detectedLanguage]
         : bubble.languages,
+    alerts: [...bubble.alerts, ...placed(e, offset)],
     decodeMs: e.decodeMs,
     latencyMs: e.latencyMs,
     parts: bubble.parts + 1,

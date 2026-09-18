@@ -19,6 +19,15 @@ export interface Group {
   name: string;
   /// Channel keys, not stream ids. See the note above.
   members: number[];
+  /// Whether a view of this group asks for the window's attention on every
+  /// message, not only on an alert term (P17).
+  ///
+  /// Per group because that is the scope the question is asked at: the stage
+  /// manager's group is worth looking up for whatever is said on it, the
+  /// general talkback is not, and one setting for both would have to be off.
+  /// Off by default — an app that starts by flashing at everything gets its
+  /// attention requests ignored.
+  flash: boolean;
 }
 
 /// The all-channels view, which is not a group and cannot be edited or
@@ -31,6 +40,7 @@ export const newGroup = (existing: Group[]): Group => ({
   key: nextKey++,
   name: `Group ${existing.length + 1}`,
   members: [],
+  flash: false,
 });
 
 /// A group read back from the stored configuration (P12).
@@ -38,10 +48,15 @@ export const newGroup = (existing: Group[]): Group => ({
 /// The members arrive as channel keys, already translated from the positions
 /// the file stores — see `profiles.ts`, which is the one place that
 /// translation happens.
-export const restoreGroup = (name: string, members: number[]): Group => ({
+export const restoreGroup = (
+  name: string,
+  members: number[],
+  flash: boolean = false,
+): Group => ({
   key: nextKey++,
   name,
   members,
+  flash,
 });
 
 export const isMember = (group: Group, channel: Channel): boolean =>

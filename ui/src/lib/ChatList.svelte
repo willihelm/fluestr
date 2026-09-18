@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import type { TranscriptEvent } from "./bridge";
   import { toBubbles, type Bubble } from "./bubbles";
+  import { pieces } from "./alerts";
 
   /// How many bubbles are in the DOM at once, and how many more each step back
   /// through the history adds.
@@ -29,9 +31,17 @@
     /// rather than one value, because the chat holds lines from every session
     /// that has run since it was cleared.
     starts: Map<number, number>;
+    /// Whether an arriving bubble flashes (P17) — the group on screen has its
+    /// flash-on-message setting on.
+    ///
+    /// The in-window half of that setting. The platform's attention request
+    /// only does anything to a window nobody is looking at; an operator who
+    /// *is* looking at the chat, at eight interleaved channels, is exactly who
+    /// needs to be told which line is the new one.
+    flash: boolean;
   }
 
-  let { messages, colors, starts }: Props = $props();
+  let { messages, colors, starts, flash }: Props = $props();
 
   // Consecutive segments of the same channel are one bubble; see
   // [`toBubbles`] for where a bubble ends.
@@ -42,6 +52,34 @@
   let hidden = $derived(bubbles.length - shown.length);
 
   const colorOf = (streamId: number) => colors.get(streamId) ?? "var(--accent)";
+
+  // Bubbles that have just arrived and are still flashing. A bubble leaves the
+  // set when its animation ends, so nothing here has to know how long the
+  // flash lasts — the stylesheet does, once.
+  let arriving = new SvelteSet<string>();
+  // The keys of the previous pass, and `null` before the first one. Plain, not
+  // state: it is what the effect compares against, and making it reactive
+  // would make the effect its own trigger.
+  let known: Set<string> | null = null;
+
+  // Which bubbles are new. Keys, not positions: a bubble that grows by another
+  // segment keeps its key and must not flash again — one new bubble, one
+  // flash, which is the same thing the attention request is counted by.
+  //
+  // The first pass only takes stock. Everything on screen when the view opens
+  // is history, and a chat that flashes its whole window on arrival teaches
+  // the operator to ignore the flash.
+  $effect(() => {
+    const keys = bubbles.map((b) => b.key);
+    untrack(() => {
+      const previous = known;
+      known = new Set(keys);
+      if (previous === null || !flash) return;
+      for (const key of keys) {
+        if (!previous.has(key)) arriving.add(key);
+      }
+    });
+  });
 
   let container: HTMLDivElement | undefined = $state();
   // Follow behaviour: stay pinned to the bottom, but not while the user is
@@ -189,7 +227,11 @@
        a duplicate key throws and stops the list rendering entirely — which is
        what "nothing appears after Stop and Start" looked like. -->
   {#each shown as bubble (bubble.key)}
-    <article style="--channel: {colorOf(bubble.streamId)}">
+    <article
+      class:arriving={arriving.has(bubble.key)}
+      onanimationend={() => arriving.delete(bubble.key)}
+      style="--channel: {colorOf(bubble.streamId)}"
+    >
       <header>
         <span class="label">{bubble.label || "Stream " + bubble.streamId}</span>
         <span class="time" title={clockTitle(bubble)}>{clock(bubble)}</span>
@@ -197,7 +239,15 @@
           {(bubble.latencyMs / 1000).toFixed(1)} s
         </span>
       </header>
-      <p>{bubble.text}</p>
+      <!-- The alert terms, marked where the backend found them (P17). Written
+           out piece by piece rather than through `{@html}`: a transcript is
+           text from outside, and the one thing this view must never do is let
+           a spoken sentence become markup.
+
+           On one line on purpose — Svelte keeps the whitespace between the
+           pieces, and an indented loop body would put a line break into the
+           middle of every highlighted word. -->
+      <p>{#each pieces(bubble.text, bubble.alerts) as piece}{#if piece.alert}<mark>{piece.text}</mark>{:else}{piece.text}{/if}{/each}</p>
     </article>
   {/each}
 </div>
@@ -282,6 +332,62 @@
 
   article p {
     margin: 0;
+  }
+
+  /* Bright enough to be found from across a control room, and still readable
+     while being read: the term is what is looked for, and the sentence around
+     it is what is then read. Never a colour alone — the bubbles are already
+     colour-coded by channel, and a ninth colour in the same row would compete
+     with that. */
+  mark {
+    background: #f2b544;
+    color: #12141a;
+    border-radius: 0.15rem;
+    padding: 0 0.1rem;
+    font-weight: 600;
+  }
+
+  /* The arrival flash: bright for a moment, then the bubble it was. Long
+     enough to be caught out of the corner of an eye, short enough that a busy
+     group is not a list of permanently lit boxes — the flash says "this one is
+     new", and a mark that stayed would say "this one is special".
+
+     In the channel's own colour, so it also says *which* channel. */
+  .arriving {
+    animation: arriving 900ms ease-out;
+  }
+
+  @keyframes arriving {
+    0% {
+      background: color-mix(in oklab, var(--channel) 45%, var(--surface));
+      border-color: var(--channel);
+    }
+    100% {
+      background: var(--surface);
+      border-color: var(--border);
+    }
+  }
+
+  /* Some operators cannot be shown a flashing box at all, and the system says
+     so. The line is still marked as the newest one for the same moment, just
+     without the fade.
+
+     Still an animation, and still the same length: `animation: none` would
+     never end, and the end is what takes the bubble out of the arriving set —
+     the mark would stay on every line for the rest of the session. */
+  @media (prefers-reduced-motion: reduce) {
+    .arriving {
+      animation: arriving-quiet 900ms step-end;
+    }
+
+    @keyframes arriving-quiet {
+      0% {
+        border-color: var(--channel);
+      }
+      100% {
+        border-color: var(--border);
+      }
+    }
   }
 
   .jump {

@@ -75,17 +75,18 @@ for now, with the reason recorded in the package.
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
 | P16 | Read-only LAN viewer | **Open** | — |
-| P17 | Alert terms & visual attention | **Open** | — |
+| P17 | Alert terms & visual attention | **Partial** | The only view is the main chat: there are no detached group windows (P7) and no LAN viewer (P16) to highlight in |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
 detection, the shared worker pool, one colour-coded chat — at a measured
 ~330 ms on one stream from the end of a spoken segment to the text appearing.
 Around it: a Settings page holding the device, the channel map, the one global
-vocabulary and the groups; a channel map that may reach past the device, whose
+vocabulary, the global alert terms and the groups; a channel map that may reach past the device, whose
 surplus channels start muted instead of blocking Start; a chat page with a
 group sidebar that narrows the view to a group's channels; consecutive segments merged into one bubble per
-utterance; Clear all communication as the only action that empties the
+utterance, with the alert terms marked where they were said and an unfocused
+window asking once per bubble to be looked at; Clear all communication as the only action that empties the
 chat; all of that setup stored as named profiles that come back at the next
 start, keyed on an interface the app recognises after a rename and can tell
 from a second unit of the same model; and a model manager that fetches,
@@ -610,6 +611,13 @@ a multi-word entry matches that phrase, so an alert for `cue` does not fire on
 helps Whisper choose words, the other reacts to words Whisper has already
 produced.
 
+Each group also has an independent **Flash on every new message** setting,
+disabled by default. It belongs beside that group's membership controls in
+Settings, because it describes how the group is watched, not how a channel is
+transcribed. It is separate from Alerts: an enabled group flashes for every new
+message from one of its members, whether or not that message contains an alert
+term.
+
 The chat page has a left sidebar for groups, and selecting one focuses the
 chat and the meters on its member channels. The sidebar *selects*; groups are
 created, renamed, deleted and filled on the Settings page. It is read during a
@@ -636,6 +644,13 @@ in an unfocused window requests native user attention (the platform's visible
 window/Dock flash): the main window for any channel, and a group window only
 when the matching channel belongs to that group. It fires once for a newly
 matched bubble rather than repeatedly while that bubble is rendered.
+
+The group-level flash setting uses the same native attention request for every
+new bubble from that group's channels. It applies to an open detached group
+window, and to the main window only while that group is the selected view; the
+all-channels view has no implicit group setting. If a channel belongs to two
+groups, each open group window follows its own setting. In all cases, one new
+bubble creates at most one request per affected window.
 
 Every group can be opened in its own window from the sidebar. This window is a
 live view of that group's channels: it receives existing history, incoming
@@ -867,8 +882,9 @@ which is a P13 concern as much as a P11 one.
 Persistent settings: worker count, model choice, VAD thresholds, maximum
 segment length, hysteresis parameters from P3b, theme. Session presets: a named
 channel mapping including labels, colours and language configuration, plus named
-groups and their channel memberships — an engineer does not want to remap eight
-channels or rebuild their working views before every show. Vocabulary lists and
+groups, their channel memberships and their flash-on-message preference — an
+engineer does not want to remap eight channels or rebuild their working views
+before every show. Vocabulary lists and
 the active vocabulary are global settings, not part of a channel mapping. Alert
 terms are likewise one global setting: the vocabulary and alerts of a house
 should not drift with each individual channel or profile.
@@ -879,12 +895,14 @@ id, not the display name.
 
 **Accepted when:** a preset, including channel colours and non-exclusive group
 memberships, and the global vocabulary and alert terms survive a restart and a
-reconnect of the interface. ✔ for the identity half — the reconnect is verified against real hardware in
+reconnect of the interface; each group's flash-on-message preference does too.
+✔ for the identity half — the reconnect is verified against real hardware in
 `capture_live.rs`, which is `#[ignore]`d because CI has no interface.
 
 **Done:** the presets, as **profiles**. `config.json` in the app's
 configuration directory holds a list of profiles — device, default language,
-channel map with labels, languages and colours, groups with their memberships —
+channel map with labels, languages and colours, groups with their memberships
+and flash-on-message preference —
 plus the active vocabulary, alert terms and which profile was last in use. It is read at
 startup, written on every edit after a short debounce, and there is no Save
 button: a setup an operator believes is stored and is not is worse than no
@@ -1044,7 +1062,7 @@ to show.
 measurably improves the word error rate of the technical terms against the
 baseline on every applicable channel.
 
-### P17 — Alert terms & visual attention — **Open**
+### P17 — Alert terms & visual attention — **Partial**
 
 The global Settings alert list is compiled once when it changes and applied to
 each final transcript before it reaches any view. The resulting match ranges
@@ -1054,16 +1072,44 @@ slightly different matcher. Alert metadata lives only as long as the live chat,
 like the transcript itself while P10 is deferred.
 
 The desktop uses the platform's native attention request for a new match in an
-unfocused window. This is deliberately not an audible alarm: the request is
-for the window to flash, as requested, and must not add noise to an intercom
-environment. Main chat sees every match; a detached group window is alerted
-only for its current members. The browser viewer shows highlights but cannot
-ask another device's operating system to flash its window.
+unfocused window. The same request is also used for every new message when the
+affected group has enabled its flash-on-message setting. This is deliberately
+not an audible alarm: the request is for the window to flash, as requested, and
+must not add noise to an intercom environment. Main chat sees every alert match;
+a detached group window is alerted only for its current members and its own
+group preference. The browser viewer shows highlights but cannot ask another
+device's operating system to flash its window.
+
+**Done:** the list, the matcher and the main window's attention request. The
+terms are a row each in a new Settings section beside the vocabulary, stored
+globally in `config.json`, and pushed to the backend when they change rather
+than read from that file — the file is a debounce behind the term just typed.
+`app::alerts` compiles them once and matches every finished transcript in
+`TauriEvents::transcript`, which is the one place every view's copy of an event
+comes from; the ranges travel with the event in UTF-16 code units, because the
+consumer slices JavaScript strings. Matching is case-insensitive and on whole
+words, so `Feuer` does not fire on `Feuerwehrzufahrt`. The chat marks the exact
+range — piece by piece, never as markup, because a transcript is text from
+outside — and rings the bubble holding it. Each group carries its
+flash-on-message preference, stored with it and editable while a session runs.
+The attention request is counted per bubble and not per segment: one sentence
+arrives as three segments, and three flashes for one sentence is exactly the
+noise this must not add.
+
+**Outstanding:** the other two views. A detached group window (P7) and the LAN
+viewer (P16) are what the match ranges travel for, and neither exists yet — so
+the main window is currently both the "every applicable view" and the only
+window that can be asked for attention. Unicode normalisation is also still
+missing: a term and a transcript that differ only in composed and decomposed
+umlauts do not match today.
 
 **Accepted when:** adding a term in Settings survives a restart, a matching
 incoming transcript highlights the exact match in every applicable chat view,
 and an unfocused main or applicable group window requests attention once; a
-non-matching word and a partial-word false positive do neither.
+non-matching word and a partial-word false positive do neither. With a group's
+flash-on-message setting enabled, an unfocused view of that group requests
+attention for a non-alert message; disabled groups do not. ✔ for the main
+window and its list; the other views wait on P7 and P16.
 
 ### P16 — Read-only LAN viewer — **Open**
 
@@ -1166,9 +1212,11 @@ In this order, with the reason each one comes where it does.
    what the window holds — smaller, and it runs into the chat's DOM window,
    since a hit may lie outside the rendered range. Worth deciding before it is
    built.
-5. **P17** — alert terms and visual attention. Match once before events fan out
-   so highlights agree across the main chat, group windows and viewer, then use
-   the native attention request only for affected, unfocused desktop windows.
+5. **P17** — done for the main window: the match happens once, in the sink
+   every view's copy of an event comes from, and the ranges travel with the
+   event. What is left needs the views themselves — a group window from P7 and
+   the viewer from P16 — plus Unicode normalisation of terms and transcripts
+   before the match.
 6. **P16** — the optional LAN viewer. It must use the same event and snapshot
    model as the app, but it introduces an access boundary the desktop app does
    not have: implement the revocable token and server-side read-only contract
@@ -1212,8 +1260,10 @@ In this order, with the reason each one comes where it does.
 13. Add `cue` to Alerts, unfocus the main window and speak “Cue fünf” → the
     exact word is highlighted in the chat and the window requests attention;
     “rescue” does neither. Repeat from a channel in an open group to verify its
-    separate window, and verify the browser viewer highlights without gaining a
-    control or requesting desktop attention (P17).
+    separate window. Then enable that group's **Flash on every new message**
+    setting and speak a non-alert message → its window requests attention;
+    disable it and repeat → it does not. Verify the browser viewer highlights
+    without gaining a control or requesting desktop attention (P17).
 
 Step 7 used to read "kill the app hard, restart → the session loads completely
 from SQLite". That goes with P10: the chat lives in the window, and killing the

@@ -16,6 +16,7 @@ const event = (e: Partial<TranscriptEvent> & { tStartMs: number }): TranscriptEv
   detectedLanguage: "de",
   decodeMs: 300,
   latencyMs: 330,
+  alerts: [],
   ...e,
 });
 
@@ -139,5 +140,42 @@ describe("toBubbles", () => {
     ]);
 
     expect(bubbles[0].text).toBe("Standby Go");
+  });
+});
+
+describe("alert ranges through the merge", () => {
+  it("moves a later segment's ranges to where its text landed", () => {
+    // The ranges were matched against the segment. In the bubble that segment
+    // sits behind everything already there and the space that joined them —
+    // and a highlight one word out is worse than none.
+    const bubbles = toBubbles([
+      event({ tStartMs: 0, tEndMs: 1000, text: "Standby für Cue fünf" }),
+      event({
+        tStartMs: 1200,
+        tEndMs: 2000,
+        text: " Feuer im Saal",
+        // As the backend matched them: against the untrimmed segment, whose
+        // leading space whisper puts there.
+        alerts: [{ start: 1, end: 6 }],
+      }),
+    ]);
+
+    expect(bubbles).toHaveLength(1);
+    const { text, alerts } = bubbles[0];
+    expect(text.slice(alerts[0].start, alerts[0].end)).toBe("Feuer");
+  });
+
+  it("keeps the ranges of every part that had one", () => {
+    const bubbles = toBubbles([
+      event({ tStartMs: 0, tEndMs: 1000, text: "Feuer", alerts: [{ start: 0, end: 5 }] }),
+      event({ tStartMs: 1200, tEndMs: 2000, text: "und ein Arzt", alerts: [{ start: 8, end: 12 }] }),
+    ]);
+
+    const { text, alerts } = bubbles[0];
+    expect(alerts.map((a) => text.slice(a.start, a.end))).toEqual(["Feuer", "Arzt"]);
+  });
+
+  it("leaves a bubble without matches without ranges", () => {
+    expect(toBubbles([event({ tStartMs: 0 })])[0].alerts).toEqual([]);
   });
 });

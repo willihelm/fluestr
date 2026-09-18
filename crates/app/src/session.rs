@@ -175,6 +175,14 @@ pub struct TranscriptEvent {
     /// the segmenter waits out before it closes a segment, which is why that
     /// timeout is a latency setting and not just a quality one.
     pub latency_ms: u32,
+    /// Where the alert terms occur in `text`, in UTF-16 code units (P17).
+    ///
+    /// Left empty here: the pipeline does not know what the operator put on
+    /// the alert list, and the list can change between two segments of one
+    /// sentence. It is filled in where the event crosses the bridge — once,
+    /// for every view at the same time. See [`crate::alerts`].
+    #[serde(default)]
+    pub alerts: Vec<crate::alerts::AlertMatch>,
 }
 
 /// Level and health of one stream.
@@ -907,6 +915,7 @@ fn emit(
                 detected_language,
                 decode_ms,
                 latency_ms,
+                alerts: Vec::new(),
             });
         }
         // One segment lost, the session intact — a sidecar that rejected it,
@@ -1240,6 +1249,7 @@ mod tests {
             detected_language: Some("de".into()),
             decode_ms: 412,
             latency_ms: 980,
+            alerts: vec![crate::alerts::AlertMatch { start: 8, end: 16 }],
         })
         .unwrap();
 
@@ -1248,6 +1258,8 @@ mod tests {
         assert_eq!(json["tStartMs"], 1_200);
         assert_eq!(json["detectedLanguage"], "de");
         assert_eq!(json["latencyMs"], 980);
+        assert_eq!(json["alerts"][0]["start"], 8);
+        assert_eq!(json["alerts"][0]["end"], 16);
     }
 
     #[test]

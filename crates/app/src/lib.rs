@@ -7,6 +7,7 @@
 //! still to come — what is here carries up to eight channels of one
 //! multichannel device through the pipeline into the chat.
 
+pub mod alerts;
 pub mod config;
 pub mod models;
 pub mod pool;
@@ -14,6 +15,7 @@ pub mod resources;
 pub mod session;
 pub mod worker;
 
+use alerts::Matcher;
 use config::Config;
 use models::{ModelsView, Progress};
 use session::{
@@ -40,23 +42,41 @@ pub const EVENT_MODEL_PROGRESS: &str = "model-progress";
 pub const EVENT_RESOURCES: &str = "resources";
 
 /// Sends session output over the Tauri bridge.
-struct TauriEvents(AppHandle);
+///
+/// The alert matcher rides along (P17): this is the one place every view's
+/// copy of a transcript comes from, so it is where the alert ranges are worked
+/// out. A detached group window and the LAN viewer (P16) then highlight the
+/// same characters as the main chat because they are given the same numbers,
+/// not because three matchers happen to agree.
+struct TauriEvents {
+    app: AppHandle,
+    alerts: Arc<Mutex<Matcher>>,
+}
 
 impl EventSink for TauriEvents {
-    fn transcript(&self, event: TranscriptEvent) {
-        let _ = self.0.emit(EVENT_TRANSCRIPT, event);
+    fn transcript(&self, mut event: TranscriptEvent) {
+        // A poisoned lock here would cost every later transcript its
+        // highlighting, and silently. The text still has to reach the chat —
+        // an alert term that is not marked is a worse chat, an event that is
+        // dropped is no chat at all.
+        match self.alerts.lock() {
+            Ok(matcher) if !matcher.is_empty() => event.alerts = matcher.find(&event.text),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = %err, "the alert list is unreadable"),
+        }
+        let _ = self.app.emit(EVENT_TRANSCRIPT, event);
     }
 
     fn levels(&self, event: LevelsEvent) {
-        let _ = self.0.emit(EVENT_LEVELS, event);
+        let _ = self.app.emit(EVENT_LEVELS, event);
     }
 
     fn overload(&self, event: OverloadEvent) {
-        let _ = self.0.emit(EVENT_OVERLOAD, event);
+        let _ = self.app.emit(EVENT_OVERLOAD, event);
     }
 
     fn state(&self, event: SessionState) {
-        let _ = self.0.emit(EVENT_SESSION_STATE, event);
+        let _ = self.app.emit(EVENT_SESSION_STATE, event);
     }
 }
 
@@ -82,6 +102,12 @@ struct AppState {
     /// and the VAD are two different downloads an operator may reasonably
     /// start together — and cancelling one of them must not stop the other.
     downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The compiled alert list (P17).
+    ///
+    /// Compiled once when it changes rather than per transcript, and shared
+    /// with every session's event sink through the `Arc` — so a term added
+    /// mid-show takes effect on the next segment without restarting anything.
+    alerts: Arc<Mutex<Matcher>>,
     /// The sidecar's language list, once it has been asked for.
     ///
     /// Cached because it is a table compiled into whisper.cpp — it cannot
@@ -359,6 +385,57 @@ fn list_languages(
     Ok(languages)
 }
 
+// --- Alert terms & attention (P17) ---------------------------------------
+
+/// Compiles the alert list. Sent by the UI whenever it changes, and once at
+/// startup with what the configuration file held.
+///
+/// The list is not read from the configuration file here, for the same reason
+/// `list_models` takes its selection as an argument: Settings saves through a
+/// debounce, so the file is a second behind the term that was just typed —
+/// and a term that only starts working a second after it was entered is a term
+/// nobody can tell is working.
+#[tauri::command]
+fn set_alert_terms(state: tauri::State<'_, AppState>, terms: Vec<String>) -> Result<(), String> {
+    let matcher = Matcher::new(terms);
+    tracing::info!(terms = matcher.len(), "alert list compiled");
+    *state
+        .alerts
+        .lock()
+        .map_err(|_| "the alert list is poisoned".to_string())? = matcher;
+    Ok(())
+}
+
+/// Asks the platform to draw attention to this window.
+///
+/// The window it was called from, not "the main window": a detached group
+/// window is alerted for its own members, and it is the caller that knows
+/// whether what arrived concerns it.
+///
+/// Deliberately not an audible alarm. An intercom room is already a room full
+/// of speech, and a beep per matching word is the fastest way to have the
+/// feature switched off. `urgent` picks between the two requests the platform
+/// offers: an alert term keeps asking until the app is looked at, a group's
+/// flash-on-message is a single bounce.
+///
+/// A focused window is left alone — the operator is already looking at it, and
+/// macOS would bounce the dock icon of the app in front of them.
+#[tauri::command]
+fn request_attention(window: tauri::Window, urgent: bool) -> Result<(), String> {
+    if window.is_focused().unwrap_or(false) {
+        return Ok(());
+    }
+
+    let kind = if urgent {
+        tauri::UserAttentionType::Critical
+    } else {
+        tauri::UserAttentionType::Informational
+    };
+    window
+        .request_user_attention(Some(kind))
+        .map_err(|err| err.to_string())
+}
+
 #[tauri::command]
 fn list_devices() -> Result<Vec<DeviceOption>, String> {
     session::list_devices().map_err(|e| e.to_string())
@@ -413,7 +490,10 @@ fn start_session(
         }
     };
 
-    let events: Arc<dyn EventSink> = Arc::new(TauriEvents(app));
+    let events: Arc<dyn EventSink> = Arc::new(TauriEvents {
+        app,
+        alerts: Arc::clone(&state.alerts),
+    });
     match Session::start(config, events.clone(), models) {
         Ok((session, running)) => {
             *slot = Some(session);
@@ -506,6 +586,8 @@ pub fn run() {
             remove_model,
             list_devices,
             list_languages,
+            set_alert_terms,
+            request_attention,
             start_session,
             stop_session
         ])

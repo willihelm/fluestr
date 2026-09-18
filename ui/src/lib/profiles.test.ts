@@ -37,7 +37,7 @@ const aProfile = (): Profile => {
     deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
     language: "de",
     channels,
-    groups: [restoreGroup("Bühne", [channels[1].key])],
+    groups: [restoreGroup("Bühne", [channels[1].key], false)],
   };
 };
 
@@ -50,7 +50,7 @@ const stored: StoredProfile = {
     { channel: 0, label: "Regie", language: "de", color: "#6ea8fe" },
     { channel: 3, label: "Licht", language: "en", color: "#5fd38d" },
   ],
-  groups: [{ name: "Bühne", members: [1] }],
+  groups: [{ name: "Bühne", flash: false, members: [1] }],
 };
 
 describe("toStored", () => {
@@ -376,5 +376,37 @@ describe("the configuration as a whole", () => {
 
     expect(empty.profiles).toEqual([]);
     expect(empty.activeKey).toBeNull();
+  });
+});
+
+describe("alert terms and flashing", () => {
+  it("carries a group's flash setting across a save and a load", () => {
+    // A group set to flash that comes back quiet is a view an operator
+    // believes is watching them and is not.
+    const profile = aProfile();
+    profile.groups[0].flash = true;
+
+    expect(fromStored(toStored(profile)).groups[0].flash).toBe(true);
+  });
+
+  it("keeps a file written before flashing existed quiet", () => {
+    expect(fromStored(stored).groups[0].flash).toBe(false);
+  });
+
+  it("stores the alert list without the editor's empty row", () => {
+    const config = toStoredConfig([aProfile()], 99, "Standby", {}, ["Feuer", "  ", "Feuer"]);
+
+    expect(config.alerts).toEqual(["Feuer"]);
+  });
+
+  it("reads a file from before the alert list as an empty one", () => {
+    const { alerts } = fromStoredConfig({
+      version: 1,
+      active: 0,
+      vocabulary: null,
+      profiles: [stored],
+    });
+
+    expect(alerts).toEqual([]);
   });
 });

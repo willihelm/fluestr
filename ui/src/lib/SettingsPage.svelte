@@ -1,5 +1,11 @@
 <script module lang="ts">
-  export type Section = "profiles" | "audio" | "groups" | "vocabulary" | "models";
+  export type Section =
+    | "profiles"
+    | "audio"
+    | "groups"
+    | "vocabulary"
+    | "alerts"
+    | "models";
 
   /// How urgently a section wants attention, shown as a dot on its rail item.
   ///
@@ -52,6 +58,7 @@
   import ProfileSection from "./ProfileSection.svelte";
   import StreamSetup from "./StreamSetup.svelte";
   import VocabularyEditor from "./VocabularyEditor.svelte";
+  import AlertEditor from "./AlertEditor.svelte";
   import GroupMembership from "./GroupMembership.svelte";
   import ModelPicker from "./ModelPicker.svelte";
   import { lengthWarning } from "./vocabulary";
@@ -64,6 +71,9 @@
     profiles: Profile[];
     activeKey: number | null;
     vocabulary: string;
+    /// The words that must not be missed (P17). Beside the profiles like the
+    /// vocabulary: an emergency means the same thing in every production.
+    alerts: string[];
     /// Which model the machine transcribes with (P11). Beside the profiles
     /// rather than inside one: what a machine can run depends on the machine,
     /// not on the production being carried to it.
@@ -82,6 +92,7 @@
     profiles = $bindable(),
     activeKey = $bindable(),
     vocabulary = $bindable(),
+    alerts = $bindable(),
     models = $bindable(),
     deviceChannels,
     locked,
@@ -153,6 +164,8 @@
     audio: problem === null ? null : "warn",
     groups: null,
     vocabulary: lengthWarning(vocabulary) === null ? null : "warn",
+    // Never flagged: an empty alert list is the normal state, not a problem.
+    alerts: null,
     models: modelFlag,
   });
 
@@ -179,8 +192,11 @@
     },
     {
       scope: "All profiles",
-      note: "One list, shared by every setup.",
-      items: [{ id: "vocabulary", title: "Vocabulary" }],
+      note: "Shared by every setup.",
+      items: [
+        { id: "vocabulary", title: "Vocabulary" },
+        { id: "alerts", title: "Alert terms" },
+      ],
     },
     {
       scope: "This machine",
@@ -283,6 +299,10 @@
 
       <div class="sheet" hidden={section !== "vocabulary"}>
         <VocabularyEditor bind:vocabulary {locked} />
+      </div>
+
+      <div class="sheet" hidden={section !== "alerts"}>
+        <AlertEditor bind:terms={alerts} />
       </div>
 
       <div class="sheet" hidden={section !== "models"}>
