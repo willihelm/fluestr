@@ -55,7 +55,7 @@
   import GroupMembership from "./GroupMembership.svelte";
   import ModelPicker from "./ModelPicker.svelte";
   import { lengthWarning } from "./vocabulary";
-  import type { ModelChoice, Profile } from "./profiles";
+  import { connectedDevice, type ModelChoice, type Profile } from "./profiles";
   import { listLanguages, type DeviceOption, type Language } from "./bridge";
   import { onMount } from "svelte";
 
@@ -106,8 +106,20 @@
   // the desk must find their setup intact, not quietly re-pointed at the
   // built-in microphone.
   let missing = $derived(
-    active !== null && active.device !== "" && !devices.some((d) => d.name === active.device),
+    active !== null && active.device !== "" && connectedDevice(devices, active) === undefined,
   );
+
+  // Picking a device sets both halves at once. The id is what the profile is
+  // keyed on and what starting a session sends; the name is stored with it so
+  // this device can still be named on a machine it is not plugged into.
+  const pickDevice = (id: string) => {
+    const option = devices.find((d) => d.id === id);
+    // No option means the "not connected" entry, which is the profile's own
+    // device: re-picking it is not a change, and must not clear the id.
+    if (!option || active === null) return;
+    active.device = option.name;
+    active.deviceId = option.id;
+  };
 
   // Reported upwards by the model manager, which is the only thing that knows
   // whether this machine can transcribe at all. Nothing else on the page can
@@ -230,14 +242,22 @@
             </header>
             <label>
               <span>Device</span>
-              <select bind:value={active.device} disabled={locked}>
-                {#each devices as option (option.name)}
-                  <option value={option.name}>{option.name} ({option.channels} ch)</option>
+<!-- Keyed and valued by the stable id, not the name: two identical
+                   interfaces are two entries here, and they must not collapse
+                   into one. `onchange` rather than `bind:` because a pick
+                   writes both the id and the name. -->
+              <select
+                value={active.deviceId}
+                disabled={locked}
+                onchange={(e) => pickDevice(e.currentTarget.value)}
+              >
+                {#each devices as option (option.id)}
+                  <option value={option.id}>{option.name} ({option.channels} ch)</option>
                 {/each}
                 {#if missing}
                   <!-- Selectable, because it is what the profile says and
                        deselecting it would throw that away. -->
-                  <option value={active.device}>{active.device} — not connected</option>
+                  <option value={active.deviceId}>{active.device} — not connected</option>
                 {/if}
               </select>
             </label>

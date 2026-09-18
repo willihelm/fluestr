@@ -7,6 +7,8 @@
   import { toConfig, validate, mutedChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
   import {
+    adoptDeviceIds,
+    connectedDevice,
     fromStoredConfig,
     newProfile,
     toStoredConfig,
@@ -73,6 +75,7 @@
   // page, into the profile itself — which is what makes an edit something that
   // gets saved.
   let device = $derived(active?.device ?? "");
+  let deviceId = $derived(active?.deviceId ?? "");
   let channels = $derived(active?.channels ?? []);
   let groups = $derived(active?.groups ?? []);
 
@@ -88,7 +91,9 @@
 
   let running = $derived(status.state === "running");
   let busy = $derived(status.state === "starting");
-  let selected = $derived(devices.find((d) => d.name === device));
+  // By stable id where the profile has one — a renamed interface is still
+  // this profile's interface, and a second unit of the same model is not.
+  let selected = $derived(active === null ? undefined : connectedDevice(devices, active));
   let deviceChannels = $derived(selected?.channels ?? 0);
   // A restored profile may name an interface that is not plugged in — that is
   // the normal case for a setup carried between the office and the house, and
@@ -127,7 +132,7 @@
     const first = async () => {
       const found = await listDevices();
       devices = found;
-      const fallback = (found.find((d) => d.isDefault) ?? found[0])?.name ?? "";
+      const fallback = found.find((d) => d.isDefault) ?? found[0];
 
       // A configuration that cannot be read is not a reason to refuse to
       // transcribe: the app comes up empty and says why, rather than not
@@ -148,11 +153,18 @@
         // First start: one profile on the default device, with one channel, so
         // the app is usable without first having to work out that a profile
         // and a channel have to be created.
-        const created = newProfile([], fallback);
+        const created = newProfile([], {
+          name: fallback?.name ?? "",
+          id: fallback?.id ?? "",
+        });
         profiles = [created];
         activeKey = created.key;
       } else {
-        profiles = restored.profiles;
+        // A setup written before stable ids names its interface and does not
+        // identify it. If that interface is plugged in now, this is where it
+        // gains an id — and the save below carries it to the file, so the
+        // upgrade costs the operator nothing and happens once.
+        profiles = adoptDeviceIds(restored.profiles, found) ?? restored.profiles;
         activeKey = restored.activeKey;
       }
 
@@ -265,7 +277,10 @@
     status = { state: "starting" };
     try {
       status = await startSession({
-        device,
+        // The id, not the name. A profile that predates stable ids still
+        // holds only a name; the backend resolves that too, which is what
+        // lets such a setup start while its interface is unplugged elsewhere.
+        deviceId: deviceId || device,
         streams: toConfig(channels),
         // One vocabulary for every stream — see `vocabulary.ts`.
         vocabulary: vocabularyConfig(vocabulary),

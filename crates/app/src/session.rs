@@ -114,8 +114,15 @@ pub struct StreamConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionConfig {
-    /// Device name, as returned by `list_devices`.
-    pub device: String,
+    /// The stable id of the device, as `list_devices` returns it — not its
+    /// name. The name is what a human reads and what a driver update may
+    /// change; it never reaches the capture layer from here.
+    ///
+    /// A name still resolves, because a configuration written before stable
+    /// ids existed holds one and the backend falls back to it (see
+    /// `audio_core::DeviceId`). Sending one deliberately is not a supported
+    /// path — it cannot tell two identical interfaces apart.
+    pub device_id: String,
     pub streams: Vec<StreamConfig>,
     /// The active vocabulary, as whisper's `initial_prompt`, for **every**
     /// stream.
@@ -316,8 +323,14 @@ impl Session {
             bail!("no channels configured");
         }
         let backend = CpalBackend::new();
-        let device_id = audio_core::DeviceId(config.device.clone());
-        let info = backend.device(&device_id)?;
+        let requested = audio_core::DeviceId(config.device_id.clone());
+        let info = backend.device(&requested)?;
+        // What the device answers to from here on. It differs from
+        // `requested` exactly when an old configuration was resolved by name,
+        // and using the resolved one means the rest of the session — the
+        // capture handle, the disconnect event — names the device the app
+        // actually opened.
+        let device_id = info.id.clone();
 
         // A configured channel the device does not have is muted, not a
         // refusal to start. A channel map is made for the desk and then
@@ -503,6 +516,7 @@ impl Session {
             capture_event_rx,
             stop.clone(),
             events.clone(),
+            info.name.clone(),
         );
 
         tracing::info!(
@@ -633,6 +647,10 @@ fn spawn_processor(
     capture_events: mpsc::Receiver<CaptureEvent>,
     stop: Arc<AtomicBool>,
     events: Arc<dyn EventSink>,
+    // For the disconnect message, and only for that. The event itself carries
+    // the device's id, which is a CoreAudio UID and means nothing to the
+    // operator reading why their session stopped.
+    device_name: String,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("processing".into())
@@ -648,8 +666,11 @@ fn spawn_processor(
                 if let Ok(event) = capture_events.try_recv() {
                     match event {
                         CaptureEvent::Disconnected { device, reason } => {
+                            tracing::warn!(id = %device, "capture device disconnected");
                             events.state(SessionState::Failed {
-                                message: format!("audio device '{device}' disconnected: {reason}"),
+                                message: format!(
+                                    "audio device '{device_name}' disconnected: {reason}"
+                                ),
                             });
                             break;
                         }
@@ -889,6 +910,9 @@ fn emit(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceOption {
+    /// Stable across restarts, and what a profile stores. The UI shows
+    /// `name` and sends this back.
+    pub id: String,
     pub name: String,
     pub channels: u16,
     pub default_sample_rate: u32,
@@ -901,6 +925,7 @@ pub fn list_devices() -> Result<Vec<DeviceOption>> {
         .input_devices()?
         .into_iter()
         .map(|info| DeviceOption {
+            id: info.id.0,
             name: info.name,
             channels: info.channels,
             default_sample_rate: info.default_sample_rate,
@@ -1307,12 +1332,16 @@ mod tests {
     #[test]
     fn the_session_config_is_read_as_the_ui_writes_it() {
         let config: SessionConfig = serde_json::from_str(
-            r#"{"device":"Scarlett 18i20","vocabulary":"Standby, Cue, Go","streams":[
+            r#"{"deviceId":"AppleUSBAudioEngine:Focusrite:1",
+                "vocabulary":"Standby, Cue, Go","streams":[
                 {"channel":0,"label":"Regie","language":"de"},
                 {"channel":5,"label":"FOH","language":"en"}
             ]}"#,
         )
         .unwrap();
+        // The id, not the name: the UI picks a device from `list_devices` and
+        // sends back what identifies it.
+        assert_eq!(config.device_id, "AppleUSBAudioEngine:Focusrite:1");
         assert_eq!(config.streams.len(), 2);
         assert_eq!(config.streams[0].channel, 0);
         // One vocabulary for the whole session, not one per stream.
@@ -1328,7 +1357,7 @@ mod tests {
         // The field is optional in both senses: absent parses, and it parses
         // as "no prompt" rather than as a failure to start.
         let config: SessionConfig = serde_json::from_str(
-            r#"{"device":"Scarlett 18i20",
+            r#"{"deviceId":"AppleUSBAudioEngine:Focusrite:1",
                 "streams":[{"channel":0,"label":"Regie","language":"de"}]}"#,
         )
         .unwrap();

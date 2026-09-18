@@ -59,9 +59,10 @@ fn list_devices() {
     println!("\n{} input device(s):", devices.len());
     for device in &devices {
         println!(
-            "  {}{}\n    channels: {}, default: {} Hz, supported: {:?}",
+            "  {}{}\n    id: {}\n    channels: {}, default: {} Hz, supported: {:?}",
             device.name,
             if device.is_default { "  [default]" } else { "" },
+            device.id,
             device.channels,
             device.default_sample_rate,
             device.sample_rates,
@@ -71,10 +72,25 @@ fn list_devices() {
     // Every listed device must be openable by its own id — otherwise the UI
     // would offer entries that fail the moment they are picked.
     for device in &devices {
-        backend
+        let found = backend
             .device(&device.id)
             .unwrap_or_else(|e| panic!("listed device '{}' not retrievable: {e}", device.name));
+        assert_eq!(
+            found.name, device.name,
+            "id {} resolved to a different device",
+            device.id
+        );
     }
+
+    // The point of a stable id (P12): it identifies *one* device. Two units of
+    // the same model share a name, so this is the assertion the name could
+    // never carry — and on a machine where the platform gives no id, the
+    // fallback name makes it fail exactly where it should.
+    let mut ids: Vec<&str> = devices.iter().map(|d| d.id.0.as_str()).collect();
+    ids.sort_unstable();
+    let unique = ids.len();
+    ids.dedup();
+    assert_eq!(unique, ids.len(), "two devices share an id: {ids:?}");
 }
 
 #[test]

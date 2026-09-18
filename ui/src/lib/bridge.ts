@@ -17,6 +17,10 @@ export interface Language {
 }
 
 export interface DeviceOption {
+  /// Stable across restarts — the CoreAudio UID on macOS. This is what a
+  /// profile stores and what starting a session sends back; `name` is for the
+  /// operator to read. See `audio_core::DeviceId`.
+  id: string;
   name: string;
   channels: number;
   defaultSampleRate: number;
@@ -35,7 +39,7 @@ export interface StreamConfig {
 }
 
 export interface SessionConfig {
-  device: string;
+  deviceId: string;
   streams: StreamConfig[];
   /// The active vocabulary, applied to every stream. Session-level rather than
   /// per stream because the terms of a production are the same on every
@@ -143,7 +147,16 @@ export interface StoredGroup {
 
 export interface StoredProfile {
   name: string;
+  /// The device's display name. Stored beside the id so an interface that is
+  /// not plugged in can still be named — "Scarlett 18i20 is not connected" is
+  /// something an operator can act on, a UID is not.
   device: string;
+  /// The device's stable id, and what the profile is really keyed on.
+  ///
+  /// Optional only because a file written before it existed has none:
+  /// `profiles.ts` then fills it in the first time that device is seen
+  /// connected.
+  deviceId?: string;
   /// The language a channel added to this profile starts on. Optional here
   /// only because a file written before it existed has none — `profiles.ts`
   /// fills it in, and the backend serialises it from then on.

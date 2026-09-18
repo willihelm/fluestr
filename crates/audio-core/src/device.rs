@@ -10,12 +10,19 @@ use std::sync::Arc;
 
 /// Identifies an audio device across restarts.
 ///
-/// Currently the device name, because cpal exposes nothing better on any
-/// platform. That is weaker than it looks: two identical interfaces produce
-/// the same name, and renaming a device in Audio MIDI Setup breaks the match.
-/// P12 (presets) therefore has to tolerate a failed lookup and ask the user to
-/// re-pick rather than silently capturing the wrong hardware. A CoreAudio UID
-/// would fix this and needs a platform-specific extension below this trait.
+/// On macOS this is the CoreAudio device UID — a string the driver keeps
+/// across reboots, renames and re-plugs, and which differs between two units
+/// of the same model. cpal does not expose it, so it is read beside cpal; see
+/// `backend::stable_id`.
+///
+/// It falls back to the device **name** where the platform offers nothing
+/// better: on Windows until the WASAPI port brings its endpoint id, and for
+/// the occasional device CoreAudio will not identify. A name is a weak
+/// identity — two identical interfaces share one, and a rename breaks it —
+/// which is why a lookup may still fail. It is never resolved to "whatever is
+/// plugged in": a stored device that is not there stays stored and is marked
+/// as absent, and capturing the wrong hardware is the one outcome worth
+/// refusing.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct DeviceId(pub String);
@@ -29,7 +36,11 @@ impl std::fmt::Display for DeviceId {
 /// What the UI needs in order to offer a device and its channels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
+    /// Stable across restarts; what a configuration stores.
     pub id: DeviceId,
+    /// What a human reads. Shown everywhere, stored beside the id so an
+    /// absent device can still be named, and never used to look one up while
+    /// an id is available.
     pub name: String,
     /// Channel count of the configuration we would actually open — this is the
     /// number the channel picker must be built from.

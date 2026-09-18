@@ -10,10 +10,12 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-18, after the model manager — the app now
-downloads, verifies and selects its own models, so a fresh machine no longer
-needs a terminal to reach its first transcription. P10 and P3b were set aside
-on the same day; see each package for what that costs and what it changes.
+**Status of this document:** 2026-09-18, after the stable device id — a
+profile now identifies its interface by something a rename cannot break, which
+is the second half of P12's "survives a restart *and* a reconnect". Before it,
+the same day: the model manager, so a fresh machine reaches its first
+transcription without a terminal. P10 and P3b were set aside on that day too;
+see each package for what that costs and what it changes.
 
 ---
 
@@ -68,7 +70,7 @@ for now, with the reason recorded in the package.
 | P9 | Live search & filter | **Open** | Was specified on P10's FTS index, which is not coming — needs a decision on what it searches instead |
 | P10 | SQLite persistence | **Deferred** | Set aside by the user on 2026-09-18: this is about live communication, not persistence |
 | P11 | Model manager | **Done** | — |
-| P12 | Settings & presets | **Partial** | Profiles are stored and read back, with their default language; every threshold is still a constant in the code, and the device is recognised by its display name |
+| P12 | Settings & presets | **Partial** | Profiles are stored and read back, with their default language and a stable device id; every threshold is still a constant in the code |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
@@ -84,7 +86,9 @@ surplus channels start muted instead of blocking Start; a chat page with a
 group sidebar that narrows the view to a group's channels; consecutive segments merged into one bubble per
 utterance; Clear all communication as the only action that empties the
 chat; all of that setup stored as named profiles that come back at the next
-start; and a model manager that fetches, checksums and selects the models the
+start, keyed on an interface the app recognises after a rename and can tell
+from a second unit of the same model; and a model manager that fetches,
+checksums and selects the models the
 whole thing runs on, so a machine that has never seen this repository can be
 brought to its first transcription from inside the window. What the
 eight-channel case still lacks is a measurement of its own: the latency and CPU
@@ -825,7 +829,9 @@ page is the home for all of this configuration. Device recognition via a stable
 id, not the display name.
 
 **Accepted when:** a preset, including channel colours and non-exclusive group
-memberships, survives a restart and a reconnect of the interface.
+memberships, survives a restart and a reconnect of the interface. ✔ for the
+identity half — the reconnect is verified against real hardware in
+`capture_live.rs`, which is `#[ignore]`d because CI has no interface.
 
 **Done:** the presets, as **profiles**. `config.json` in the app's
 configuration directory holds a list of profiles — device, default language,
@@ -872,14 +878,39 @@ Three decisions worth keeping in view:
   go through a temporary file and a rename, so an interrupted save cannot
   truncate the real one.
 
+**Device recognition by a stable id** is done. A profile now stores the
+CoreAudio **UID** beside the display name and is keyed on it, so an interface
+renamed in Audio MIDI Setup is still recognised and two units of the same model
+are two entries in the picker rather than one. cpal knows a device only by its
+name and keeps its `AudioDeviceID` private, so the id is read from CoreAudio
+beside cpal — `audio-core/src/backend/stable_id.rs` — and matched to what cpal
+enumerated. Four things about it are worth knowing:
+
+- **The name stays, and is not a leftover.** A device that is not plugged in
+  still has to be *named*: "Scarlett 18i20 is not connected" is a sentence an
+  operator can act on, a UID is not. The name is what is displayed and what an
+  old file is migrated from; it is never what a lookup keys on while an id is
+  available.
+- **The migration costs the operator nothing.** A profile written before this
+  has no id. The first time the interface it names is seen connected, the id is
+  filled in and saved — `adoptDeviceIds` in `profiles.ts`, and nothing is asked
+  and nothing is re-entered. A profile whose device is *absent* is left alone
+  rather than bound to whatever is plugged in, which is the same rule as ever:
+  the profile describes the production, not the room the laptop is in.
+- **Once a profile has an id, the name stops being a fallback.** A profile with
+  an id has been resolved once already, so an id that is not there means the
+  device is not there — the second unit of the same model must not stand in for
+  it. The name fallback exists only for a profile that has never had an id, and
+  only until it does.
+- **It degrades rather than fails.** A device CoreAudio will not identify, and
+  every device on Windows until the WASAPI port brings its endpoint id, falls
+  back to the name as its id. That is exactly what the app did before, so the
+  worst case is the old behaviour and never a device without identity.
+
 **Outstanding:** the settings proper — worker count, model choice, VAD
-thresholds, maximum segment length, the P3b hysteresis parameters, theme — are
-all still constants in the code, and none of them is in the file yet. So is
-**device recognition by a stable id**: a profile stores the display name, which
-is what the rest of the app keys on, so two identical interfaces cannot be told
-apart and a renamed one is not recognised. A stored device that is not
-connected is at least kept and marked as such rather than silently replaced,
-which is the half of "survives a reconnect" that could be had without the id.
+thresholds, maximum segment length, theme — are all still constants in the
+code, and none of them is in the file yet. (The P3b hysteresis parameters left
+this list with the package.)
 
 **Candidates already identified as needing to be settings:** the segmenter's
 `silence_timeout` (it is a *latency* parameter, not only a quality one — it is
@@ -1051,13 +1082,13 @@ In this order, with the reason each one comes where it does.
    bounds the DOM, which removes the frontend from the list of things that
    could explain a bad result. It is also the one step here that cannot be
    written: it needs the interface and somebody to talk into it.
-2. **The rest of P12 — the settings proper.** The presets are done and the
-   model choice has joined them, so what is left is the thresholds: the Silero
-   threshold and the segmenter's `silence_timeout` and `max_segment` are still
-   constants in the code. They come *after* step 1 on purpose — exposing a
-   number as a setting fixes the default somebody will keep, and the current
-   defaults are single-stream guesses. Device recognition by a stable id
-   belongs here too, and depends on no measurement.
+2. **The rest of P12 — the settings proper.** The presets are done, the model
+   choice has joined them and the device is now recognised by a stable id, so
+   what is left is the thresholds: the Silero threshold and the segmenter's
+   `silence_timeout` and `max_segment` are still constants in the code. They
+   come *after* step 1 on purpose — exposing a number as a setting fixes the
+   default somebody will keep, and the current defaults are single-stream
+   guesses.
 3. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel. The control exists and is global; what is missing is the
    evidence that any particular list is better than another.
@@ -1101,7 +1132,11 @@ In this order, with the reason each one comes where it does.
 10. Enable the LAN viewer and open its URL from a second device → it sees the
     same history, incoming lines, groups, meters and session state; no control
     can be invoked, and rotating the token disconnects it.
-11. Run the P14 reference load test, record p95 latency.
+11. Rename the interface in Audio MIDI Setup and restart → the profile still
+    finds it and starts, under its new name. With two identical interfaces
+    connected, the picker offers both and each profile keeps the one it was
+    set to (P12).
+12. Run the P14 reference load test, record p95 latency.
 
 Step 7 used to read "kill the app hard, restart → the session loads completely
 from SQLite". That goes with P10: the chat lives in the window, and killing the

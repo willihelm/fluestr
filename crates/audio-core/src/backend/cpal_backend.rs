@@ -2,10 +2,12 @@
 //!
 //! cpal covers CoreAudio today and WASAPI later, so one implementation serves
 //! both targets. The trait stays in place regardless: it is what keeps the
-//! rest of the crate free of cpal types, and it is the seam a
-//! platform-specific implementation would slot into if cpal ever proves too
-//! coarse (a CoreAudio UID for stable device identity being the likely reason,
-//! see [`DeviceId`]).
+//! rest of the crate free of cpal types.
+//!
+//! Where cpal did prove too coarse is device *identity*: it knows a device by
+//! its name and nothing else. That gap is filled beside it rather than by
+//! replacing it — [`stable_id`] reads the platform's own id and this module
+//! attaches it, so cpal keeps doing the part it is good at. See [`DeviceId`].
 //!
 //! # Why the stream gets its own thread
 //!
@@ -16,6 +18,7 @@
 //! and the handle only talks to that thread through channels. Asserting `Send`
 //! on the stream instead would be a lie about what CoreAudio permits.
 
+use super::stable_id;
 use crate::capture::{CaptureStats, Demuxer, SampleSink};
 use crate::device::{
     AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo,
@@ -39,15 +42,51 @@ impl Default for CpalBackend {
     }
 }
 
-fn find_device(host: &cpal::Host, id: &DeviceId) -> Result<cpal::Device> {
-    let devices = host
-        .input_devices()
-        .map_err(|e| AudioError::Backend(e.to_string()))?;
+/// Every usable input device, each with the id the app will store.
+///
+/// One enumeration for both halves: the ids are assigned from the device
+/// *list*, because telling two identically named interfaces apart needs to see
+/// them together. Asking per device could not do it.
+fn enumerate(host: &cpal::Host) -> Result<Vec<(cpal::Device, DeviceInfo)>> {
+    let default_name = host.default_input_device().and_then(|d| d.name().ok());
 
-    for device in devices {
-        if device.name().ok().as_deref() == Some(id.0.as_str()) {
-            return Ok(device);
-        }
+    let devices: Vec<cpal::Device> = host
+        .input_devices()
+        .map_err(|e| AudioError::Backend(e.to_string()))?
+        .collect();
+
+    let names: Vec<String> = devices
+        .iter()
+        .map(|d| d.name().unwrap_or_default())
+        .collect();
+    let ids = stable_id::assign(&names);
+
+    Ok(devices
+        .into_iter()
+        .zip(ids)
+        .filter_map(|(device, id)| {
+            let is_default = device.name().ok() == default_name;
+            let info = describe(&device, id, is_default)?;
+            Some((device, info))
+        })
+        .collect())
+}
+
+/// Looks one device up, by stable id first and by name second.
+///
+/// The name is the fallback and not the rule: it is what a configuration
+/// written before stable ids existed holds, and what a device the platform
+/// would not identify still has. Trying the id first means a renamed device
+/// is found, and two identical ones are told apart, as soon as the id is
+/// stored — while neither case gets worse in the meantime.
+fn find_device(host: &cpal::Host, id: &DeviceId) -> Result<(cpal::Device, DeviceInfo)> {
+    let mut devices = enumerate(host)?;
+
+    if let Some(index) = devices.iter().position(|(_, info)| &info.id == id) {
+        return Ok(devices.swap_remove(index));
+    }
+    if let Some(index) = devices.iter().position(|(_, info)| info.name == id.0) {
+        return Ok(devices.swap_remove(index));
     }
     Err(AudioError::DeviceNotFound(id.0.clone()))
 }
@@ -56,7 +95,7 @@ fn find_device(host: &cpal::Host, id: &DeviceId) -> Result<cpal::Device> {
 ///
 /// Returns `None` for devices that advertise no usable input configuration —
 /// those exist and must not appear in the picker.
-fn describe(device: &cpal::Device, is_default: bool) -> Option<DeviceInfo> {
+fn describe(device: &cpal::Device, id: Option<String>, is_default: bool) -> Option<DeviceInfo> {
     let name = device.name().ok()?;
     let default_config = device.default_input_config().ok()?;
 
@@ -75,7 +114,9 @@ fn describe(device: &cpal::Device, is_default: bool) -> Option<DeviceInfo> {
     sample_rates.dedup();
 
     Some(DeviceInfo {
-        id: DeviceId(name.clone()),
+        // The name as a last resort, so every device has *an* id and the rest
+        // of the app never has to handle "device without identity".
+        id: DeviceId(id.unwrap_or_else(|| name.clone())),
         name,
         channels: default_config.channels(),
         default_sample_rate: default_config.sample_rate().0,
@@ -87,26 +128,15 @@ fn describe(device: &cpal::Device, is_default: bool) -> Option<DeviceInfo> {
 impl AudioBackend for CpalBackend {
     fn input_devices(&self) -> Result<Vec<DeviceInfo>> {
         let host = cpal::default_host();
-        let default_name = host.default_input_device().and_then(|d| d.name().ok());
-
-        let devices = host
-            .input_devices()
-            .map_err(|e| AudioError::Backend(e.to_string()))?;
-
-        Ok(devices
-            .filter_map(|device| {
-                let is_default = device.name().ok() == default_name;
-                describe(&device, is_default)
-            })
+        Ok(enumerate(&host)?
+            .into_iter()
+            .map(|(_, info)| info)
             .collect())
     }
 
     fn device(&self, id: &DeviceId) -> Result<DeviceInfo> {
         let host = cpal::default_host();
-        let device = find_device(&host, id)?;
-        describe(&device, false).ok_or_else(|| {
-            AudioError::Backend(format!("device '{id}' advertises no usable input config"))
-        })
+        find_device(&host, id).map(|(_, info)| info)
     }
 
     fn open(
@@ -167,7 +197,7 @@ fn build_stream(
     stats: Arc<CaptureStats>,
 ) -> Result<(cpal::Stream, u32, u16)> {
     let host = cpal::default_host();
-    let device = find_device(&host, &config.device)?;
+    let (device, info) = find_device(&host, &config.device)?;
     let supported = device
         .default_input_config()
         .map_err(|e| AudioError::Backend(e.to_string()))?;
@@ -187,7 +217,10 @@ fn build_stream(
     // so a bad mapping fails here rather than inside the callback.
     let mut demuxer = Demuxer::new(&config.channel_map, channels, sinks, stats)?;
 
-    let error_device = config.device.clone();
+    // The device's own id, not the one that was asked for: a configuration
+    // still holding a name resolved to *this* device, and an event naming
+    // something the app no longer recognises helps nobody.
+    let error_device = info.id.clone();
 
     let stream = device
         .build_input_stream(

@@ -40,7 +40,11 @@
     // Inherits the device and the language of the profile being left: a second
     // setup on the same machine is usually the same interface patched
     // differently, in the same house and therefore the same language.
-    const created = newProfile(profiles, active?.device ?? "", active?.language);
+    const created = newProfile(
+      profiles,
+      { name: active?.device ?? "", id: active?.deviceId ?? "" },
+      active?.language,
+    );
     profiles = [...profiles, created];
     activeKey = created.key;
   };

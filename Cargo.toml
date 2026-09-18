@@ -46,6 +46,10 @@ hex = "0.4"
 
 # Audio (P1/P2)
 cpal = "0.16"
+# Pulled in by cpal already; audio-core uses them directly for the CoreAudio
+# device UID (P12), which cpal keeps to itself.
+objc2-core-audio = "0.3"
+objc2-core-foundation = "0.3"
 ringbuf = "0.4"
 rubato = "0.16"
 hound = "3.5"

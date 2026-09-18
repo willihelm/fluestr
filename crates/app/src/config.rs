@@ -95,13 +95,27 @@ pub struct Profile {
     pub name: String,
     /// Device name, as `list_devices` returns it.
     ///
-    /// P12 wants a stable device id rather than the display name, so that two
-    /// identical interfaces are told apart and a renamed one is still
-    /// recognised. That is still outstanding, and the name is what the rest of
-    /// the app keys on today — storing anything else here would only move the
-    /// mismatch. A stored device that is not currently connected is kept and
-    /// marked in the UI, never silently replaced with whatever is plugged in.
+    /// Kept beside the id rather than replaced by it, and for two reasons.
+    /// A device that is not plugged in has to be *named* — "Scarlett 18i20 is
+    /// not connected" is a sentence an operator can act on, a UID is not. And
+    /// a file written before ids existed holds only this, which is what
+    /// [`Profile::device_id`] is then filled in from.
+    ///
+    /// A stored device that is not currently connected is kept and marked in
+    /// the UI, never silently replaced with whatever is plugged in.
     pub device: String,
+    /// The device's stable id — on macOS its CoreAudio UID.
+    ///
+    /// This is what the profile is actually keyed on: it survives a rename
+    /// and it distinguishes two units of the same model, neither of which the
+    /// name does. See `audio_core::DeviceId`.
+    ///
+    /// Empty means "not known yet": a file written before this field existed,
+    /// or a device the platform would not identify. The UI fills it in the
+    /// first time it sees the named device connected, so an existing setup
+    /// gains a stable id by being used rather than by being re-entered.
+    #[serde(default)]
+    pub device_id: String,
     /// The language a channel added to this profile starts on, and what the
     /// picker above the channel list shows.
     ///
@@ -347,6 +361,7 @@ mod tests {
                 Profile {
                     name: "Probebühne".into(),
                     device: "Scarlett 2i2".into(),
+                    device_id: "AppleUSBAudioEngine:Focusrite:Scarlett 2i2:1".into(),
                     language: "de".into(),
                     channels: vec![StoredChannel {
                         channel: 0,
@@ -359,6 +374,7 @@ mod tests {
                 Profile {
                     name: "Grosses Haus".into(),
                     device: "MADIface".into(),
+                    device_id: "AppleUSBAudioEngine:RME:MADIface:2".into(),
                     language: "en".into(),
                     channels: vec![
                         StoredChannel {
@@ -508,6 +524,12 @@ mod tests {
         assert_eq!(loaded.model, None);
         assert_eq!(loaded.vad_model, None);
         assert_eq!(loaded.model_path, None);
+        // Same for the stable device id, which the file also predates. Empty
+        // rather than guessed: the name is still there and still resolves, and
+        // the id is filled in the first time that device is seen connected —
+        // an existing setup earns one by being used, not by being re-entered.
+        assert_eq!(loaded.profiles[0].device, "Scarlett 2i2");
+        assert_eq!(loaded.profiles[0].device_id, "");
         // Same for the profile's default language, which the file predates: a
         // profile without one has to keep loading, on the default rather than
         // on an empty string that would make a new channel languageless.

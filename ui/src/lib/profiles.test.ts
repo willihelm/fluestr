@@ -8,6 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  adoptDeviceIds,
+  connectedDevice,
   duplicate,
   fromStored,
   fromStoredConfig,
@@ -18,7 +20,7 @@ import {
 } from "./profiles";
 import { restoreChannel, DEFAULT_LANGUAGE } from "./streams";
 import { restoreGroup } from "./groups";
-import type { StoredProfile } from "./bridge";
+import type { DeviceOption, StoredProfile } from "./bridge";
 
 /// Two channels and a group holding the second of them, built the way the
 /// Settings page builds one — with keys, not positions.
@@ -32,6 +34,7 @@ const aProfile = (): Profile => {
     key: 99,
     name: "Grosses Haus",
     device: "MADIface",
+    deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
     language: "de",
     channels,
     groups: [restoreGroup("Bühne", [channels[1].key])],
@@ -41,6 +44,7 @@ const aProfile = (): Profile => {
 const stored: StoredProfile = {
   name: "Grosses Haus",
   device: "MADIface",
+  deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
   language: "de",
   channels: [
     { channel: 0, label: "Regie", language: "de", color: "#6ea8fe" },
@@ -141,9 +145,10 @@ describe("newProfile", () => {
     // An empty channel list is a dead end the operator has to work out how to
     // leave; a second setup on one machine is usually the same interface
     // patched differently.
-    const created = newProfile([], "MADIface");
+    const created = newProfile([], { name: "MADIface", id: "...MADIface:2" });
 
     expect(created.device).toBe("MADIface");
+    expect(created.deviceId).toBe("...MADIface:2");
     expect(created.channels).toHaveLength(1);
     expect(created.groups).toEqual([]);
   });
@@ -151,14 +156,109 @@ describe("newProfile", () => {
   it("carries the language over, down to the channel it starts with", () => {
     // Same argument as the device: a second production in the same house is
     // not a second language.
-    const created = newProfile([], "MADIface", "en");
+    const created = newProfile([], { name: "MADIface", id: "...MADIface:2" }, "en");
 
     expect(created.language).toBe("en");
     expect(created.channels[0].language).toBe("en");
   });
 
   it("falls back to the one default language when none is given", () => {
-    expect(newProfile([], "MADIface").language).toBe(DEFAULT_LANGUAGE);
+    expect(newProfile([], { name: "MADIface", id: "...MADIface:2" }).language).toBe(
+      DEFAULT_LANGUAGE,
+    );
+  });
+});
+
+/// Two interfaces of the same model, which is the case a name cannot settle,
+/// plus the built-in microphone.
+const devices: DeviceOption[] = [
+  {
+    id: "BuiltInMicrophoneDevice",
+    name: "MacBook Pro Microphone",
+    channels: 1,
+    defaultSampleRate: 48000,
+    isDefault: true,
+  },
+  {
+    id: "...Scarlett:1",
+    name: "Scarlett 2i2",
+    channels: 2,
+    defaultSampleRate: 48000,
+    isDefault: false,
+  },
+  {
+    id: "...Scarlett:2",
+    name: "Scarlett 2i2",
+    channels: 2,
+    defaultSampleRate: 48000,
+    isDefault: false,
+  },
+];
+
+describe("finding the profile's device", () => {
+  it("goes by the id, so a renamed interface is still the same interface", () => {
+    // The failure this replaces: an operator renames the desk in Audio MIDI
+    // Setup and every profile silently reports its interface as missing.
+    const found = connectedDevice(devices, {
+      device: "Scarlett 2i2 (Bühne)",
+      deviceId: "...Scarlett:2",
+    });
+
+    expect(found?.id).toBe("...Scarlett:2");
+  });
+
+  it("tells two identical interfaces apart", () => {
+    const unit = (deviceId: string) =>
+      connectedDevice(devices, { device: "Scarlett 2i2", deviceId });
+
+    expect(unit("...Scarlett:1")?.id).toBe("...Scarlett:1");
+    expect(unit("...Scarlett:2")?.id).toBe("...Scarlett:2");
+  });
+
+  it("reports a device whose id is not there as absent, name or no name", () => {
+    // Deliberately *not* falling back to the name here. A profile that has an
+    // id has been resolved once already, so a missing id means this device is
+    // gone — and the second unit of the same model must not stand in for it.
+    const found = connectedDevice(devices, {
+      device: "Scarlett 2i2",
+      deviceId: "...Scarlett:9",
+    });
+
+    expect(found).toBeUndefined();
+  });
+
+  it("falls back to the name only for a profile that has no id yet", () => {
+    expect(connectedDevice(devices, { device: "Scarlett 2i2", deviceId: "" })?.id).toBe(
+      "...Scarlett:1",
+    );
+  });
+});
+
+describe("adopting stable device ids", () => {
+  it("gives a profile written before ids the id of the device it names", () => {
+    const old = { ...aProfile(), device: "MacBook Pro Microphone", deviceId: "" };
+
+    const adopted = adoptDeviceIds([old], devices);
+
+    expect(adopted?.[0].deviceId).toBe("BuiltInMicrophoneDevice");
+    // Everything else about the setup is untouched: this is a migration, not
+    // an edit.
+    expect(adopted?.[0].channels).toEqual(old.channels);
+    expect(adopted?.[0].groups).toEqual(old.groups);
+  });
+
+  it("leaves a profile alone when its device is not connected", () => {
+    // The office case. Binding the profile to whatever happens to be plugged
+    // in would quietly re-point the setup at the built-in microphone.
+    const old = { ...aProfile(), device: "MADIface", deviceId: "" };
+
+    expect(adoptDeviceIds([old], devices)).toBeNull();
+  });
+
+  it("says nothing changed when every profile already has an id", () => {
+    // What tells the caller not to write the file. A migration that reports
+    // itself on every start is a save on every start.
+    expect(adoptDeviceIds([aProfile()], devices)).toBeNull();
   });
 });
 

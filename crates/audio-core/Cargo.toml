@@ -21,6 +21,12 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 whisper-rs = { workspace = true, optional = true }
 
+# The CoreAudio UID behind `DeviceId`, which cpal does not expose. Same two
+# crates cpal itself binds CoreAudio with, so this adds nothing to the tree.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-audio = { workspace = true }
+objc2-core-foundation = { workspace = true }
+
 [dev-dependencies]
 hound = { workspace = true }
 serde_json = { workspace = true }

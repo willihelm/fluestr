@@ -21,14 +21,25 @@
 
 import { newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
 import { restoreGroup, type Group } from "./groups";
-import { CONFIG_VERSION, type StoredConfig, type StoredProfile } from "./bridge";
+import {
+  CONFIG_VERSION,
+  type DeviceOption,
+  type StoredConfig,
+  type StoredProfile,
+} from "./bridge";
 
 export interface Profile {
   /// Stable for the lifetime of the window, like a channel's — it is what the
   /// switcher and Svelte identify a profile by, and it is not stored.
   key: number;
   name: string;
+  /// The interface's display name, for reading. Kept beside the id because a
+  /// device that is not plugged in still has to be nameable.
   device: string;
+  /// The interface's stable id, which is what the profile is keyed on: it
+  /// survives a rename and tells two units of the same model apart. Empty
+  /// where it is not known yet — see `adoptDeviceIds`.
+  deviceId: string;
   /// What a channel added to this profile starts on, and what the picker above
   /// the channel list shows. Every channel keeps its own language; this only
   /// decides what a new one is born with.
@@ -46,7 +57,9 @@ let nextKey = 0;
 /// to work out how to leave.
 export const newProfile = (
   existing: Profile[],
-  device: string,
+  /// Name and id together, as one argument rather than two adjacent strings:
+  /// two positional strings in a row is how the id ends up in the name.
+  device: { name: string; id: string },
   /// Carried over from the profile being worked on rather than reset: an
   /// operator who sets up a second production in the same house is not
   /// switching language, and the one place a language is named by default
@@ -55,7 +68,8 @@ export const newProfile = (
 ): Profile => ({
   key: nextKey++,
   name: `Profile ${existing.length + 1}`,
-  device,
+  device: device.name,
+  deviceId: device.id,
   language,
   channels: [newChannel([], language)],
   groups: [],
@@ -70,6 +84,7 @@ export const toStored = (profile: Profile): StoredProfile => {
   return {
     name: profile.name,
     device: profile.device,
+    deviceId: profile.deviceId,
     language: profile.language,
     channels: profile.channels.map((c) => ({
       channel: c.channel,
@@ -103,6 +118,10 @@ export const fromStored = (stored: StoredProfile): Profile => {
     key: nextKey++,
     name: stored.name,
     device: stored.device,
+    // A file written before stable ids has none. Empty rather than the name:
+    // "not known yet" and "known to be this" are different states, and only
+    // the first one may be overwritten by what is currently connected.
+    deviceId: stored.deviceId ?? "",
     // A file written before profiles had a default language has none, and
     // "" would make every channel added afterwards languageless.
     language: stored.language ?? DEFAULT_LANGUAGE,
@@ -114,6 +133,54 @@ export const fromStored = (stored: StoredProfile): Profile => {
       ),
     ),
   };
+};
+
+/// The connected device a profile is set to, if it is there at all.
+///
+/// By id whenever the profile has one, and by name only when it does not. That
+/// order is the whole point of the id: once a profile has one, a device whose
+/// id is absent *is* absent — an interface that was renamed is still found,
+/// and an identically named second unit is not mistaken for it.
+///
+/// The name fallback is for a profile that predates stable ids, and it can
+/// only pick the first device of that name. That is exactly the ambiguity the
+/// id exists to remove, and it lasts until the device is seen once.
+export const connectedDevice = (
+  devices: DeviceOption[],
+  profile: { device: string; deviceId: string },
+): DeviceOption | undefined =>
+  profile.deviceId
+    ? devices.find((d) => d.id === profile.deviceId)
+    : devices.find((d) => d.name === profile.device);
+
+/// Fills in the stable ids of profiles that have none, from what is connected.
+///
+/// Returns `null` when there was nothing to fill in, so the caller can tell a
+/// migration from a no-op and only save in the first case.
+///
+/// This is the whole upgrade path: an operator with an existing setup plugs in
+/// the interface they always use, and the profile quietly gains an id that
+/// survives the next rename. Nothing is asked of them, and a profile whose
+/// device is not connected is left alone rather than bound to whatever is.
+export const adoptDeviceIds = (
+  profiles: Profile[],
+  devices: DeviceOption[],
+): Profile[] | null => {
+  let changed = false;
+
+  const adopted = profiles.map((profile) => {
+    if (profile.deviceId || !profile.device) return profile;
+
+    const device = connectedDevice(devices, profile);
+    if (!device) return profile;
+
+    changed = true;
+    // The name comes along: a device may have been renamed between the save
+    // and now, and the profile should show what the operator sees today.
+    return { ...profile, device: device.name, deviceId: device.id };
+  });
+
+  return changed ? adopted : null;
 };
 
 /// A copy under its own name, with its own keys.
