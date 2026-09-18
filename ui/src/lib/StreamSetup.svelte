@@ -90,10 +90,6 @@
         <input type="color" aria-label="Colour" bind:value={channel.color} disabled={locked} />
 
         <div class="end">
-          {#if muted.has(index)}
-            <span class="tag" title="The selected device has only {deviceChannels} channels, so this one receives no audio. It keeps its place, its colour and its groups.">muted</span>
-          {/if}
-
           <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
             title="Remove this channel">×</button>
         </div>
@@ -106,7 +102,7 @@
   </div>
 
   {#if muted.size > 0}
-    <!-- Said once, in full, rather than only implied by the badges: an
+    <!-- Said once, in full, rather than only implied by the greyed rows: an
          operator who sees a channel stay silent for a whole show has to be
          able to find out here why, and the reason is the device, not the
          setup. -->
@@ -139,7 +135,7 @@
   .head,
   .row {
     display: grid;
-    grid-template-columns: 0.6rem 4rem minmax(6rem, 1fr) 3.5rem 2.6rem 5.5rem;
+    grid-template-columns: 0.6rem 4rem minmax(6rem, 1fr) 3.5rem 2.6rem 2rem;
     align-items: center;
     gap: 0.5rem;
   }
@@ -160,27 +156,15 @@
     display: flex;
     align-items: center;
     gap: 0.3rem;
-    /* The column is held open by the template whether or not the row is
-       muted, so the badge appearing does not shorten the label field of that
-       one row while its neighbours keep theirs. */
     justify-content: flex-end;
     min-width: 0;
   }
 
-  /* Dimmed, not hidden: a muted row is still part of the setup, and it has to
-     be editable — pointing it at a channel the device has is the fix. */
+  /* Dimmed, not hidden or badged: a muted row is still part of the setup,
+     and it has to be editable — pointing it at a channel the device has is
+     the fix. */
   .row.muted {
     opacity: 0.55;
-  }
-
-  .tag {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #f2b544;
-    border: 1px solid currentColor;
-    border-radius: 0.25rem;
-    padding: 0 0.3rem;
   }
 
   .empty {

@@ -43,11 +43,7 @@
     {@const level = levels.get(streamId) ?? empty(streamId)}
     <div class="stream" class:muted={muted.has(streamId)} style="--channel: {channel.color}">
       <span class="name">{channel.label}</span>
-      {#if muted.has(streamId)}
-        <span class="tag" title="Channel {channel.channel + 1} does not exist on the selected device, so this stream receives no audio.">muted</span>
-      {:else}
-        <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
-      {/if}
+      <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
       {#if (overloaded.get(streamId) ?? 0) > 0}
         <span class="error" title="The decode queue was full and the oldest segments were dropped">
           {overloaded.get(streamId)} not transcribed
@@ -78,16 +74,10 @@
     --accent: var(--channel);
   }
 
+  /* Dimmed rather than labelled: a muted stream keeps its meter, which
+     simply stays at rest, and the greying says it receives no audio. */
   .stream.muted {
     opacity: 0.55;
-  }
-
-  .tag {
-    flex: 1;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-dim);
   }
 
   .name {
