@@ -695,40 +695,42 @@
     </div>
   {/if}
 
-  <div class="bar status">
-    {#if status.state === "running"}
-      <span class="ok">●</span>
-      <span>
-        {status.device} · {status.streams.length - muted.size}
-        {status.streams.length - muted.size === 1 ? "channel" : "channels"}{muted.size > 0
-          ? `, ${muted.size} muted`
-          : ""} · {status.sampleRate} Hz ·
-        {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
-        {(status.loadMs / 1000).toFixed(1)} s
-      </span>
-    {:else if status.state === "starting"}
-      <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
-    {:else if status.state === "failed"}
-      <span class="error">{status.message}</span>
-    {:else if status.state === "stopped"}
-      <span class="dim">Session ended.</span>
-    {:else if problem}
-      <span class="dim">{problem}</span>
-    {:else}
-      <span class="dim">Press Start to transcribe all configured channels.</span>
-    {/if}
-
-    <div class="right">
-      <ResourceMeter {usage} />
-      {#if view === "chat"}
-        <ClearCommunication
-          {running}
-          empty={messages.length === 0}
-          clear={clearCommunication}
-        />
+  {#if view !== "settings"}
+    <div class="bar status">
+      {#if status.state === "running"}
+        <span class="ok">●</span>
+        <span>
+          {status.device} · {status.streams.length - muted.size}
+          {status.streams.length - muted.size === 1 ? "channel" : "channels"}{muted.size > 0
+            ? `, ${muted.size} muted`
+            : ""} · {status.sampleRate} Hz ·
+          {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
+          {(status.loadMs / 1000).toFixed(1)} s
+        </span>
+      {:else if status.state === "starting"}
+        <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
+      {:else if status.state === "failed"}
+        <span class="error">{status.message}</span>
+      {:else if status.state === "stopped"}
+        <span class="dim">Session ended.</span>
+      {:else if problem}
+        <span class="dim">{problem}</span>
+      {:else}
+        <span class="dim">Press Start to transcribe all configured channels.</span>
       {/if}
+
+      <div class="right">
+        <ResourceMeter {usage} />
+        {#if view === "chat"}
+          <ClearCommunication
+            {running}
+            empty={messages.length === 0}
+            clear={clearCommunication}
+          />
+        {/if}
+      </div>
     </div>
-  </div>
+  {/if}
 
   {#if view === "settings"}
     <SettingsPage
