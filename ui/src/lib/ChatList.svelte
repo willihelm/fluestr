@@ -25,9 +25,13 @@
     /// eight of them interleaved the colour is what makes that readable at a
     /// glance — faster than reading eight labels.
     colors: Map<number, string>;
+    /// When each session's clock was zero, in epoch milliseconds. Per session
+    /// rather than one value, because the chat holds lines from every session
+    /// that has run since it was cleared.
+    starts: Map<number, number>;
   }
 
-  let { messages, colors }: Props = $props();
+  let { messages, colors, starts }: Props = $props();
 
   // Consecutive segments of the same channel are one bubble; see
   // [`toBubbles`] for where a bubble ends.
@@ -94,11 +98,78 @@
       ? `Decode ${bubble.decodeMs} ms of ${bubble.latencyMs} ms total`
       : `Decode ${bubble.decodeMs} ms of ${bubble.latencyMs} ms total, last of ${bubble.parts} segments`;
 
-  const clock = (ms: number) => {
-    const total = Math.floor(ms / 1000);
-    const minutes = Math.floor(total / 60);
-    const seconds = total % 60;
-    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  /// How old a line may be before it is given its time of day instead.
+  ///
+  /// Inside the hour, "4 minutes ago" is the question actually being asked of
+  /// a live chat — how far behind the room the text is. Past it, that reading
+  /// stops working ("73 minutes ago" is arithmetic, not a time) and a clock
+  /// that can be matched against a running order is worth more.
+  const RELATIVE_MS = 60 * 60 * 1000;
+
+  /// Under this, the line is "now": inside a minute there is nothing to say
+  /// about how old it is, and a counter ticking up through the seconds draws
+  /// the eye away from the text.
+  const NOW_MS = 45_000;
+
+  // Fixed to English, like the rest of the interface. The system locale would
+  // otherwise put a German "vor 4 Minuten" next to an English "Jump to
+  // latest".
+  const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+
+  // Re-read every half minute so the ages age. Nothing else moves the clock
+  // forward: a bubble that is not touched again would otherwise keep saying
+  // "now" for the rest of the session.
+  let now = $state(Date.now());
+
+  $effect(() => {
+    const tick = setInterval(() => (now = Date.now()), 30_000);
+    return () => clearInterval(tick);
+  });
+
+  /// When a bubble started, in epoch milliseconds, or `null` when its
+  /// session's zero point is not known.
+  const startedAt = (bubble: Bubble) => {
+    const start = starts.get(bubble.sessionId);
+    return start === undefined ? null : start + bubble.tStartMs;
+  };
+
+  /// What the header shows: how long ago for a fresh line, the time of day for
+  /// an older one.
+  ///
+  /// Falls back to time since the session started when the zero point is not
+  /// known — a chat that outlived the state that carried it. Marked with a
+  /// leading `+` so it is never read as a time of day.
+  const clock = (bubble: Bubble) => {
+    const at = startedAt(bubble);
+    if (at === null) {
+      const total = Math.floor(bubble.tStartMs / 1000);
+      return `+${Math.floor(total / 60)}:${pad(total % 60)}`;
+    }
+
+    // A machine whose clock stepped backwards can put a line in the future.
+    // Zero rather than a negative age, which would read as "in 3 minutes".
+    const age = Math.max(0, now - at);
+    if (age >= RELATIVE_MS) {
+      const time = new Date(at);
+      return `${pad(time.getHours())}:${pad(time.getMinutes())}`;
+    }
+    if (age < NOW_MS) return relative.format(0, "second");
+    // Floor, not round: a line stays "1 minute ago" until it really is two
+    // minutes old. Rounding would call a 90-second-old line two minutes,
+    // which is the one direction a latency figure must not err in.
+    return relative.format(-Math.floor(age / 60_000), "minute");
+  };
+
+  /// The exact time of day, for the line the operator stops to look at. The
+  /// seconds are here rather than in the header: they matter when a line is
+  /// being placed against something else, and never while reading the chat.
+  const clockTitle = (bubble: Bubble) => {
+    const at = startedAt(bubble);
+    if (at === null) return "Time of day unknown for this session";
+    const time = new Date(at);
+    return `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
   };
 </script>
 
@@ -121,10 +192,7 @@
     <article style="--channel: {colorOf(bubble.streamId)}">
       <header>
         <span class="label">{bubble.label || "Stream " + bubble.streamId}</span>
-        <span class="time">{clock(bubble.tStartMs)}</span>
-        {#each bubble.languages as language}
-          <span class="lang">{language}</span>
-        {/each}
+        <span class="time" title={clockTitle(bubble)}>{clock(bubble)}</span>
         <span class="latency" title={latencyTitle(bubble)}>
           {(bubble.latencyMs / 1000).toFixed(1)} s
         </span>
@@ -203,7 +271,7 @@
     font-weight: 600;
   }
 
-  .lang,
+  .time,
   .latency {
     font-variant-numeric: tabular-nums;
   }

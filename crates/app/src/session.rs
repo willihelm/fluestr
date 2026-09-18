@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// How long one stream's ring holds audio before the processing thread has to
 /// have drained it. Four seconds is the buffer that absorbs a decode that runs
@@ -239,6 +239,18 @@ pub struct RunningStream {
     pub muted: bool,
 }
 
+/// Wall clock now, in milliseconds since the Unix epoch.
+///
+/// A clock set before 1970 is the only way this can fail, and the answer there
+/// is a session that starts anyway with its bubbles timed from the epoch —
+/// wrong times read as wrong, a session that refuses to start does not.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Lifecycle of the session, as the UI needs to render it.
 #[derive(Debug, Clone, Serialize)]
 // `rename_all` covers the variant names, `rename_all_fields` their contents —
@@ -252,6 +264,15 @@ pub enum SessionState {
     Running {
         /// What the transcripts arriving from now on are tagged with.
         session_id: u64,
+        /// Wall clock at which this session's own clock is zero, in
+        /// milliseconds since the Unix epoch.
+        ///
+        /// A segment carries `t_start_ms` on that session clock, and a time of
+        /// day is what an operator reads a transcript against — a log, a cue
+        /// sheet, another recording. The conversion needs this one number, and
+        /// it belongs here rather than being guessed in the UI from when the
+        /// first event happened to arrive.
+        started_at_ms: u64,
         device: String,
         streams: Vec<RunningStream>,
         sample_rate: u32,
@@ -532,6 +553,7 @@ impl Session {
 
         let state = SessionState::Running {
             session_id,
+            started_at_ms: now_ms(),
             device: info.name,
             streams: running,
             sample_rate: granted,
@@ -1272,6 +1294,7 @@ mod tests {
                     muted: true,
                 },
             ],
+            started_at_ms: 1_758_100_000_000,
             sample_rate: 48_000,
             model: "ggml-small-q5_1.bin".into(),
             load_ms: 140,
@@ -1280,6 +1303,7 @@ mod tests {
         .unwrap();
         assert_eq!(running["state"], "running");
         assert_eq!(running["sessionId"], 7);
+        assert_eq!(running["startedAtMs"], 1_758_100_000_000u64);
         assert_eq!(running["sampleRate"], 48_000);
         assert_eq!(running["streams"][0]["streamId"], 0);
         assert_eq!(running["streams"][0]["channel"], 2);

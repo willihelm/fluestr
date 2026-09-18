@@ -127,6 +127,10 @@ export type SessionState =
   | {
       state: "running";
       sessionId: number;
+      /// Wall clock at which this session's own clock is zero, in milliseconds
+      /// since the Unix epoch. A segment's `tStartMs` is on that session
+      /// clock; this is what turns it into a time of day.
+      startedAtMs: number;
       device: string;
       streams: RunningStream[];
       sampleRate: number;

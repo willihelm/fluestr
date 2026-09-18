@@ -86,6 +86,12 @@
     state: "idle",
   });
   let messages = $state<TranscriptEvent[]>([]);
+  // When each session's own clock was zero, in epoch milliseconds, so a
+  // bubble's `tStartMs` can be shown as a time of day. Keyed by session id and
+  // kept for sessions that have already stopped: Start is non-destructive, so
+  // the chat holds lines from several of them at once and each needs its own
+  // zero point.
+  let sessionStarts = $state(new Map<number, number>());
   let levels = $state(new Map<number, StreamLevel>());
   // What the app and its whisper workers cost the machine (P8). `null` until
   // the first sample, a second after the window opens: a CPU percentage needs
@@ -96,6 +102,14 @@
   // only logged: an operator who spoke and saw no text needs to be able to
   // tell "the app fell behind" from "the channel was not listening".
   let overloaded = $state(new Map<number, number>());
+
+  /// Remembers a session's zero point. Called from both places a running state
+  /// arrives — the answer to `start_session` and the `session-state` event —
+  /// because either can be the first to be seen.
+  const noteSession = (state: SessionState | { state: "starting" }) => {
+    if (state.state !== "running") return;
+    sessionStarts = new Map(sessionStarts).set(state.sessionId, state.startedAtMs);
+  };
 
   let running = $derived(status.state === "running");
   let busy = $derived(status.state === "starting");
@@ -246,6 +260,7 @@
       }),
       onSessionState((event) => {
         status = event;
+        noteSession(event);
         // A failed session is over — but its threads and its loaded model are
         // only released when something takes it out of the backend's slot, and
         // the failure was discovered inside the pipeline, not by a command.
@@ -296,6 +311,7 @@
         // One vocabulary for every stream — see `vocabulary.ts`.
         vocabulary: vocabularyConfig(vocabulary),
       });
+      noteSession(status);
       view = "chat";
     } catch (e) {
       status = { state: "failed", message: String(e) };
@@ -319,6 +335,14 @@
   // window — so this is the whole of it.
   const clearCommunication = () => {
     messages = [];
+    // The zero points are only there to time the lines that were just thrown
+    // away — except the running session's, which the lines arriving from now
+    // on still need. No `session-state` event is due while a session runs, so
+    // dropping it here would leave the rest of that session untimed.
+    sessionStarts =
+      status.state === "running"
+        ? new Map([[status.sessionId, status.startedAtMs]])
+        : new Map();
     overloaded = new Map();
   };
 </script>
@@ -418,7 +442,7 @@
             This group has no channels yet. Add some on the Settings page.
           </p>
         {:else}
-          <ChatList messages={shown} {colors} />
+          <ChatList messages={shown} {colors} starts={sessionStarts} />
         {/if}
       </div>
     </div>
