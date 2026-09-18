@@ -12,8 +12,8 @@ repeating numbers, so there is one place to correct when a measurement changes.
 
 **Status of this document:** 2026-09-18, after the model manager — the app now
 downloads, verifies and selects its own models, so a fresh machine no longer
-needs a terminal to reach its first transcription. P10 was set aside on the
-same day; see the package for what that costs and what it changes.
+needs a terminal to reach its first transcription. P10 and P3b were set aside
+on the same day; see each package for what that costs and what it changes.
 
 ---
 
@@ -59,7 +59,7 @@ for now, with the reason recorded in the package.
 | P1 | Audio capture (macOS, multichannel) | **Partial** | Channel mapping unverified on real hardware |
 | P2 | Ring buffer & resampling | **Done** | — |
 | P3 | VAD & segment scheduler | **Done** | — |
-| P3b | Language stabiliser | **Open** | — |
+| P3b | Language stabiliser | **Deferred** | Set aside on 2026-09-18: with a fixed language per stream the language is already stable |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
 | P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no `clear_communication` in the backend, no `search_session` |
@@ -167,7 +167,10 @@ but how well the chosen mode carries foreign-language inserts.
    once rather than drifting between channel-specific prompts. Package P15.
 4. **Auto-detect as opt-in, restricted to a candidate list.** Not free
    detection across all ~99 whisper languages, but argmax over the probability
-   vector restricted to the languages declared for that stream. Package P3b.
+   vector restricted to the languages declared for that stream. Package P3b —
+   deferred, so today every stream is on a fixed language and auto mode is not
+   offered at all. The data model carries it (`LanguageMode::Auto`); nothing
+   constructs it.
 
 **Extensibility is a hard requirement:** languages are hard-coded nowhere.
 Modelled as `LanguageCode(String)` against the full whisper language list
@@ -265,7 +268,34 @@ Three things about it are worth knowing before changing it:
 values are still constants in the code — they belong in P12 with the rest of
 the settings, and `silence_timeout` in particular is a *latency* parameter.
 
-### P3b — Language stabiliser (auto mode only) — **Open**
+### P3b — Language stabiliser (auto mode only) — **Deferred**
+
+**Set aside by the user on 2026-09-18:** the language is stable as things
+stand, so the mechanism that would stabilise it has nothing to fix yet.
+
+That stability is not an accident and it is worth naming, because it is also
+the condition under which this stays deferred. Every stream runs on a fixed
+language — `session.rs` builds `LanguageMode::Fixed` and nothing else — so
+there is no per-segment language decision that could oscillate in the first
+place. P3b only becomes real work the day auto mode is offered in the UI, and
+it must land in the same step: an auto mode without the stabiliser is worse
+than no auto mode, because it flips language inside a single contribution.
+
+What that costs: a stream on which two languages genuinely alternate has to be
+switched by hand. Given DE/EN code switching within one speaker — the normal
+case here — a fixed German stream already carries the English terms verbatim,
+which is why this is a smaller loss than it first looks.
+
+The specification below stands unchanged, so reviving it is not a redesign.
+One thing found while scoping it belongs with it: `whisper-rs` exposes the
+probability vector through `WhisperState::lang_detect`, but that is a separate
+encoder pass *before* the decode, not a value that can be read off afterwards —
+`full_lang_id_from_state` is whisper's global argmax and arrives too late to
+restrict. So P3b costs an extra encoder pass per segment on auto streams, in
+the 300 ms class rather than the 1–2 ms class. It needs a measurement of its
+own before it is offered.
+
+---
 
 No-op for streams with a fixed language. Evaluates the probability vector
 **restricted to the stream's candidate languages** — not a global argmax —
@@ -1004,7 +1034,7 @@ the settings proper (every threshold is still a constant in the code) and the
 viewer.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
-P3b, P8, P9, P13. *P10 left it on 2026-09-18.*
+P8, P9, P13. *P10 and P3b left it on 2026-09-18.*
 
 ---
 
