@@ -87,7 +87,8 @@ detection, the shared worker pool, one colour-coded chat — at a measured
 Around it: a Settings page holding the device, the channel map, the one global
 vocabulary, the global alert terms and the groups; a channel map that may reach past the device, whose
 surplus channels start muted instead of blocking Start; a chat page with a
-group sidebar that narrows the view to a group's channels and opens any of them in a
+group sidebar whose width is dragged and remembered per screen, which narrows
+the view to a group's channels and opens any of them — or everything — in a
 window of its own; consecutive segments merged into one bubble per
 utterance, with the alert terms marked where they were said and an unfocused
 window asking once per bubble to be looked at; Clear all communication as the only action that empties the
@@ -662,6 +663,16 @@ created, renamed, deleted and filled on the Settings page. It is read during a
 show, when the question is "show me just the stage" and not "let me reorganise
 my groups", and a rename box under the cursor at that moment is a liability.
 
+Its **width is dragged** at the edge between it and the chat, by pointer or by
+arrow key, down to a narrow column or out to 60 % of the window, with a
+double-click back to where it started. The width is remembered per screen, in
+the browser's own storage rather than in `config.json`: the configuration is
+the production's setup and it reaches every view the LAN remote serves, so a
+width stored there would let a phone in the auditorium decide how much of the
+desk's screen the sidebar takes. It is re-clamped to whatever window it is read
+back into, because a phone turned from landscape to portrait is the ordinary
+case and not an edge one.
+
 Groups are non-exclusive views: a channel may belong to any number of groups,
 and removing it from a group never removes the channel itself. The sidebar also
 offers an all-channels view, which is what the chat shows when no group is
@@ -690,24 +701,34 @@ all-channels view has no implicit group setting. If a channel belongs to two
 groups, each open group window follows its own setting. In all cases, one new
 bubble creates at most one request per affected window.
 
-Every group can be opened in its own window from the sidebar. This window is a
-live view of that group's channels: it receives existing history, incoming
-transcripts, meters and session state from the shared backend, and reflects
-later membership changes. It does not own or create a capture session, so
-Start/Stop remains global. Closing the window closes only that view, never the
-group or its history.
+Every group can be opened in its own window from the sidebar, **and so can the
+all-channels view**. That window is a live view of its channels: it receives
+existing history, incoming transcripts, meters and session state from the
+shared backend, and reflects later membership changes. It does not own or
+create a capture session, so Start/Stop remains global. Closing the window
+closes only that view, never the group or its history.
+
+All channels detaches like the rest because it is a view of the same shape,
+even though it is not a group — and because the second screen it is wanted on
+is often a phone, where a browser tab showing everything is the whole point of
+the remote. Not being a group, it has nothing in the profile to remember
+settings on: no flash-on-every-message, which matches the main window's
+all-channels view, and a pin that lasts as long as the window does. A setting
+of its own in the profile would be a second kind of group-window preference
+for one checkbox.
 
 **How it is one app in several windows.** The same bundle is mounted in every
 WebView, and the window's *label* says which view it is — `group-3` is the
-fourth group of the active profile. The label rather than a query string,
-because it is readable before the first paint, so a group window never renders
+fourth group of the active profile, `group-all` the view of everything. The
+label rather than a query string, because it is readable before the first paint, so a group window never renders
 the main view for a frame and then replaces itself; and because Tauri
 identifies a window by it, so asking for a group that is already open focuses
 that window instead of stacking a second one on it.
 
 A group is addressed by its **position** in the active profile, which is the
 same handle the configuration file stores membership by and the only one that
-means the same thing in two windows — the keys the UI edits by are issued per
+means the same thing in two windows — all channels by a word, because every
+number is already somebody's group — the keys the UI edits by are issued per
 window and mean nothing outside it. The window then follows `config-changed`,
 which is how a rename, a membership change or a flash setting made on the
 Settings page reaches it.
@@ -1450,13 +1471,19 @@ In this order, with the reason each one comes where it does.
 9. Open a group in its own window, then speak on one member and one non-member
    channel → only the member transcript appears in that window; global
    Start/Stop is reflected there without creating another capture session.
+   Open **All channels** in its own window too → both lines appear there, and
+   asking for it a second time focuses the window that is already open rather
+   than stacking a second one on it. Drag the sidebar's edge narrow, restart
+   the app → it comes back at the width it was left at.
 10. Enable the remote client in Settings, pick the house interface, and open
     its URL from a second device → it sees the same history, incoming lines,
     groups, meters and session state. Start and stop the session from the
     browser and watch the operator's screen follow; rename a channel there and
     watch the Settings page on the app take it on without the operator's own
     edits being thrown away; open a group from the browser's sidebar and check
-    it comes up as a tab showing only that group's channels. Pull the network
+    it comes up as a tab showing only that group's channels, and All channels
+    as a tab showing every one of them — which is what the second device is
+    usually wanted for. Pull the network
     for ten seconds → the page says it is not connected, and on its return the
     chat is complete rather than missing the gap. Switch the listener off →
     the browser drops immediately.

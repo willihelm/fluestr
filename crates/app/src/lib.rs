@@ -67,6 +67,14 @@ pub const EVENT_REMOTE_STATUS: &str = "remote-status";
 /// of stacking a second one on it.
 pub const GROUP_WINDOW_PREFIX: &str = "group-";
 
+/// The label suffix of the all-channels window, which is the one detached view
+/// that is not a group. Kept in step with `ALL_CHANNELS_VIEW` in
+/// `ui/src/lib/windows.ts`.
+///
+/// A word and not a number, because every number is already a group's
+/// position.
+pub const GROUP_WINDOW_ALL: &str = "all";
+
 /// Sends one event to every view there is.
 ///
 /// Both transports, always: the Tauri bridge for the app's own windows, and
@@ -325,11 +333,17 @@ fn request_attention<R: Runtime>(window: tauri::Window<R>, urgent: bool) -> Resu
 #[tauri::command]
 fn open_group_window<R: Runtime>(
     app: AppHandle<R>,
-    group: usize,
+    group: Option<usize>,
     name: String,
     on_top: bool,
 ) -> Result<(), String> {
-    let label = format!("{GROUP_WINDOW_PREFIX}{group}");
+    // No position means every channel: all channels is a view of the same
+    // shape as a group, but it is not one, so it has no place in the profile's
+    // group list to be named after.
+    let label = match group {
+        Some(index) => format!("{GROUP_WINDOW_PREFIX}{index}"),
+        None => format!("{GROUP_WINDOW_PREFIX}{GROUP_WINDOW_ALL}"),
+    };
     // The group's own name first: this window is read from a Dock icon and a
     // window menu, where "Intercom2Chat" is what every one of them says.
     let title = format!("{name} — Intercom2Chat");
@@ -355,7 +369,7 @@ fn open_group_window<R: Runtime>(
         .build()
         .map(|_| ())
         .map_err(|err| {
-            tracing::error!(error = ?err, group, "opening a group window failed");
+            tracing::error!(error = ?err, label, "opening a group window failed");
             err.to_string()
         })
 }

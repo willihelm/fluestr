@@ -1,8 +1,8 @@
 // Which view this frontend is (P7, P16).
 //
 // The app is one bundle mounted in several places: the main window, a detached
-// window per group opened from the sidebar, and — over the LAN — a browser tab
-// per group beside the browser's main tab.
+// window per view opened from the sidebar, and — over the LAN — a browser tab
+// per view beside the browser's main tab.
 //
 // What tells them apart on the desktop is the window's **label**, which the
 // backend builds from the group's position in the active profile; see
@@ -13,8 +13,15 @@
 // twice focuses the window that is already open instead of stacking a second
 // one on it.
 //
+// A detachable view is a group or the all-channels view, and the label says
+// which: `group-2` or `group-all`. All channels is not a group — it is what the
+// chat shows when no group is selected — but it is a view of the same shape,
+// and a window is the one place the difference stops mattering: what an
+// operator wants on a second screen, or on a phone beside the desk, is as often
+// everything as it is one group.
+//
 // A browser has neither a label nor a second OS window, so the query string is
-// what is left — `?group=2`. It buys back both properties in the browser's own
+// what is left — `?group=2`, `?group=all`. It buys back both properties in the browser's own
 // terms: it is in the URL before the document is parsed, and a named
 // `window.open` target reuses the tab that is already showing that group.
 
@@ -25,44 +32,60 @@ import { isRemote } from "./transport";
 /// agree or a group window comes up as a second main window.
 export const GROUP_WINDOW_PREFIX = "group-";
 
+/// How the all-channels view is spelled in a label and in a URL, and the one
+/// value of [`GroupView`] that is not a group's position. Kept in step with
+/// `GROUP_WINDOW_ALL` on the Rust side.
+///
+/// A word rather than a number, because every number is already a group: a
+/// sentinel index would be one off-by-one away from being somebody's eighth
+/// group, and this has to be readable in a URL a person can type.
+export const ALL_CHANNELS_VIEW = "all";
+
+/// Which view a detached window or tab shows: one group, by its position in
+/// the active profile, or every channel.
+export type GroupView = number | typeof ALL_CHANNELS_VIEW;
+
 /// The query parameter a remote group tab carries. The browser's equivalent of
 /// the window label, and named the same way for the same reason.
 const GROUP_PARAM = "group";
 
-/// The group a window label names, or `null` when it names no group.
+/// The view a window label names, or `null` when it names none — which is the
+/// main window.
 ///
 /// Strict about what it accepts: anything that is not this prefix followed by a
-/// non-negative integer is not a group window. A label that nearly matches
-/// would otherwise open a view of group `NaN`, which renders as an empty chat
-/// and looks like a group somebody emptied.
-export const groupIndexOf = (label: string): number | null => {
+/// non-negative integer or `all` is not a group window. A label that nearly
+/// matches would otherwise open a view of group `NaN`, which renders as an
+/// empty chat and looks like a group somebody emptied.
+export const groupIndexOf = (label: string): GroupView | null => {
   if (!label.startsWith(GROUP_WINDOW_PREFIX)) return null;
 
-  const rest = label.slice(GROUP_WINDOW_PREFIX.length);
-  if (!/^\d+$/.test(rest)) return null;
-
-  return Number(rest);
+  return viewOf(label.slice(GROUP_WINDOW_PREFIX.length));
 };
 
-/// The group a URL asks for, or `null` for the main view.
+/// The view a URL asks for, or `null` for the main view.
 ///
-/// As strict as `groupIndexOf`, and for the same reason: `?group=all` is not a
-/// group, and a view of group `NaN` is an empty chat that looks like a group
-/// somebody emptied.
-export const groupParamOf = (search: string): number | null => {
-  const value = new URLSearchParams(search).get(GROUP_PARAM);
+/// As strict as `groupIndexOf`, and for the same reason: a view of group `NaN`
+/// is an empty chat that looks like a group somebody emptied.
+export const groupParamOf = (search: string): GroupView | null =>
+  viewOf(new URLSearchParams(search).get(GROUP_PARAM));
+
+/// The one reading of a label suffix or a query value, so that a window and
+/// the tab showing the same thing cannot come to different conclusions about
+/// what it spells.
+const viewOf = (value: string | null): GroupView | null => {
+  if (value === ALL_CHANNELS_VIEW) return ALL_CHANNELS_VIEW;
   if (value === null || !/^\d+$/.test(value)) return null;
 
   return Number(value);
 };
 
-/// The group this view is showing, or `null` for the main view.
+/// The view this window is showing, or `null` for the main view.
 ///
 /// The window label in the app, the query string in a browser. Also `null`
 /// when neither says anything — `just dev-ui` serves the same bundle in a
 /// plain browser with no backend behind it, and the main view is the right
 /// answer there because it is the one that renders without one.
-export const currentGroup = (): number | null => {
+export const currentGroup = (): GroupView | null => {
   if (isRemote) return groupParamOf(window.location.search);
 
   try {
@@ -78,7 +101,7 @@ export const currentGroup = (): number | null => {
 /// desktop's `close_group_windows` does that a browser cannot be asked to do
 /// from the backend: a tab belongs to the browser, and only the page that
 /// opened it holds a handle to it.
-const tabs = new Map<number, Window>();
+const tabs = new Map<GroupView, Window>();
 
 /// Opens a group in a tab of its own, or brings the one already open forward.
 ///
@@ -86,7 +109,7 @@ const tabs = new Map<number, Window>();
 /// so a second request for the same group lands in the same tab — the same
 /// guarantee the window label gives on the desktop, by the same mechanism of
 /// naming the thing after what it shows.
-export const openGroupTab = (group: number, name: string) => {
+export const openGroupTab = (group: GroupView, name: string) => {
   const existing = tabs.get(group);
   if (existing && !existing.closed) {
     existing.focus();

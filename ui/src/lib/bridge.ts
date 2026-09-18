@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn } from "@tauri-apps/api/event";
 import { call, emit, isRemote, on } from "./transport";
 import { flashPage } from "./flash";
-import { closeGroupTabs, openGroupTab } from "./windows";
+import { ALL_CHANNELS_VIEW, closeGroupTabs, openGroupTab, type GroupView } from "./windows";
 
 /// One language whisper can be given, as the sidecar reports it. `code` is
 /// ISO 639-1 ("de"), `name` is whisper's own spelling ("german").
@@ -423,22 +423,32 @@ export const sessionSnapshot = () => call<Snapshot>("session_snapshot");
 /// one that asked.
 export const clearCommunication = () => call<void>("clear_communication");
 
-/// Opens a group in a window of its own, or focuses the one already open.
+/// Opens a view in a window of its own, or focuses the one already open.
 ///
 /// `group` is the group's position in the active profile — the same position
 /// the configuration file stores membership by, and what the window's label is
-/// built from. `name` is only the window's title.
+/// built from — or `ALL_CHANNELS_VIEW` for the view of every channel, which is
+/// not a group and so has no position. It crosses to Rust as `null`, where the
+/// absent position is exactly what it means. `name` is only the window's title.
 /// In a browser it is a tab instead (P16), named after the group so that asking
 /// for the same group twice reuses the tab that is already open rather than
 /// stacking a second one on it — which is exactly what the window label does
 /// on the desktop. `onTop` has no meaning there: nothing can be put in front
 /// of anything else inside a browser.
-export const openGroupWindow = (group: number, name: string, onTop: boolean): Promise<void> => {
+export const openGroupWindow = (
+  group: GroupView,
+  name: string,
+  onTop: boolean,
+): Promise<void> => {
   if (isRemote) {
     openGroupTab(group, name);
     return Promise.resolve();
   }
-  return invoke<void>("open_group_window", { group, name, onTop });
+  return invoke<void>("open_group_window", {
+    group: group === ALL_CHANNELS_VIEW ? null : group,
+    name,
+    onTop,
+  });
 };
 
 /// A group window asking for its "keep this window in front" setting to be

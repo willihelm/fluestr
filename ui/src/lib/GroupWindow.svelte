@@ -1,5 +1,5 @@
 <script lang="ts">
-  // A group in a window of its own (P7).
+  // A group — or every channel — in a window of its own (P7).
   //
   // A second WebView on the same frontend, not a second app: it starts no
   // capture and owns no worker pool, so Start and Stop stay global and a group
@@ -7,10 +7,17 @@
   // same audio. Everything it shows — the history it opens with, the
   // transcripts, the meters, the session state — comes from the shared backend.
   //
-  // Which group it is comes from the window's own label, so it is known before
+  // Which view it is comes from the window's own label, so it is known before
   // the first paint; who is in that group comes from the configuration file,
   // re-read on every `config-changed`, which is how a membership change made on
   // the Settings page reaches a window that is already open.
+  //
+  // The all-channels view is the same component with nothing to filter by. It
+  // is not a group, so it has no stored settings to follow — no flash-on-every-
+  // message, and a pin that lasts as long as the window does. That is the same
+  // answer the main window's sidebar gives, where the all-channels row is the
+  // state of having selected no group rather than a group containing
+  // everything.
   //
   // Closing it closes this view and nothing else: never the group, never its
   // history, never the session.
@@ -21,7 +28,7 @@
   import { fromStoredConfig } from "./profiles";
   import { mergeHistory, toBubbles } from "./bubbles";
   import { attentionFor } from "./attention";
-  import { canPin, setWindowOnTop, setWindowTitle } from "./windows";
+  import { ALL_CHANNELS_VIEW, canPin, setWindowOnTop, setWindowTitle, type GroupView } from "./windows";
   import type { Channel } from "./streams";
   import {
     loadConfig,
@@ -43,12 +50,21 @@
 
   interface Props {
     /// The group's position in the active profile — the same position the
-    /// configuration file stores membership by. Read from the window label;
-    /// see `windows.ts`.
-    group: number;
+    /// configuration file stores membership by — or `ALL_CHANNELS_VIEW`. Read
+    /// from the window label; see `windows.ts`.
+    group: GroupView;
   }
 
   let { group }: Props = $props();
+
+  /// Whether this window is the view of every channel rather than of a group.
+  ///
+  /// Fixed for this window's life — it comes from the label, and a window does
+  /// not become a different view — but derived rather than read once, because
+  /// reading a prop into a `const` captures whatever it was at setup and
+  /// silently stops following it.
+  let showsAll = $derived(group === ALL_CHANNELS_VIEW);
+  const ALL_CHANNELS_NAME = "All channels";
 
   // Every channel of the active profile, never only this group's: the stream
   // id is the position in this list, exactly as the backend assigns it, and a
@@ -79,10 +95,16 @@
 
   let running = $derived(status.state === "running");
   let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
-  // The stream ids this window shows. An empty set for a group with no members
-  // — which is a group to fill in on the Settings page, not a reason to fall
-  // back to showing everything.
-  let visible = $derived(target === null ? new Set<number>() : visibleStreams(target, channels)!);
+  // The stream ids this window shows. Every one of them for the all-channels
+  // view; an empty set for a group with no members — which is a group to fill
+  // in on the Settings page, not a reason to fall back to showing everything.
+  let visible = $derived(
+    showsAll
+      ? new Set(channels.map((_, streamId) => streamId))
+      : target === null
+        ? new Set<number>()
+        : visibleStreams(target, channels)!,
+  );
   let shown = $derived(messages.filter((m) => visible.has(m.streamId)));
   // While a session runs this is the backend's own answer rather than the UI's
   // copy of the setup — the authoritative mapping, and the two would differ the
@@ -110,11 +132,14 @@
     const { profiles, activeKey } = fromStoredConfig(stored);
     const profile = profiles.find((p) => p.key === activeKey) ?? null;
     channels = profile?.channels ?? [];
-    target = profile?.groups[group] ?? null;
+    target = showsAll ? null : (profile?.groups[group as number] ?? null);
     known = true;
     // The backend titled this window when it opened it; a rename afterwards
-    // arrives here and nowhere else.
-    if (target) setWindowTitle(`${target.name} — Intercom2Chat`);
+    // arrives here and nowhere else. The all-channels view cannot be renamed,
+    // so its title is set once and never changes.
+    if (showsAll || target) {
+      setWindowTitle(`${showsAll ? ALL_CHANNELS_NAME : target!.name} — Intercom2Chat`);
+    }
 
     // The stored setting is what this window is *born* with, read once. The
     // backend already applied it when it built the window; this is what keeps
@@ -134,7 +159,13 @@
   const pin = () => {
     onTop = !onTop;
     setWindowOnTop(onTop);
-    requestGroupOnTop(group, onTop).catch((e) =>
+    // Nowhere to remember it for the all-channels view: it is not a group, and
+    // the alternative — a setting of its own in the profile — would be a
+    // second kind of group window preference for one checkbox. The pin still
+    // does what it says for as long as the window is open, which is the span
+    // the question is asked over.
+    if (showsAll) return;
+    requestGroupOnTop(group as number, onTop).catch((e) =>
       console.warn("the window setting was not stored:", e),
     );
   };
@@ -232,7 +263,7 @@
 
 <main>
   <header class="bar">
-    <h1>{target?.name ?? "Group"}</h1>
+    <h1>{showsAll ? ALL_CHANNELS_NAME : (target?.name ?? "Group")}</h1>
     <span class="dots">
       {#each channels as channel, streamId}
         {#if visible.has(streamId)}
@@ -292,13 +323,17 @@
     </span>
   </header>
 
-  {#if known && target === null}
+  {#if known && !showsAll && target === null}
     <p class="empty">
       This group is no longer in the active profile. Close this window, or make the
       group again on the Settings page.
     </p>
   {:else if known && visible.size === 0}
-    <p class="empty">This group has no channels yet. Add some on the Settings page.</p>
+    <p class="empty">
+      {showsAll
+        ? "The active profile has no channels yet. Add some on the Settings page."
+        : "This group has no channels yet. Add some on the Settings page."}
+    </p>
   {:else}
     {#if running}
       <StreamMeters {channels} {levels} {overloaded} {visible} {muted} />
