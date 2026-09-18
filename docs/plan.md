@@ -11,8 +11,9 @@ Evidence for the architecture decisions is in
 repeating numbers, so there is one place to correct when a measurement changes.
 
 **Status of this document:** 2026-09-18, after Unicode normalisation closed
-P17. P10 (SQLite persistence) was set aside the same day; see the package for
-what that costs. P3b (language stabiliser) was dropped with the auto mode it
+P17 and P18 was written up — the Windows port, which moved out of
+*Deliberately out of scope* and into a package of its own. P10 (SQLite
+persistence) was set aside the same day; see the package for what that costs. P3b (language stabiliser) was dropped with the auto mode it
 existed for — see *Deliberately out of scope*. This revision keeps what still
 governs decisions and drops the account of how finished work came about — that
 lives in the code and in git history.
@@ -75,6 +76,7 @@ for now, with the reason recorded in the package.
 | P15 | Vocabulary & prompt management | **Partial** | One global box, stored, but not named lists and not measured against a baseline |
 | P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. No authentication — by decision |
 | P17 | Alert terms & visual attention | **Done** | — |
+| P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -1036,6 +1038,127 @@ drops the connections it was serving. ✔ for the command round trip, the event
 stream and the drop on disable, against a mock app; the second machine waits on
 the whole-system verification below.
 
+### P18 — Windows port (WASAPI shared, ASIO opt-in) — **Open**
+
+The seam for this was built in P1 and has held: everything above
+`AudioBackend` — ring buffer, resampler, segmenter, protocol, worker pool,
+model manager, remote, frontend — is free of the platform. The port is four
+things: capture, the GPU backend under whisper.cpp, the sidecar's file name,
+and packaging. Only the first two are work.
+
+**The interface has to stay shareable.** On a production machine the
+multichannel interface is likely already owned by a DAW, and a transcript is
+worth considerably less than the session it would interrupt. An app that takes
+the device away from whatever is recording the show is not one an engineer can
+have running. This governs the capture design rather than being a detail of it.
+
+- **WASAPI shared mode is the default and the reason the constraint is
+  satisfiable.** Shared mode is multi-client by construction — Windows mixes
+  the clients, the app never takes exclusive ownership, and nothing it does can
+  take audio away from another program. What it does *not* control is how many
+  channels are reachable: a driver decides what it exposes as endpoints, and
+  most interfaces present their inputs as stereo pairs rather than as one
+  32-channel endpoint.
+- **Several endpoints replace one stream, and that costs this app nothing.**
+  The channels are never compared to one another. Each has its own ring, its
+  own segmenter and its own timestamp, taken when the segment ends; there is no
+  phase relationship anywhere in the pipeline for a second capture to lose. So
+  N stereo captures are worth exactly as much as one N-channel capture here.
+  That is what makes the shared-mode route viable at all, and it is worth
+  stating because a capture layer written around one interleaved multichannel
+  callback reads as though alignment mattered.
+- **The fan-out happens below the handle, not in the seam.** `AudioBackend`
+  hands back one `CaptureSession`, and the session layer holds exactly one
+  (`app/src/session.rs`). The Windows backend therefore owns its several WASAPI
+  streams behind a single `CaptureSession` and presents them as one. The
+  alternative — a set of sessions above the seam — would rewrite the contract
+  the whole app rests on, that `sinks` is ordered exactly like `channel_map`,
+  in order to express something no caller needs to see. A stored device is then
+  the ordered set of endpoint ids, and the channel map indexes across them in
+  that fixed order.
+- **ASIO is opt-in, and never reconfigures the driver.** Some interfaces reach
+  their full channel count only through ASIO, so the route has to exist. But
+  the ASIO specification is single-client; multi-client access is a vendor
+  extension (RME and MOTU have it, most do not), and on everything else opening
+  the driver locks out whoever holds it — which is the DAW. ASIO is therefore a
+  deliberate choice on the Settings page, never a default and never something
+  the app falls back into on its own. Where it is chosen, three rules:
+  - **Never set the sample rate.** cpal calls `ASIOSetSampleRate` whenever the
+    requested rate differs from the driver's current one — `check_config` in
+    `cpal/src/host/asio/stream.rs` — and that changes the clock underneath a
+    running DAW mid-session. The Windows path asks for the rate the driver is
+    already on and lets P2 resample. The app has no preference to defend here:
+    everything becomes 16 kHz mono downstream regardless. A rate stored in a
+    profile is ignored on this path rather than honoured.
+  - **Input only, and the driver's own buffer size.** No output buffers are
+    created and the buffer size is taken as found.
+  - **Held only while capture runs.** The driver is released on stop, not kept
+    for the lifetime of the app.
+- **Enumeration is itself intrusive.** Listing ASIO devices means loading each
+  driver, and a driver another application holds may refuse or block. The
+  device list has to survive that: a driver that will not load is reported as
+  present and busy, not dropped and not allowed to fail the enumeration.
+  "The interface is in use by another application" is a sentence an operator
+  can act on; an empty device list is not.
+- **The operator is told which route is running**, because the two are not
+  equivalent and the difference is theirs to judge: shared mode may not reach
+  every channel, ASIO may not coexist with the DAW.
+
+**Device identity** is the `catalogue()` stub in
+`audio-core/src/backend/stable_id.rs`, which already names its replacement:
+`IMMDevice::GetId`. The WASAPI endpoint id is stable across reboots and tells
+two identical interfaces apart, so it is the equal of the CoreAudio UID and P12
+needs no change to use it. ASIO offers only the driver name, which is the weak
+identity the module already degrades to — one entry per driver, two identical
+units indistinguishable. That is a reason to prefer the shared-mode route, not
+a defect to fix.
+
+**The GPU backend is the second piece of real work.** `whisper-rs` is pinned to
+`features = ["metal"]` in the workspace manifest, unconditionally, and does not
+build on Windows at all. It has to become per-target — Metal on macOS, Vulkan
+on Windows, CUDA where it is worth the build complexity, CPU as the floor —
+which in the manifest means keeping *one* optional dependency behind
+`audio-core`'s `silero` feature with per-target features, not two dependencies.
+The mechanical part is small. What is not small is that every number in
+measurements.md is a Metal number: the ~330 ms end-to-end budget, the ~8 s
+first-start shader compilation the UI announces, the pool's sizing, the
+0.41 ms per VAD frame. None of them carries over. The port therefore includes
+re-running P14 on the target hardware, and the default worker count is likely
+to come out differently.
+
+**The rest is certain and small.** `worker::find_binary` joins
+`"whisper-worker"` with no extension and needs `std::env::consts::EXE_SUFFIX`,
+or the sidecar is never found. The bundle gains an `nsis` target, the installer
+gains the WebView2 runtime as a prerequisite, and signing is an EV certificate
+or Azure Trusted Signing with SmartScreen reputation in place of notarisation
+and Gatekeeper — P13 done a second time rather than extended. Windows has no
+`Info.plist` equivalent, but it has the same failure: the *Allow desktop apps
+to access your microphone* privacy setting applies here too, and a denied
+microphone has to be distinguishable from a silent channel. Two tests are
+Unix-only — the `/bin/sh` child in `resources.rs` and the `pgrep`/`kill` pair
+in `tests/pool.rs` — and `justfile` is bash with `curl`, `say` and `afconvert`
+while `scripts/run.sh` hardcodes the `.app` path, so one of the two needs a
+PowerShell sibling. `rust-toolchain.toml` lists only `aarch64-apple-darwin`,
+and CI needs a second job with MSVC and cmake for whisper.cpp.
+
+**The ASIO SDK cannot be redistributed**, which is why ASIO must be a cargo
+feature CI builds *without*: the SDK plus LLVM/bindgen are the builder's to
+have, and a build without them has to produce a working app with the
+shared-mode route intact.
+
+**Accepted when:** on a Windows machine with a multichannel interface that a
+DAW is holding at the same time, eight channels transcribe and the DAW is
+undisturbed — no dropout, no sample-rate change, no lost device. Separately:
+the ASIO route runs on a multi-client driver, and on a single-client one it
+fails with the interface named as busy rather than by taking it.
+
+**Risk:** which channels a given driver exposes through WASAPI is a per-vendor
+fact that no amount of reading settles, and the shared-mode plan rests on it
+entirely. This is the same risk P1 still carries on macOS — the channel mapping
+that only real hardware can confirm — and it should be answered on the target
+interface early, because the answer decides whether the opt-in ASIO route is a
+corner case or the normal one.
+
 ---
 
 ## Dependencies
@@ -1058,7 +1181,14 @@ P0 Scaffolding
                                        └── P12 Settings
                                        v
                                  P13 Packaging
+                                       │
+                                       v
+                                 P18 Windows port
 ```
+
+P18 hangs below everything because it reopens three packages rather than
+following them: P1's capture, P4's GPU backend and P13's packaging, each for a
+second platform. Nothing between them changes.
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached; what P5
 still owes is a load test on live audio.*
@@ -1069,6 +1199,10 @@ code.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P8, P9, P13. *P10 left it on 2026-09-18; P3b was dropped.*
+
+**Milestone D (second platform):** + P18. *Deliberately after C: a Windows
+build of an app whose own numbers are not yet measured would be measured
+against nothing.*
 
 ---
 
@@ -1097,6 +1231,13 @@ In this order, with the reason each one comes where it does.
    arrangement nobody has used yet.
 5. **P13, packaging and signing.** With P6, P7, P9 and P17 in, what is left
    between this and a machine that is not this one is a notarised build.
+6. **P18, the Windows port.** Last, and not because it is hard: it reopens
+   capture, the GPU backend and packaging, and each of the three is cheaper to
+   redo once the macOS answer it is being ported from is measured rather than
+   assumed. The one part worth pulling forward is the hardware question in its
+   **Risk** — which channels the interface exposes through WASAPI — because it
+   can be answered on the target machine in an afternoon and decides the shape
+   of the rest.
 
 ## Whole-system verification
 
@@ -1151,6 +1292,11 @@ In this order, with the reason each one comes where it does.
     non-alert message → its window requests attention; disable it and repeat →
     it does not. Verify that the browser highlights the same characters and
     flashes its own surface and tab title (P17, P16).
+14. On Windows, with a DAW holding the same interface: start a session on eight
+    channels and let the DAW run through it — the transcripts appear and the
+    DAW is undisturbed. Then switch the capture route to ASIO on a driver that
+    is single-client and confirm the app says the interface is busy instead of
+    taking it (P18).
 
 There is deliberately no "restart and the session loads" step: with P10 set
 aside the chat lives in the window, and killing the app loses it by design.
@@ -1162,8 +1308,6 @@ aside the chat lives in the window, and killing the app loses it by design.
 - Export (TXT/SRT/JSON). With P10 set aside it would have to read the window's
   own messages.
 - Markers and bookmarks.
-- Windows port: only P1 needs reimplementing, provided the `AudioBackend` trait
-  is respected; plus the GPU backend choice in P4.
 - Speaker diarisation.
 - **Automatic language detection per segment, and the P3b stabiliser that went
   with it.** Whisper assigns one language per segment, so auto mode mangles

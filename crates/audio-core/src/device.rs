@@ -1,7 +1,9 @@
 //! Device discovery and the platform abstraction.
 //!
 //! Everything platform-specific sits behind [`AudioBackend`]. The Windows port
-//! (P1, later) implements this trait and nothing above it changes.
+//! (P18) implements this trait and nothing above it changes — including the
+//! several WASAPI endpoints it may have to open for one device, which stay
+//! behind a single [`CaptureSession`].
 
 use crate::capture::{CaptureStats, ChannelMap, SampleSink};
 use crate::Result;

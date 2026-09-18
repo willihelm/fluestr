@@ -39,8 +39,7 @@ fn catalogue() -> Vec<(String, String)> {
 
 #[cfg(not(target_os = "macos"))]
 fn catalogue() -> Vec<(String, String)> {
-    // Windows (P1, later): `IMMDevice::GetId` is the equivalent and belongs
-    // here. Until then every device falls back to its name, which is what the
+    // Windows (P18): `IMMDevice::GetId` is the equivalent and belongs here. Until then every device falls back to its name, which is what the
     // whole app did before this module existed.
     Vec::new()
 }
