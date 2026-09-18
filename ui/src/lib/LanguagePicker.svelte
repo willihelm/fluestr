@@ -22,9 +22,22 @@
     languages: Language[] | null;
     label: string;
     disabled?: boolean;
+    /// Called when the operator picks a language, with the code they picked.
+    ///
+    /// Beside `bind:value` rather than instead of it: the binding is how the
+    /// setup being edited follows the control, and this is for the caller that
+    /// also has to *do* something with the change — push it into a session
+    /// that is already running (P6). A caller that only edits omits it.
+    onpick?: (code: string) => void;
   }
 
-  let { value = $bindable(), languages, label, disabled = false }: Props = $props();
+  let {
+    value = $bindable(),
+    languages,
+    label,
+    disabled = false,
+    onpick,
+  }: Props = $props();
 
   // Alphabetical by name. Whisper's own order is roughly by training volume —
   // english, chinese, german, spanish — which puts the common ones first but
@@ -54,10 +67,16 @@
     aria-label={label}
     bind:value
     {disabled}
+    onchange={(e) => onpick?.(e.currentTarget.value)}
     title="ISO 639-1 code. The sidecar's language list is not available — build it with `cargo build -p whisper-worker`."
   />
 {:else}
-  <select aria-label={label} bind:value {disabled}>
+  <select
+    aria-label={label}
+    bind:value
+    {disabled}
+    onchange={(e) => onpick?.(e.currentTarget.value)}
+  >
     {#if unknown}
       <option value={value}>{value} — not in this build</option>
     {/if}

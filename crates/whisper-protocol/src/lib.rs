@@ -91,7 +91,11 @@ pub enum Response {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+// A file of its own, not `session.ts`: types sharing a file have to be
+// exported by one and the same test binary, and this one is derived in another
+// crate.
+#[ts(export, export_to = "language.ts")]
 pub struct Language {
     /// ISO 639-1, e.g. "de".
     pub code: String,

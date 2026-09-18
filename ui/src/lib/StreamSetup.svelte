@@ -7,8 +7,16 @@
   // Lives on the Settings page rather than above the chat, so the live view is
   // only the live view. It belongs to the profile selected above it and is
   // stored with it (P12) — an engineer does not remap eight channels before
-  // every show. Editing is locked while a session runs, because the channel
-  // map is fixed when capture opens.
+  // every show.
+  //
+  // Most of it is locked while a session runs, because the channel map is
+  // fixed when capture opens. Two fields are not: the label and the language
+  // go into the running session through `update_stream_config` (P6). They are
+  // the two that turn out to be wrong in the middle of a show — somebody else
+  // took the position over, the guest director speaks English — and the two
+  // that need no restart. The device channel and the colour stay locked: the
+  // first is the channel map, the second would repaint a chat whose old lines
+  // were read under the colour they were said in.
 
   import {
     newChannel,
@@ -32,6 +40,15 @@
     /// after it failed. Fetched once by the page above and handed down.
     languages: Language[] | null;
     locked: boolean;
+    /// Pushes a label or a language into the session that is already running,
+    /// or `null` when none is. Its presence is also what unlocks those two
+    /// fields: there is nothing live to change without it.
+    ///
+    /// The stream id is the row's position, which is how the backend assigns
+    /// it — see `SessionConfig::streams`. Safe here precisely because the rest
+    /// of the list is locked: no row can be added, removed or reordered under
+    /// a running session, so a position means the same thing on both sides.
+    live: ((streamId: number, update: { label?: string; language?: string }) => void) | null;
   }
 
   let {
@@ -40,6 +57,7 @@
     language = $bindable(),
     languages,
     locked,
+    live,
   }: Props = $props();
 
   let duplicates = $derived(duplicateChannels(channels));
@@ -126,13 +144,24 @@
           disabled={locked}
         />
 
-        <input type="text" aria-label="Label" bind:value={channel.label} disabled={locked} />
+        <!-- `onchange`, not `oninput`: a rename reaches the running session
+             when the operator has finished typing it, not once per keystroke
+             under a name that is half-entered. The binding keeps the stored
+             setup in step either way. -->
+        <input
+          type="text"
+          aria-label="Label"
+          bind:value={channel.label}
+          disabled={locked && live === null}
+          onchange={() => live?.(index, { label: channel.label })}
+        />
 
         <LanguagePicker
           bind:value={channel.language}
           {languages}
           label="Language of {channel.label}"
-          disabled={locked}
+          disabled={locked && live === null}
+          onpick={(code) => live?.(index, { language: code })}
         />
 
         <input type="color" aria-label="Colour" bind:value={channel.color} disabled={locked} />

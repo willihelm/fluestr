@@ -48,6 +48,7 @@
     setAlertTerms,
     startSession,
     stopSession,
+    updateStreamConfig,
     type DeviceOption,
     type ResourceUsage,
     type SessionState,
@@ -109,6 +110,7 @@
   // saving itself over a file it has not seen yet is how a setup is lost.
   let loaded = $state(false);
   let saveError = $state<string | null>(null);
+  let liveError = $state<string | null>(null);
   /// The group the chat is focused on; `null` is the all-channels view.
   let selectedGroup = $state<number | null>(null);
 
@@ -149,6 +151,25 @@
   const noteSession = (state: SessionState | { state: "starting" }) => {
     if (state.state !== "running") return;
     sessionStarts = new Map(sessionStarts).set(state.sessionId, state.startedAtMs);
+  };
+
+  /// Carries a channel's new label or language into the session that is
+  /// already running (P6).
+  ///
+  /// The edit itself has already happened in `profiles`, which is what gets
+  /// saved; this is the other half — the session, which the file cannot
+  /// describe because it is not the file. Without it a rename during a show
+  /// means Stop and Start, and Stop is the one thing an operator will not do
+  /// while the room is talking.
+  ///
+  /// Nothing is done with the state it answers with: the backend announces it
+  /// to every view, and this window adopts it through `onSessionState` like
+  /// any other — including the group windows and a browser on the LAN, which
+  /// get it the same way and at the same time.
+  const liveStream = (streamId: number, update: { label?: string; language?: string }) => {
+    updateStreamConfig({ streamId, ...update })
+      .then(() => (liveError = null))
+      .catch((e) => (liveError = String(e)));
   };
 
   let running = $derived(status.state === "running");
@@ -744,6 +765,8 @@
       {deviceChannels}
       locked={running || busy}
       {saveError}
+      {liveError}
+      live={running ? liveStream : null}
       {problem}
     />
   {:else}

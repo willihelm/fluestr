@@ -63,7 +63,7 @@ for now, with the reason recorded in the package.
 | P3 | VAD & segment scheduler | **Done** | — |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
-| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no `search_session` |
+| P6 | Tauri API | **Done** | `search_session` decided against — search is per view, see below |
 | P7 | Chat UI | **Partial** | The list is a window, not a jump to an arbitrary position |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Open** | Was specified on P10's FTS index, which is not coming — needs a decision on what it searches instead |
@@ -83,8 +83,9 @@ stream from the end of a spoken segment to the text appearing. The channel
 count is not capped: a channel the interface does not have is muted rather
 than refused, and what decides how many channels keep up is how many decodes
 run at once, which is an operator's to set on the Models page.
-Around it: a Settings page holding the device, the channel map, the global
-vocabulary, the global alert terms and the groups; a chat page with a group
+Around it: a Settings page holding the device, the channel map — whose labels
+and languages can be changed while the session runs, without stopping capture —
+the global vocabulary, the global alert terms and the groups; a chat page with a group
 sidebar that narrows the view and detaches any group — or everything — into a
 window of its own; profiles that come back at the next start, keyed on an
 interface the app recognises after a rename; a model manager that brings a
@@ -298,12 +299,13 @@ live audio on eight channels rather than synthetic segments. Until then the
 pool size, the backlog per worker and the timeouts are reasoned defaults, not measured
 ones.
 
-### P6 — Tauri API — **Partial**
+### P6 — Tauri API — **Done**
 
-Commands `list_devices`, `start_session`, `stop_session`, `load_config`,
-`save_config`, `clear_communication`, `session_snapshot`, `open_group_window`,
-`close_group_windows`; events `transcript`, `levels`, `overload`,
-`session-state`, `config-changed`, `remote-status`.
+Commands `list_devices`, `start_session`, `stop_session`,
+`update_stream_config`, `load_config`, `save_config`, `clear_communication`,
+`session_snapshot`, `open_group_window`, `close_group_windows`; events
+`transcript`, `levels`, `overload`, `session-state`, `config-changed`,
+`remote-status`.
 
 `start_session` takes a **list** of streams on one device, and the session
 builds one pipeline per channel — ring, resampler, speech detector, segmenter —
@@ -359,13 +361,53 @@ Rules that still bind:
   disk. It is what stops two windows disagreeing about what was said and about
   what "Clear all communication" cleared.
 
-**Outstanding:** shared types generated from the Rust structs (`ts-rs` or
-`specta`) instead of hand-written TypeScript; `update_stream_config` and
-`search_session`. With P10 set aside, `search_session` has only the in-memory
-chat to search, so whether it needs to be a backend command at all is an open
-question — `clear_communication` was the same question and came out the other
-way, because deletion has to happen once for every window rather than once per
-window.
+**The types are generated, not written twice.** Every struct that crosses the
+bridge derives `ts_rs::TS` where it is declared, and `cargo test` writes
+`ui/src/lib/generated/` — with the Rust doc comments carried along, so the
+reason a field exists stays next to the field. `bridge.ts` re-exports them and
+holds only what has no Rust side: the calls, and the two messages windows send
+each other. The constants that are not types — the schema version, the default
+port, the worker count — are generated too, by `crates/app/src/bindings.rs`,
+because a number copied by hand is a number that gets changed on one side only.
+The committed bindings are checked against the structs in CI; a field renamed
+in Rust is now a TypeScript error in the component that reads it rather than a
+value that arrives as `undefined` during a show.
+
+One thing the generation *changed*, rather than only restated: the bindings
+describe what the backend **sends**, and the backend fills every
+`#[serde(default)]` before it sends anything. So the fields the frontend used
+to treat as optional — a group's `flash`, a profile's `deviceId` — are not
+optional on the wire, and the tolerance for a file written by an older version
+lives in one place, in serde, where it is tested. The frontend's own fallbacks
+are now belt and braces, and the tests that build a short file say so in as
+many words.
+
+**`update_stream_config` changes a channel of a session that is already
+running**: its label, its language, or both. Those are the two things that turn
+out to be wrong in the middle of a show — somebody else took the position over,
+the guest director speaks English — and the two that need no restart. The label
+is read by the aggregator per transcript, so a rename lands on the next line;
+the language is sent to the processing thread, which owns the segmenters, so it
+lands on the next segment. Neither rewrites what is already in the chat: a line
+was said under the label it was said under. The device channel is *not* here —
+the channel map is fixed when capture opens, so a repatch is honestly a
+restart. The command answers with the running state and announces it, so the
+Settings page that asked, a detached group window and a browser on the LAN all
+take the new mapping from the one authority on it. It changes no configuration
+file: the session is what is being edited, and P12's file keeps its one writer.
+
+**`search_session` was decided against** (2026-09-18). Searching is something
+one operator does in one view — "did anyone mention the fly bar", "show me only
+what Licht said" — and it must not reach the other windows or the browsers on
+the LAN, which are other people looking at the same show. That makes it the
+opposite of `clear_communication`, which is a backend command precisely because
+a deletion has to happen once for every window rather than once per window. And
+with P10 set aside there is nothing to search that the view does not already
+hold: every window is caught up from `session_snapshot` and then fed by
+`transcript`, so the whole chat is in the page. A backend command would be a
+round trip to fetch a filtered copy of what is already in memory, and it would
+put one viewer's private filter on a shared surface. The search itself is P9,
+in the frontend.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
@@ -588,7 +630,8 @@ and the model choice are in `config.json` and were never P10's business.
 
 What it changes elsewhere: **P9** becomes a search over the in-memory messages;
 **Clear all communication** is only the in-memory half, which is now the whole
-action; **P6's `search_session`** may not need to exist; the whole-system
+action; **P6's `search_session`** was decided against, and search became a
+per-view filter over what the window already holds; the whole-system
 verification loses its "restart and the session loads" step; and export (out of
 scope) would have to read the window's own messages.
 

@@ -165,6 +165,21 @@ impl Segmenter {
         self.stream_id
     }
 
+    /// Puts this stream onto another language while it is running.
+    ///
+    /// The mode is read when a segment is *closed*, so a change lands on the
+    /// next segment to finish — including one that is being spoken right now.
+    /// That is the right end of the choice: somebody who switches language
+    /// mid-sentence is telling you about the sentence they are in the middle
+    /// of, not about the one after it.
+    ///
+    /// Nothing else about the segmenter changes. Speech detection does not
+    /// know what language it is listening to, so the boundaries this finds are
+    /// the same either way.
+    pub fn set_language_mode(&mut self, mode: LanguageMode) {
+        self.config.language_mode = mode;
+    }
+
     /// Segments emitted so far. Also the next sequence number.
     pub fn emitted(&self) -> u64 {
         self.seq
@@ -308,6 +323,7 @@ fn at(sample: u64) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lang::LanguageCode;
     use crate::vad::EnergyVad;
     use std::f32::consts::TAU;
 
@@ -500,6 +516,29 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("Standby"));
+    }
+
+    /// The language of a running stream can be changed without rebuilding
+    /// anything (P6). A guest who speaks English arrives on a channel that is
+    /// already open, and tearing down capture to say so is not an option.
+    #[test]
+    fn the_language_can_be_changed_while_the_stream_runs() {
+        let mut seg = segmenter(SegmenterConfig::default());
+        let mut signal = silence(0.3);
+        signal.extend(tone(1.0, 0.3));
+        signal.extend(silence(1.0));
+
+        let before = run(&mut seg, &signal);
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].language_mode.whisper_language(), Some("de"));
+
+        seg.set_language_mode(LanguageMode::Fixed {
+            language: LanguageCode::new("en"),
+        });
+
+        let after = run(&mut seg, &signal);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].language_mode.whisper_language(), Some("en"));
     }
 
     #[test]

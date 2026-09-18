@@ -37,7 +37,7 @@ setup:
 # --- Checks --------------------------------------------------------------
 
 # Everything CI runs as well
-check: fmt-check lint test check-ui test-ui
+check: fmt-check lint test types-check check-ui test-ui
 
 fmt:
     cargo fmt --all
@@ -50,6 +50,24 @@ lint:
 
 test:
     cargo test --workspace
+
+# --- Generated types (P6) ------------------------------------------------
+
+# Write the frontend's types from the Rust structs that cross the bridge.
+#
+# `cargo test` does this anyway — the export is a test, which is how ts-rs
+# works — so this exists to be *called by name* when only the types changed.
+types:
+    cargo test --workspace export_bindings
+
+# The committed bindings are what the current structs produce.
+#
+# They are committed so the frontend builds without a Rust toolchain, which
+# means they can also go stale — a field renamed in Rust and not regenerated
+# would leave TypeScript agreeing with a backend that no longer exists. This is
+# what stops that reaching a machine.
+types-check: types
+    git diff --exit-code -- ui/src/lib/generated
 
 check-ui:
     cd {{ui_dir}} && pnpm check

@@ -2,12 +2,21 @@
 //!
 //! Holds the capture session and the worker pool, and forwards their output to
 //! the UI as events, and owns the configuration file the Settings page is
-//! saved to (P12), and the model manager's downloads (P11). The rest of the
-//! command surface (`update_stream_config`, group CRUD, `search_session`) is
-//! still to come — what is here carries every configured channel of one
-//! multichannel device through the pipeline into the chat.
+//! saved to (P12), and the model manager's downloads (P11). What is here
+//! carries every configured channel of one multichannel device through the
+//! pipeline into the chat.
+//!
+//! Group and channel editing is not a command surface of its own: the
+//! configuration is one file with one writer, moved whole by `load_config` and
+//! `save_config` (P12). The one thing that is a command is changing a channel
+//! of a session that is *already running* — `update_stream_config`, which the
+//! file cannot express because the session is not the file.
 
 pub mod alerts;
+// Generation only, so it exists only where generation runs: the frontend's
+// types are written by `cargo test` (P6).
+#[cfg(test)]
+mod bindings;
 pub mod commands;
 pub mod config;
 pub mod history;

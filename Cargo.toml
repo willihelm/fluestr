@@ -27,6 +27,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Serialisation
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The frontend's types, generated from the structs that cross the bridge rather
+# than written a second time by hand (P6). A normal dependency and not a
+# dev-dependency: the derive sits on the wire types themselves, so gating it
+# behind a feature would mean the types the app ships and the types the
+# frontend is generated from are two different compilations of one file.
+#
+# Default features only — `serde-compat`, which is the whole point: `camelCase`,
+# `tag`/`content` and `#[serde(default)]` have to reach TypeScript exactly as
+# serde applies them on the wire, not as the Rust field names happen to read.
+ts-rs = "12"
 
 # Model downloads (P11)
 # rustls rather than the system TLS: the app has to be notarised and shipped to

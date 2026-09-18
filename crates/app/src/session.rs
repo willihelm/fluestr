@@ -93,8 +93,9 @@ const NO_SPEECH_THRESHOLD: f32 = 0.6;
 /// starts, so the UI cannot hand out two streams with the same id. The channel
 /// index is zero-based, like the audio API; the UI converts at its own
 /// boundary and nowhere else.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct StreamConfig {
     /// Channel index on the multichannel device.
     pub channel: u16,
@@ -104,14 +105,49 @@ pub struct StreamConfig {
     pub language: String,
 }
 
+/// A change to one channel of a session that is already running (P6).
+///
+/// Two of the four fields of a [`StreamConfig`] can change without the capture
+/// being touched, and they are the two that are wrong during a show: the label
+/// — somebody else took the position over — and the language — the guest
+/// director speaks English. Both were a Stop and a Start until this existed,
+/// and Stop is the one thing an operator will not do while the room is talking.
+///
+/// What is *not* here is the device channel. The channel map is fixed when the
+/// device opens: it pairs a ring with a channel inside the capture callback,
+/// and re-patching it live would mean tearing down the capture — which is Stop
+/// and Start with extra steps. A repatch stays a restart, honestly.
+///
+/// Both fields are optional, so a caller can change one without having to
+/// restate the other. Nothing given is not an error, it is a change of
+/// nothing.
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
+pub struct StreamUpdate {
+    /// Which stream — the id the backend assigned at start and every event
+    /// carries, not the position in whatever list the caller is looking at.
+    pub stream_id: u16,
+    // `optional = nullable`: leaving the field out and sending `null` both
+    // mean "do not change this one", and the bindings should say so rather
+    // than making every caller spell out the half it is not touching.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub label: Option<String>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub language: Option<String>,
+}
+
 /// What the UI sends to start a session.
 ///
 /// One device for all streams, which is the constraint the whole audio layer
 /// is built on: one multichannel interface, de-interleaved by the app. Two
 /// devices would mean two clocks drifting apart with no common timebase to
 /// order the chat by.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct SessionConfig {
     /// The stable id of the device, as `list_devices` returns it — not its
     /// name. The name is what a human reads and what a driver update may
@@ -155,8 +191,9 @@ pub struct SessionConfig {
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A finished transcript on its way to the chat view.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct TranscriptEvent {
     /// See [`NEXT_SESSION_ID`]: `seq` alone does not identify a segment.
     pub session_id: u64,
@@ -185,8 +222,9 @@ pub struct TranscriptEvent {
 }
 
 /// Level and health of one stream.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct StreamLevel {
     pub stream_id: u16,
     pub rms: f32,
@@ -202,8 +240,9 @@ pub struct StreamLevel {
 /// by side, so they should also be *sampled* side by side — over the same
 /// interval, arriving in the same frame. Eight independent events cost eight
 /// bridge crossings to show eight bars that are each a different age.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct LevelsEvent {
     pub streams: Vec<StreamLevel>,
 }
@@ -214,8 +253,9 @@ pub struct LevelsEvent {
 /// who spoke and saw no text has to be able to tell that from a channel that
 /// was not listening. Silent loss is explicitly forbidden, so this event is
 /// the other half of that policy.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct OverloadEvent {
     /// See [`NEXT_SESSION_ID`]: `seq` alone does not identify a segment.
     pub session_id: u64,
@@ -233,8 +273,9 @@ pub struct OverloadEvent {
 /// this is the authoritative answer to "which channel ended up under which
 /// label", and it is the only place the stream ids the events carry are
 /// defined.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct RunningStream {
     pub stream_id: u16,
     pub channel: u16,
@@ -259,7 +300,7 @@ fn now_ms() -> u64 {
 }
 
 /// Lifecycle of the session, as the UI needs to render it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 // `rename_all` covers the variant names, `rename_all_fields` their contents —
 // both are needed for the UI to read `state: "running"` and `sampleRate`.
 #[serde(
@@ -267,6 +308,7 @@ fn now_ms() -> u64 {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
+#[ts(export, export_to = "session.ts")]
 pub enum SessionState {
     Running {
         /// What the transcripts arriving from now on are tagged with.
@@ -325,7 +367,36 @@ pub struct Session {
     /// Shared with the processing thread, which submits into it.
     pool: Arc<WorkerPool>,
     pub sample_rate: u32,
+    /// The label each stream's transcripts go out under.
+    ///
+    /// Shared with the aggregator rather than handed to it, because a rename
+    /// has to reach the thread that is already running (see
+    /// [`Session::update_stream`]). Read once per transcript, which is a lock
+    /// next to a decode that took three hundred milliseconds.
+    labels: Labels,
+    /// Language changes on their way to the processing thread, which owns the
+    /// segmenters.
+    ///
+    /// A channel rather than shared state: the segmenter is not `Sync` and has
+    /// no business being locked on the pump path, and a change is a handful of
+    /// bytes a few times an evening.
+    languages: mpsc::Sender<(u16, String)>,
+    /// The running state exactly as it was announced.
+    ///
+    /// Kept so an update can re-announce it — same session id, same zero point,
+    /// one label different. Rebuilding it would mean inventing a new
+    /// `started_at_ms`, which every bubble's time of day is measured against.
+    running: std::sync::Mutex<SessionState>,
+    /// Where that re-announcement goes. The same sink the threads report
+    /// through, so an update reaches every view the way a start does.
+    events: Arc<dyn EventSink>,
 }
+
+/// The label each stream's transcripts are emitted under.
+///
+/// A map rather than a vector because it is keyed by stream id, and the ids of
+/// a session with muted channels are not a contiguous range of the pipelines.
+type Labels = Arc<std::sync::Mutex<HashMap<u16, String>>>;
 
 impl Session {
     /// Returns the running state alongside the session rather than only
@@ -540,18 +611,22 @@ impl Session {
             });
         }
 
-        let labels: HashMap<u16, String> = running
-            .iter()
-            .map(|s| (s.stream_id, s.label.clone()))
-            .collect();
+        let labels: Labels = Arc::new(std::sync::Mutex::new(
+            running
+                .iter()
+                .map(|s| (s.stream_id, s.label.clone()))
+                .collect(),
+        ));
 
         let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
         let stop = Arc::new(AtomicBool::new(false));
-        let aggregating = spawn_aggregator(session_id, results, labels, events.clone());
+        let (languages, language_rx) = mpsc::channel();
+        let aggregating = spawn_aggregator(session_id, results, labels.clone(), events.clone());
         let processing = spawn_processor(
             pipelines,
             pool.clone(),
             capture_event_rx,
+            language_rx,
             stop.clone(),
             events.clone(),
             info.name.clone(),
@@ -587,9 +662,73 @@ impl Session {
                 aggregating: Some(aggregating),
                 pool,
                 sample_rate: granted,
+                labels,
+                languages,
+                running: std::sync::Mutex::new(state.clone()),
+                events,
             },
             state,
         ))
+    }
+
+    /// Renames a running stream, or puts it onto another language (P6).
+    ///
+    /// Both take effect on the next segment: the label where the transcript is
+    /// built, the language where the segmenter hands one to the queue. Neither
+    /// rewrites what is already in the chat — a line was said under the label
+    /// it was said under, and a chat that renamed its own history would be
+    /// lying about a show that has already happened.
+    ///
+    /// Answers with the running state as it now stands, and announces it, so
+    /// every view — the Settings page that asked, a detached group window, a
+    /// browser on the LAN — learns the new mapping from the one authority on
+    /// it rather than from its own copy of the setup.
+    ///
+    /// A muted stream can be updated like any other. It has no pipeline, so
+    /// the language reaches nothing; the label still belongs to it, because a
+    /// muted channel keeps its id, its colour and its place in the groups.
+    ///
+    /// Changes no configuration file. The session is what is being edited
+    /// here; storing the change is the Settings page's business, on its own
+    /// debounce, and a second writer of that file is exactly what P12 avoids.
+    pub fn update_stream(&self, update: StreamUpdate) -> Result<SessionState> {
+        let mut running = self
+            .running
+            .lock()
+            .map_err(|_| anyhow::anyhow!("the session state is poisoned"))?;
+
+        let SessionState::Running { streams, .. } = &mut *running else {
+            // Only reachable if a caller kept a handle to a session that has
+            // already reported itself finished.
+            bail!("the session is not running");
+        };
+
+        let stream = streams
+            .iter_mut()
+            .find(|stream| stream.stream_id == update.stream_id)
+            .with_context(|| format!("no stream {} in this session", update.stream_id))?;
+
+        if let Some(label) = update.label {
+            stream.label.clone_from(&label);
+            self.labels
+                .lock()
+                .map_err(|_| anyhow::anyhow!("the stream labels are poisoned"))?
+                .insert(update.stream_id, label);
+        }
+
+        if let Some(language) = update.language {
+            // A closed channel means the processing thread has already left —
+            // the device was unplugged, or Stop is in flight. Not worth an
+            // error: the session is ending, and there is no segmenter left for
+            // the change to reach.
+            let _ = self.languages.send((update.stream_id, language));
+        }
+
+        let state = running.clone();
+        drop(running);
+
+        self.events.state(state.clone());
+        Ok(state)
     }
 
     /// Stops in the order the data flows, so nothing is left half-processed.
@@ -684,6 +823,9 @@ fn spawn_processor(
     mut pipelines: Vec<Pipeline>,
     pool: Arc<WorkerPool>,
     capture_events: mpsc::Receiver<CaptureEvent>,
+    // Language changes from `Session::update_stream`. Applied here because
+    // this thread owns the segmenters.
+    languages: mpsc::Receiver<(u16, String)>,
     stop: Arc<AtomicBool>,
     events: Arc<dyn EventSink>,
     // For the disconnect message, and only for that. The event itself carries
@@ -717,6 +859,24 @@ fn spawn_processor(
                             tracing::warn!(message, "capture error");
                         }
                     }
+                }
+
+                // Before the pump, so a change made between two wake-ups is
+                // in force for the audio this round is about to segment. A
+                // stream that is not here is a muted one: it has no pipeline,
+                // and its language reaches nothing — which is what being muted
+                // means.
+                for (stream_id, language) in languages.try_iter() {
+                    let Some(pipeline) = pipelines
+                        .iter_mut()
+                        .find(|p| p.segmenter.stream_id().0 == stream_id)
+                    else {
+                        continue;
+                    };
+                    tracing::info!(stream_id, language, "stream language changed");
+                    pipeline.segmenter.set_language_mode(LanguageMode::Fixed {
+                        language: LanguageCode::new(&language),
+                    });
                 }
 
                 let mut failed = None;
@@ -807,7 +967,7 @@ pub fn discard_reason(text: &str, no_speech_probability: f32) -> Option<&'static
 fn spawn_aggregator(
     session_id: u64,
     results: Receiver<PoolEvent>,
-    labels: HashMap<u16, String>,
+    labels: Labels,
     events: Arc<dyn EventSink>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
@@ -856,7 +1016,7 @@ fn spawn_aggregator(
 fn emit(
     session_id: u64,
     events: &Arc<dyn EventSink>,
-    labels: &HashMap<u16, String>,
+    labels: &Labels,
     completed: Completed,
     dropped: &mut HashMap<u16, u64>,
 ) {
@@ -910,12 +1070,18 @@ fn emit(
             events.transcript(TranscriptEvent {
                 session_id,
                 stream_id,
+                // Read per transcript rather than captured once, so a rename
+                // made mid-show (see [`Session::update_stream`]) is on the
+                // next line rather than on the next session.
+                //
                 // A result for a stream that was never configured cannot
                 // happen, and an empty label in the chat would be a puzzle
-                // rather than a clue — so it says which id it was.
+                // rather than a clue — so it says which id it was. An
+                // unreadable map is the same situation from the other side.
                 label: labels
-                    .get(&stream_id)
-                    .cloned()
+                    .lock()
+                    .ok()
+                    .and_then(|labels| labels.get(&stream_id).cloned())
                     .unwrap_or_else(|| format!("stream {stream_id}")),
                 seq,
                 t_start_ms: t_start.as_millis() as u64,
@@ -947,8 +1113,9 @@ fn emit(
 }
 
 /// Everything the device picker needs.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct DeviceOption {
     /// Stable across restarts, and what a profile stores. The UI shows
     /// `name` and sends this back.
@@ -1050,10 +1217,12 @@ mod tests {
         let recorder = Arc::new(Recorder::default());
         let sink: Arc<dyn EventSink> = recorder.clone();
         let (tx, rx) = mpsc::channel();
-        let labels = labels
-            .into_iter()
-            .map(|(id, label)| (id, label.to_string()))
-            .collect();
+        let labels: Labels = Arc::new(std::sync::Mutex::new(
+            labels
+                .into_iter()
+                .map(|(id, label)| (id, label.to_string()))
+                .collect(),
+        ));
         let handle = spawn_aggregator(session_id, rx, labels, sink);
         for event in events {
             tx.send(event).unwrap();
@@ -1061,6 +1230,51 @@ mod tests {
         drop(tx);
         handle.join().unwrap();
         recorder
+    }
+
+    /// A rename lands on the next line, not on the next session (P6).
+    ///
+    /// The aggregator holds the labels for the whole session, so the risk is
+    /// that it captures them once at start and a rename reaches nothing until
+    /// capture is stopped — which is the restart `update_stream_config` exists
+    /// to avoid.
+    #[test]
+    fn a_renamed_stream_is_renamed_from_the_next_transcript_on() {
+        let recorder = Arc::new(Recorder::default());
+        let sink: Arc<dyn EventSink> = recorder.clone();
+        let (tx, rx) = mpsc::channel();
+        let labels: Labels = Arc::new(std::sync::Mutex::new(HashMap::from([(
+            0,
+            "Regie".to_string(),
+        )])));
+        let handle = spawn_aggregator(1, rx, labels.clone(), sink);
+
+        tx.send(spoken(0, "vor der Umbenennung")).unwrap();
+        // Waited for, so the rename cannot race the line before it: the point
+        // of the test is which side of the change each line falls on.
+        while recorder.transcripts.lock().unwrap().is_empty() {
+            std::thread::yield_now();
+        }
+        labels.lock().unwrap().insert(0, "Inspizienz".to_string());
+        tx.send(spoken(0, "nach der Umbenennung")).unwrap();
+        drop(tx);
+        handle.join().unwrap();
+
+        let seen: Vec<(String, String)> = recorder
+            .transcripts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| (t.label.clone(), t.text.clone()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("Regie".to_string(), "vor der Umbenennung".to_string()),
+                ("Inspizienz".to_string(), "nach der Umbenennung".to_string()),
+            ],
+            "the line spoken before the rename keeps the label it was spoken under"
+        );
     }
 
     #[test]

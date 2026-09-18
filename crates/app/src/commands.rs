@@ -28,7 +28,7 @@ use crate::alerts::Matcher;
 use crate::config::Config;
 use crate::models;
 use crate::remote;
-use crate::session::{self, SessionConfig};
+use crate::session::{self, SessionConfig, SessionState, StreamUpdate};
 use crate::{AppState, EVENT_CLEARED, EVENT_CONFIG, EVENT_MODEL_PROGRESS};
 
 /// The model choice the Settings page is currently showing.
@@ -37,8 +37,9 @@ use crate::{AppState, EVENT_CLEARED, EVENT_CONFIG, EVENT_MODEL_PROGRESS};
 /// page saves through a debounce, so the file answers with what was selected a
 /// second ago, and the "in use" banner would contradict the radio button next
 /// to it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts", rename = "ModelSelection")]
 pub struct SelectionArg {
     pub model: Option<String>,
     pub vad_model: Option<String>,
@@ -97,6 +98,11 @@ pub enum Command {
         config: SessionConfig,
     },
     StopSession,
+    /// Renames a running channel, or puts it onto another language, without
+    /// stopping capture (P6).
+    UpdateStreamConfig {
+        update: StreamUpdate,
+    },
     /// The addresses the LAN remote could be served on (P16).
     ListInterfaces,
     /// Whether it is being served, and to how many browsers.
@@ -137,6 +143,7 @@ pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) -> Resul
             json(started)
         }
         Command::StopSession => json(stop_session(app)?),
+        Command::UpdateStreamConfig { update } => json(update_stream_config(app, update)?),
         Command::ListInterfaces => json(remote::interfaces()),
         Command::RemoteStatus => json(remote_status(app)?),
     }
@@ -455,6 +462,38 @@ fn stop_session<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
+/// Changes one channel of the session that is running.
+///
+/// A command rather than a restart, because the two things it can change —
+/// the label and the language — are the two an operator gets wrong while the
+/// room is already talking, and Stop is what they will not press to fix them.
+/// What it cannot change is the device channel: the channel map is fixed when
+/// capture opens, so a repatch is honestly a restart. See
+/// [`session::StreamUpdate`].
+///
+/// Answers with the running state and announces it, so the Settings page that
+/// asked, a detached group window and a browser on the LAN all take the new
+/// mapping from the backend rather than each from its own copy of the setup.
+///
+/// Refused when nothing is running: there is no stream to update, and
+/// silently succeeding would leave a page showing a change that took effect
+/// nowhere. The *stored* setup is edited on the Settings page like always —
+/// this is the live session, and the configuration file keeps its one writer.
+fn update_stream_config<R: Runtime>(
+    app: &AppHandle<R>,
+    update: StreamUpdate,
+) -> Result<SessionState, String> {
+    let state = state(app)?;
+    let session = state.session.lock().map_err(|_| "session state poisoned")?;
+    let session = session
+        .as_ref()
+        .ok_or_else(|| "no session is running".to_string())?;
+    session.update_stream(update).map_err(|err| {
+        tracing::error!(error = ?err, "updating a running stream failed");
+        err.to_string()
+    })
+}
+
 fn remote_status<R: Runtime>(app: &AppHandle<R>) -> Result<remote::Status, String> {
     Ok(state(app)?.remote.status())
 }
@@ -516,6 +555,28 @@ mod tests {
             Command::ListModels {
                 selection: Some(selection),
             } => assert_eq!(selection.model.as_deref(), Some("small-q5_1")),
+            other => panic!("read as {other:?}"),
+        }
+    }
+
+    /// The half of an update that is not being changed may be left out (P6).
+    ///
+    /// Both transports send this, and the browser one sends hand-written JSON
+    /// over a socket: a shape that insisted on `"language": null` to rename a
+    /// channel would be a rejected call there and a working one on the desktop.
+    #[test]
+    fn an_update_may_change_one_field_and_leave_the_other_alone() {
+        let call: Command = serde_json::from_str(
+            r#"{"command":"update_stream_config","args":{"update":{"streamId":2,"label":"Inspizienz"}}}"#,
+        )
+        .expect("an update carrying only a label");
+
+        match call {
+            Command::UpdateStreamConfig { update } => {
+                assert_eq!(update.stream_id, 2);
+                assert_eq!(update.label.as_deref(), Some("Inspizienz"));
+                assert_eq!(update.language, None, "nothing said is nothing changed");
+            }
             other => panic!("read as {other:?}"),
         }
     }

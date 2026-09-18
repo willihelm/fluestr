@@ -35,8 +35,9 @@ use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 /// whose strings are indexed in UTF-16 code units, and `"Bühne".slice(0, 2)`
 /// has to mean what the backend meant. Bytes would cut an umlaut in half on
 /// exactly the transcripts this app produces.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct AlertMatch {
     pub start: usize,
     pub end: usize,

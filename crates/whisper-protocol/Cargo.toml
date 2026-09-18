@@ -11,3 +11,7 @@ audio-core = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `Language` is answered straight through to the Settings page's picker, so it
+# is one of the types the frontend is generated from (P6). The derive is the
+# only thing this crate uses it for.
+ts-rs = { workspace = true }

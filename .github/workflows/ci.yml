@@ -53,6 +53,13 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
 
+      # After the Rust tests, which are what write them: `cargo test` regenerates
+      # the frontend's types (P6), so a diff here is a struct that changed in
+      # Rust without the committed bindings being regenerated — TypeScript
+      # agreeing with a backend that no longer exists.
+      - name: Generated types are current
+        run: git diff --exit-code -- ui/src/lib/generated
+
       - name: TypeScript and Svelte checks
         run: pnpm check
         working-directory: ui

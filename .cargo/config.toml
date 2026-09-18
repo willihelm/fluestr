@@ -1,0 +1,23 @@
+# Where the generated TypeScript lands (P6).
+#
+# ts-rs writes to `$TS_RS_EXPORT_DIR` and would otherwise put a `bindings/`
+# directory next to the crate that declared the types — which is Rust's side of
+# the tree, not the side that imports them. Setting it here rather than in the
+# `just` recipe means the files land in the same place whoever ran the test:
+# `cargo test`, a run from an editor, or CI.
+#
+# `relative = true` resolves it against this file's directory, so it is the
+# repository root regardless of where cargo was invoked from.
+[env]
+TS_RS_EXPORT_DIR = { value = "ui/src/lib/generated", relative = true }
+# `number`, not the `bigint` ts-rs defaults to for 64-bit integers.
+#
+# What matters is what actually crosses the bridge, and that is JSON: serde
+# writes a `u64` as a bare number and `JSON.parse` reads every bare number as a
+# `number`. Bindings that promised `bigint` would be describing a value the
+# frontend never receives — every arithmetic on a timestamp would be a type
+# error against a value that is not of that type anyway.
+#
+# Safe for everything here: the 64-bit fields are epoch milliseconds, session
+# clocks, sequence numbers and byte counters, all far inside 2^53.
+TS_RS_LARGE_INT = "number"

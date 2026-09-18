@@ -33,8 +33,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 pub const INTERVAL: Duration = Duration::from_secs(1);
 
 /// One sample of what the app and its workers are using.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "resources.ts", rename = "ResourceUsage")]
 pub struct Usage {
     /// Share of the whole machine, in percent: 100 is every core busy. Summed
     /// over the app and its sidecars and divided by the core count — see the

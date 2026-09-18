@@ -39,6 +39,7 @@ axum = { workspace = true }
 tokio = { workspace = true }
 if-addrs = { workspace = true }
 unicode-normalization = { workspace = true }
+ts-rs = { workspace = true }
 
 [dev-dependencies]
 hound = { workspace = true }

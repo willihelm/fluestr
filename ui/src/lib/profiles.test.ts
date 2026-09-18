@@ -25,6 +25,17 @@ import { restoreChannel, DEFAULT_LANGUAGE } from "./streams";
 import { restoreGroup } from "./groups";
 import type { DeviceOption, StoredProfile } from "./bridge";
 
+/// A file as an **older version wrote it**: the fields that version did not
+/// have are simply missing.
+///
+/// A cast is needed because the types are generated from the Rust structs now
+/// (P6), and those describe what the backend *sends* — which is always
+/// complete, because `#[serde(default)]` fills every gap before the file
+/// reaches the bridge. That is precisely why a short file has to be built by
+/// hand to be tested at all. One helper, so that the deliberate incompleteness
+/// is stated once rather than smuggled into ten fixtures.
+const anOldFile = <T>(written: unknown): T => written as T;
+
 /// Two channels and a group holding the second of them, built the way the
 /// Settings page builds one — with keys, not positions.
 const aProfile = (): Profile => {
@@ -91,7 +102,10 @@ describe("fromStored", () => {
 
   it("drops a member position past the end of the channel list", () => {
     // A hand-edited file costs a group its member, not the operator the setup.
-    const broken = { ...stored, groups: [{ name: "Bühne", members: [1, 9, -1] }] };
+    const broken = anOldFile<StoredProfile>({
+      ...stored,
+      groups: [{ name: "Bühne", members: [1, 9, -1] }],
+    });
     const profile = fromStored(broken);
 
     expect(profile.groups[0].members).toEqual([profile.channels[1].key]);
@@ -283,12 +297,14 @@ describe("the configuration as a whole", () => {
   });
 
   it("comes back on the profile that was in use", () => {
-    const restored = fromStoredConfig({
-      version: 1,
-      active: 1,
-      vocabulary: "Standby.",
-      profiles: [stored, { ...stored, name: "Probebühne" }],
-    });
+    const restored = fromStoredConfig(
+      anOldFile<StoredConfig>({
+        version: 1,
+        active: 1,
+        vocabulary: "Standby.",
+        profiles: [stored, { ...stored, name: "Probebühne" }],
+      }),
+    );
 
     expect(restored.profiles[1].key).toBe(restored.activeKey);
     expect(restored.profiles[1].name).toBe("Probebühne");
@@ -297,8 +313,12 @@ describe("the configuration as a whole", () => {
   it("tells a vocabulary that was never set apart from one that was cleared", () => {
     // `null` keeps the default; an empty string is an operator who turned the
     // prompt off, and refilling it would turn it back on behind their back.
-    const never = fromStoredConfig({ version: 1, active: 0, vocabulary: null, profiles: [] });
-    const cleared = fromStoredConfig({ version: 1, active: 0, vocabulary: "", profiles: [] });
+    const never = fromStoredConfig(
+      anOldFile<StoredConfig>({ version: 1, active: 0, vocabulary: null, profiles: [] }),
+    );
+    const cleared = fromStoredConfig(
+      anOldFile<StoredConfig>({ version: 1, active: 0, vocabulary: "", profiles: [] }),
+    );
 
     expect(never.vocabulary).toBeNull();
     expect(cleared.vocabulary).toBe("");
@@ -308,12 +328,14 @@ describe("the configuration as a whole", () => {
     // P11 added three fields to the file. An operator upgrading has one
     // without them, and losing their profiles to a schema addition would be
     // the worst possible trade for a model picker.
-    const restored = fromStoredConfig({
-      version: 1,
-      active: 0,
-      vocabulary: "Standby.",
-      profiles: [stored],
-    });
+    const restored = fromStoredConfig(
+      anOldFile<StoredConfig>({
+        version: 1,
+        active: 0,
+        vocabulary: "Standby.",
+        profiles: [stored],
+      }),
+    );
 
     expect(restored.profiles).toHaveLength(1);
     // "Never chose", which resolves to the recommended model — not
@@ -332,12 +354,14 @@ describe("the configuration as a whole", () => {
     // afterwards, which whisper cannot be given.
     const { language: _, ...withoutLanguage } = stored;
 
-    const restored = fromStoredConfig({
-      version: 1,
-      active: 0,
-      vocabulary: "Standby.",
-      profiles: [withoutLanguage],
-    });
+    const restored = fromStoredConfig(
+      anOldFile<StoredConfig>({
+        version: 1,
+        active: 0,
+        vocabulary: "Standby.",
+        profiles: [withoutLanguage],
+      }),
+    );
 
     expect(restored.profiles[0].language).toBe(DEFAULT_LANGUAGE);
   });
@@ -380,7 +404,9 @@ describe("the configuration as a whole", () => {
 
   it("has no active profile when there are none at all", () => {
     // The first start, before the UI creates one.
-    const empty = fromStoredConfig({ version: 1, active: 0, vocabulary: null, profiles: [] });
+    const empty = fromStoredConfig(
+      anOldFile<StoredConfig>({ version: 1, active: 0, vocabulary: null, profiles: [] }),
+    );
 
     expect(empty.profiles).toEqual([]);
     expect(empty.activeKey).toBeNull();
@@ -412,9 +438,11 @@ describe("alert terms and flashing", () => {
   });
 
   it("opens the windows of a file written before that setting like any other", () => {
-    expect(fromStored({ ...stored, groups: [{ name: "Bühne", members: [1] }] }).groups[0].onTop).toBe(
-      false,
-    );
+    expect(
+      fromStored(
+        anOldFile<StoredProfile>({ ...stored, groups: [{ name: "Bühne", members: [1] }] }),
+      ).groups[0].onTop,
+    ).toBe(false);
   });
 
   it("stores the alert list without the editor's empty row", () => {
@@ -424,12 +452,14 @@ describe("alert terms and flashing", () => {
   });
 
   it("reads a file from before the alert list as an empty one", () => {
-    const { alerts } = fromStoredConfig({
-      version: 1,
-      active: 0,
-      vocabulary: null,
-      profiles: [stored],
-    });
+    const { alerts } = fromStoredConfig(
+      anOldFile<StoredConfig>({
+        version: 1,
+        active: 0,
+        vocabulary: null,
+        profiles: [stored],
+      }),
+    );
 
     expect(alerts).toEqual([]);
   });
@@ -442,14 +472,16 @@ describe("alert terms and flashing", () => {
 // whether the detached group windows close.
 describe("reuseKeys", () => {
   const profileWith = (name: string, groups: string[]): Profile => ({
-    ...fromStored({
-      name,
-      device: "Scarlett",
-      deviceId: "uid",
-      language: "de",
-      channels: [{ channel: 0, label: "Regie", language: "de", color: "#fff" }],
-      groups: groups.map((g) => ({ name: g, members: [0] })),
-    }),
+    ...fromStored(
+      anOldFile<StoredProfile>({
+        name,
+        device: "Scarlett",
+        deviceId: "uid",
+        language: "de",
+        channels: [{ channel: 0, label: "Regie", language: "de", color: "#fff" }],
+        groups: groups.map((g) => ({ name: g, members: [0] })),
+      }),
+    ),
   });
 
   it("keeps the keys of the channels too, and the membership that names them", () => {

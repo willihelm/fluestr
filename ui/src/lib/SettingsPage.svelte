@@ -94,6 +94,14 @@
     deviceChannels: number;
     locked: boolean;
     saveError: string | null;
+    /// Why a change to the running session was refused, or `null`. Its own
+    /// strip and not `saveError`: "Settings not saved" would be wrong twice
+    /// over — the file was written, and what failed was the live session.
+    liveError: string | null;
+    /// Pushes a channel's label or language into the running session (P6), or
+    /// `null` when none is running. Handed down to the channel list, which is
+    /// where those two fields are. See `StreamSetup`.
+    live: ((streamId: number, update: { label?: string; language?: string }) => void) | null;
     /// Why the session would refuse to start, or `null` — the same string the
     /// status bar shows. Every one of them is about the device or the channel
     /// map, which is what marks the Audio section rather than the page.
@@ -111,6 +119,8 @@
     deviceChannels,
     locked,
     saveError,
+    liveError,
+    live,
     problem,
   }: Props = $props();
 
@@ -240,6 +250,13 @@
     <p class="failed">Settings not saved: {saveError}</p>
   {/if}
 
+  {#if liveError}
+    <!-- The setup is stored either way; what did not happen is the change
+         reaching the session that is running, which is the half an operator
+         mid-show is actually asking about. -->
+    <p class="failed">The running session was not changed: {liveError}</p>
+  {/if}
+
   <div class="body">
     <nav class="rail" aria-label="Settings sections">
       {#each rail as group (group.scope)}
@@ -314,6 +331,7 @@
             {languages}
             {deviceChannels}
             {locked}
+            {live}
           />
         </div>
 

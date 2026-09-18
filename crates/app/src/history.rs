@@ -35,8 +35,9 @@ pub const CAPACITY: usize = 10_000;
 /// Kept per session rather than as one value: Start is non-destructive, so the
 /// chat holds lines from every session that has run since it was last cleared,
 /// and each of them needs its own zero point to be shown as a time of day.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct SessionStart {
     pub session_id: u64,
     pub started_at_ms: u64,
@@ -48,8 +49,9 @@ pub struct SessionStart {
 /// the three answers are only useful together. Transcripts without their
 /// sessions' zero points cannot be timed, and without the session state the
 /// window cannot say whether what it is showing is still running.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "session.ts")]
 pub struct Snapshot {
     pub transcripts: Vec<TranscriptEvent>,
     pub sessions: Vec<SessionStart>,

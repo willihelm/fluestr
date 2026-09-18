@@ -83,8 +83,9 @@ const FRAME_PREFIX: &str = r#"{"type":"event","event":""#;
 /// page. There is deliberately no separate "enable the remote" command: the
 /// configuration has one writer, and a second mutation path is how the file
 /// and the listener come to disagree about whether the app is serving.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts", rename = "StoredRemote")]
 pub struct RemoteConfig {
     /// Off by default, and the operator turns it on for the evening. With no
     /// authentication in front of it, "not listening" is the safe state and
@@ -122,8 +123,9 @@ impl Default for RemoteConfig {
 /// legitimately disagree: a port that is already taken, or an address that
 /// belongs to an interface which has since gone away, leaves the setting on
 /// and the listener down. That is exactly the state that has to be visible.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "remote.ts", rename = "RemoteStatus")]
 pub struct Status {
     pub running: bool,
     /// What to type into the other machine's browser. `None` while nothing is
@@ -138,8 +140,9 @@ pub struct Status {
 }
 
 /// One address this machine can be reached on, for the picker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "remote.ts")]
 pub struct Interface {
     /// The operating system's name for it — `en0`, `en7`. Shown because a
     /// machine on two networks has two plausible addresses and this is what

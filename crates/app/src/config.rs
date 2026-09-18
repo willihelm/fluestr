@@ -50,8 +50,9 @@ pub const FILE_NAME: &str = "config.json";
 /// while the window is open; it identifies a row to Svelte and would be noise
 /// in a file a human may have to read. Group membership is stored as positions
 /// instead — see [`StoredGroup::members`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts")]
 pub struct StoredChannel {
     /// Zero-based channel index on the multichannel device, as the audio API
     /// counts them. The UI shows it one-based and converts at its own
@@ -67,8 +68,9 @@ pub struct StoredChannel {
 }
 
 /// A named view onto some of the channels.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts")]
 pub struct StoredGroup {
     pub name: String,
     /// Positions in [`Profile::channels`], not the UI's channel keys and not
@@ -116,8 +118,9 @@ pub struct StoredGroup {
 }
 
 /// One production's setup: which interface, which channels, which views.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts", rename = "StoredProfile")]
 pub struct Profile {
     /// Free-form and shown in the switcher: "Oper grosses Haus", "Probebühne".
     pub name: String,
@@ -172,8 +175,9 @@ fn default_language() -> String {
 }
 
 /// The whole configuration file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts", rename = "StoredConfig")]
 pub struct Config {
     /// See [`VERSION`]. Present so a later schema change has something to
     /// branch on instead of guessing from the shape of the data.

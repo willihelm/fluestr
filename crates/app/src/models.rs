@@ -43,8 +43,9 @@ use std::sync::Arc;
 /// The two are not interchangeable and live in the same directory with the
 /// same extension, so the distinction is carried explicitly rather than
 /// guessed from the file name the way [`crate::worker`] has to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts")]
 pub enum ModelKind {
     /// Transcribes. Handed to whisper.cpp as `--model`.
     Speech,
@@ -190,8 +191,9 @@ pub struct Resolved {
     pub source: Source,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts", rename = "ModelSource")]
 pub enum Source {
     /// Downloaded by the model manager into the app's own directory.
     Managed,
@@ -325,8 +327,9 @@ fn resolve_vad(dir: &Path, selection: &Selection) -> Option<PathBuf> {
 
 /// How far a download has got. One of these goes to the UI per chunk, throttled
 /// by the caller.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts", rename = "ModelProgress")]
 pub struct Progress {
     pub id: String,
     /// Bytes on disk, resumed ones included — so a continued download picks up
@@ -338,8 +341,9 @@ pub struct Progress {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts", rename = "DownloadStage")]
 pub enum Stage {
     Downloading,
     /// Hashing 600 MB is not instant, and a progress bar that sits at 100 %
@@ -555,8 +559,9 @@ pub fn remove(dir: &Path, id: &str) -> Result<()> {
 }
 
 /// One catalogue entry as the Settings page sees it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts")]
 pub struct ModelStatus {
     pub id: String,
     pub kind: ModelKind,
@@ -571,8 +576,9 @@ pub struct ModelStatus {
 }
 
 /// The whole picker's state in one answer.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts")]
 pub struct ModelsView {
     /// Shown on the page: an operator who has to put a file there by hand
     /// cannot be expected to know where macOS hides it.
