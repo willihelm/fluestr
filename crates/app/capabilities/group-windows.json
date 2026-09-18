@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "group-windows",
+  "description": "What a detached group window (P7) needs beyond the default capability: to rename itself, and to put itself in front of other windows. The backend titles the window when it opens it, but a group renamed on the Settings page afterwards reaches the window as a configuration event, and the title is the only thing that tells four of these windows apart in the Dock. Its own file rather than a line in the default one, so that widening what a group window may do never silently widens the main window too.",
+  "windows": ["group-*"],
+  "permissions": ["core:window:allow-set-title", "core:window:allow-set-always-on-top"]
+}

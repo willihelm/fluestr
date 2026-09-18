@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import ChatList from "./lib/ChatList.svelte";
   import StreamMeters from "./lib/StreamMeters.svelte";
   import SettingsPage from "./lib/SettingsPage.svelte";
@@ -18,10 +19,15 @@
   } from "./lib/profiles";
   import { DEFAULT_VOCABULARY, toConfig as vocabularyConfig } from "./lib/vocabulary";
   import { cleanTerms, sameTerms } from "./lib/alerts";
-  import { toBubbles } from "./lib/bubbles";
+  import { mergeHistory, toBubbles } from "./lib/bubbles";
+  import { attentionFor } from "./lib/attention";
   import {
+    clearCommunication as clearOnBackend,
+    closeGroupWindows,
     listDevices,
     loadConfig,
+    onCleared,
+    onGroupOnTop,
     onLevels,
     onOverload,
     onResources,
@@ -29,6 +35,7 @@
     onTranscript,
     requestAttention,
     saveConfig,
+    sessionSnapshot,
     setAlertTerms,
     startSession,
     stopSession,
@@ -219,9 +226,38 @@
       alerts = restored.alerts;
 
       loaded = true;
+
+      // What the backend already holds. Normally nothing — this window is the
+      // one that has been here all along — but a reloaded WebView comes back
+      // to the chat it was showing instead of to an empty one, and it is the
+      // same catch-up a group window opens with, from the same place.
+      const snapshot = await sessionSnapshot();
+      messages = mergeHistory(snapshot.transcripts, messages);
+      sessionStarts = new Map([
+        ...snapshot.sessions.map((s): [number, number] => [s.sessionId, s.startedAtMs]),
+        ...sessionStarts,
+      ]);
+      if (status.state === "idle" && snapshot.state) status = snapshot.state;
     };
 
     first().catch((e) => (status = { state: "failed", message: String(e) }));
+  });
+
+  // A group window is a view onto a group of the profile that is running, and
+  // the stream ids its transcripts carry are positions in *that* profile's
+  // channel list. Carried over to another production it would be filtering the
+  // right numbers against the wrong channels, so switching profiles closes the
+  // windows — a setup action, not something done during a show.
+  let showing: number | null = null;
+  $effect(() => {
+    const key = activeKey;
+    if (!loaded) return;
+    untrack(() => {
+      const previous = showing;
+      showing = key;
+      if (previous === null || previous === key) return;
+      closeGroupWindows().catch((e) => console.warn("a group window stayed open:", e));
+    });
   });
 
   // Saving is a consequence of the state changing, not of any particular
@@ -307,6 +343,21 @@
       onResources((event) => {
         usage = event;
       }),
+      // Emptied here or in a group window — the backend holds the copy they
+      // are all caught up from, so the deletion happens there and every window
+      // hears about it the same way, including the one that asked.
+      onCleared(clearLocally),
+      // A group window pinning or unpinning itself. It has already placed
+      // itself; what it is asking for is that the next window it opens as
+      // comes up the same way. Stored here because the configuration has one
+      // writer — see `requestGroupOnTop` — and it is saved by the same
+      // debounce as everything else on this page.
+      onGroupOnTop(({ group, onTop }) => {
+        if (!active) return;
+        const target = active.groups[group];
+        if (!target || target.onTop === onTop) return;
+        target.onTop = onTop;
+      }),
       onSessionState((event) => {
         status = event;
         noteSession(event);
@@ -355,20 +406,16 @@
   /// window is: an operator already looking at the chat is not asked to look
   /// at it. And never a sound — this is a room that is already full of speech.
   const attend = (event: TranscriptEvent) => {
-    const bubble = bubbles[bubbles.length - 1];
-    if (!bubble) return;
-
-    // The first alert in this bubble: every range it holds is one this event
-    // brought.
-    const urgent = event.alerts.length > 0 && bubble.alerts.length === event.alerts.length;
-    const flashing =
-      bubble.parts === 1 &&
-      group?.flash === true &&
-      visible !== null &&
-      visible.has(event.streamId);
-
-    if (!urgent && !flashing) return;
-    requestAttention(urgent).catch((e) => console.warn("no attention request:", e));
+    const asking = attentionFor(event, bubbles[bubbles.length - 1], {
+      // Every stream: this is the view of the whole session, and a word that
+      // must not be missed must not be missed because of what is on screen.
+      alerts: null,
+      // The flash follows the view instead, and the all-channels view has no
+      // group setting to follow.
+      flash: group?.flash === true ? visible : null,
+    });
+    if (!asking) return;
+    requestAttention(asking.urgent).catch((e) => console.warn("no attention request:", e));
   };
 
   // One global Start for every configured channel — there is deliberately no
@@ -417,7 +464,17 @@
   // This used to be half the action, with P10 deleting the stored transcripts
   // and the FTS index. P10 was set aside on 2026-09-18 — the chat lives in the
   // window — so this is the whole of it.
+  //
+  // It is a backend command rather than an assignment here, because the chat no
+  // longer lives in one window: the backend holds the copy every view is caught
+  // up from, and a window that only emptied itself would leave an open group
+  // window showing what this one was just told is gone. The local half happens
+  // on the event that comes back.
   const clearCommunication = () => {
+    clearOnBackend().catch((e) => console.warn("the chat was not cleared:", e));
+  };
+
+  const clearLocally = () => {
     messages = [];
     // The zero points are only there to time the lines that were just thrown
     // away — except the running session's, which the lines arriving from now

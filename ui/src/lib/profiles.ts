@@ -96,6 +96,7 @@ export const toStored = (profile: Profile): StoredProfile => {
     groups: profile.groups.map((g) => ({
       name: g.name,
       flash: g.flash,
+      onTop: g.onTop,
       // `flatMap` rather than a filter: a key with no position is a channel
       // that is no longer there, and dropping it is what `forgetChannels`
       // already does live.
@@ -135,6 +136,9 @@ export const fromStored = (stored: StoredProfile): Profile => {
         // A file written before flashing existed has no such field, and its
         // groups start quiet.
         g.flash ?? false,
+        // The same for the window setting: a file that predates it opens its
+        // group windows like any other window.
+        g.onTop ?? false,
       ),
     ),
   };

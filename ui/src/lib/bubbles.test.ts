@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CHARS, MAX_GAP_MS, MAX_SPAN_MS, toBubbles } from "./bubbles";
+import { MAX_CHARS, MAX_GAP_MS, MAX_SPAN_MS, mergeHistory, toBubbles } from "./bubbles";
 import type { TranscriptEvent } from "./bridge";
 
 // A transcript event with only the fields that decide grouping spelled out.
@@ -177,5 +177,34 @@ describe("alert ranges through the merge", () => {
 
   it("leaves a bubble without matches without ranges", () => {
     expect(toBubbles([event({ tStartMs: 0 })])[0].alerts).toEqual([]);
+  });
+});
+
+// A window opening onto a chat that is already running (P7): the backend's
+// history, and whatever arrived while it was being asked for.
+describe("mergeHistory", () => {
+  it("puts the history in front of what arrived live", () => {
+    const history = [event({ tStartMs: 0, text: "eins" })];
+    const live = [event({ tStartMs: 10_000, text: "zwei" })];
+    expect(mergeHistory(history, live).map((e) => e.text)).toEqual(["eins", "zwei"]);
+  });
+
+  // The window subscribes before it asks, so a segment can be in both answers
+  // — and two bubbles with one key throws and stops the list rendering.
+  it("drops a segment the window already saw arrive", () => {
+    const both = event({ tStartMs: 0, text: "eins" });
+    expect(mergeHistory([both], [both])).toEqual([both]);
+  });
+
+  // `seq` repeats across sessions, so identity is all three parts of it.
+  it("keeps two segments that share a sequence number across sessions", () => {
+    const first = { ...event({ tStartMs: 0 }), sessionId: 1, streamId: 0, seq: 4 };
+    const second = { ...event({ tStartMs: 0 }), sessionId: 2, streamId: 0, seq: 4 };
+    expect(mergeHistory([first], [second])).toEqual([first, second]);
+  });
+
+  it("is the history alone when nothing arrived in between", () => {
+    const history = [event({ tStartMs: 0 })];
+    expect(mergeHistory(history, [])).toEqual(history);
   });
 });

@@ -54,7 +54,16 @@ export interface Bubble {
   parts: number;
 }
 
-const keyOf = (e: TranscriptEvent) => `${e.sessionId}-${e.streamId}-${e.seq}`;
+/// What identifies one segment.
+///
+/// All three parts: `seq` starts again at zero with every session and is only
+/// unique per stream, so `(streamId, seq)` repeats as soon as a second session
+/// runs — and Start is non-destructive, so the chat holds lines from several of
+/// them at once.
+export const segmentKey = (e: TranscriptEvent) =>
+  `${e.sessionId}-${e.streamId}-${e.seq}`;
+
+const keyOf = segmentKey;
 
 /// A segment's alert ranges, placed where its text lands in the bubble.
 ///
@@ -140,4 +149,24 @@ export const toBubbles = (messages: TranscriptEvent[]): Bubble[] => {
   }
 
   return bubbles;
+};
+
+/// The chat a window opens with: what the backend had, plus whatever arrived
+/// while it was being asked for.
+///
+/// A window subscribes to the live events *before* it asks for the history,
+/// because the other order drops whatever is said in between — and the gap is
+/// exactly one round trip, at the moment a group window is opened because
+/// something is happening. The cost of subscribing first is that a segment can
+/// be in both answers, and a duplicate is not a cosmetic problem here: two
+/// bubbles with one key throws and stops the list rendering entirely.
+///
+/// What arrived live wins its position, so the order stays the order the window
+/// saw.
+export const mergeHistory = (
+  history: TranscriptEvent[],
+  live: TranscriptEvent[],
+): TranscriptEvent[] => {
+  const seen = new Set(live.map(segmentKey));
+  return [...history.filter((e) => !seen.has(segmentKey(e))), ...live];
 };

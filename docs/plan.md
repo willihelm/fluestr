@@ -64,7 +64,7 @@ for now, with the reason recorded in the package.
 | P3b | Language stabiliser | **Deferred** | Set aside on 2026-09-18: with a fixed language per stream the language is already stable |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
-| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no `clear_communication` in the backend, no `search_session` |
+| P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no `search_session` |
 | P7 | Chat UI | **Partial** | The window is a window, not a jump to an arbitrary position |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Open** | Was specified on P10's FTS index, which is not coming — needs a decision on what it searches instead |
@@ -75,7 +75,7 @@ for now, with the reason recorded in the package.
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
 | P16 | Read-only LAN viewer | **Open** | — |
-| P17 | Alert terms & visual attention | **Partial** | The only view is the main chat: there are no detached group windows (P7) and no LAN viewer (P16) to highlight in |
+| P17 | Alert terms & visual attention | **Partial** | The main chat and the detached group windows; the LAN viewer (P16) is still missing |
 
 **What runs today:** up to eight channels of one multichannel device end to
 end — microphone, one ring buffer and segmenter per channel, Silero speech
@@ -84,7 +84,8 @@ detection, the shared worker pool, one colour-coded chat — at a measured
 Around it: a Settings page holding the device, the channel map, the one global
 vocabulary, the global alert terms and the groups; a channel map that may reach past the device, whose
 surplus channels start muted instead of blocking Start; a chat page with a
-group sidebar that narrows the view to a group's channels; consecutive segments merged into one bubble per
+group sidebar that narrows the view to a group's channels and opens any of them in a
+window of its own; consecutive segments merged into one bubble per
 utterance, with the alert terms marked where they were said and an unfocused
 window asking once per bubble to be looked at; Clear all communication as the only action that empties the
 chat; all of that setup stored as named profiles that come back at the next
@@ -487,15 +488,27 @@ on which half is authoritative. So groups, the channel map and the profiles
 around them need no commands of their own: they are edited in the UI and
 stored with everything else. See P12.
 
+`open_group_window(group, name)` opens a group in a second Tauri WebView backed
+by the same session state — not a second capture or worker pool. Beside it,
+`session_snapshot` hands a window that has just opened the chat as it stands,
+`clear_communication` empties it for every window at once, and
+`close_group_windows` retires the group windows when the active profile
+changes. Those three exist because the chat is no longer read in one place:
+`app::history` keeps what the bridge has emitted — the last 10 000 transcripts
+and the sessions' zero points — as the one copy every view is caught up from.
+That is not persistence and reaches no disk; it is what stops two windows
+disagreeing about what was said and about what "Clear all communication"
+cleared. `save_config` now also announces itself as a `config-changed` event,
+which is how a group renamed or refilled on the Settings page reaches the
+window showing it.
+
 **Outstanding:** shared types generated from the Rust structs (`ts-rs` or
-`specta`) instead of hand-written TypeScript; `update_stream_config`,
-`clear_communication` (atomic deletion of transcript data only), and
-`search_session`; and `open_group_window(group_id)`. A group window is a second
-Tauri WebView backed by the same session state, not a second capture or worker
-pool. With P10 set aside, `clear_communication` has only the in-memory chat to clear,
-which makes it a frontend action — whether it needs to be a backend command at
-all is now an open question rather than a settled one, and the same goes for
-`search_session`.
+`specta`) instead of hand-written TypeScript; `update_stream_config` and
+`search_session`. With P10 set aside, `search_session` has only the in-memory
+chat to search, so whether it needs to be a backend command at all is an open
+question — `clear_communication` was the same question and came out the other
+way, because deletion has to happen once for every window rather than once per
+window.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
@@ -618,6 +631,24 @@ transcribed. It is separate from Alerts: an enabled group flashes for every new
 message from one of its members, whether or not that message contains an alert
 term.
 
+A group's detached window (P7) can be **pinned in front of other windows**, and
+that is asked of the window itself — a pin in its own header, not a checkbox on
+the Settings page. During a show the question is "keep this one where I can see
+it", and it is asked of the window in front of the operator. It is remembered
+per group all the same, so the next window that group opens is born in front
+rather than jumping there a moment later. Per group rather than a property of
+every group window, because a window that is always in front is a window
+covering something: the stage manager's view is worth that, the general
+talkback is not. Off by default.
+
+The window applies it to itself the moment it is clicked and asks the main
+window to store it, because **the configuration has exactly one writer**. The
+main window holds it and saves it whole through its debounce (P6), so a second
+writer editing the file underneath that would be overwritten by the next
+keystroke on the Settings page. The request travels as a `group-on-top` event
+between the windows; the main window writes it into the group and the ordinary
+save carries it to disk.
+
 The chat page has a left sidebar for groups, and selecting one focuses the
 chat and the meters on its member channels. The sidebar *selects*; groups are
 created, renamed, deleted and filled on the Settings page. It is read during a
@@ -659,6 +690,43 @@ later membership changes. It does not own or create a capture session, so
 Start/Stop remains global. Closing the window closes only that view, never the
 group or its history.
 
+**How it is one app in several windows.** The same bundle is mounted in every
+WebView, and the window's *label* says which view it is — `group-3` is the
+fourth group of the active profile. The label rather than a query string,
+because it is readable before the first paint, so a group window never renders
+the main view for a frame and then replaces itself; and because Tauri
+identifies a window by it, so asking for a group that is already open focuses
+that window instead of stacking a second one on it.
+
+A group is addressed by its **position** in the active profile, which is the
+same handle the configuration file stores membership by and the only one that
+means the same thing in two windows — the keys the UI edits by are issued per
+window and mean nothing outside it. The window then follows `config-changed`,
+which is how a rename, a membership change or a flash setting made on the
+Settings page reaches it.
+
+Because there is more than one window, the running state is now **announced as
+well as returned**. `start_session` hands its state back to the window that
+pressed Start, which is how that window knows; every other window has only the
+`session-state` event, so a group window that was open when Start was pressed
+would otherwise go on saying "not running" through a running session — and,
+having no zero point for it, would time every line as "+0:12" instead of as a
+time of day.
+
+The history it opens with comes from `session_snapshot`. A window subscribes to
+the live events *before* it asks for that snapshot, because the other order
+drops whatever is said during the round trip — which is exactly the moment a
+group window is opened, since something is happening. The overlap that costs is
+harmless: a segment is identified by session, stream and sequence, and one that
+is in both answers is kept once. Two bubbles with one key would not be a
+cosmetic problem — it throws and stops the list rendering.
+
+**Switching profiles closes the group windows.** The stream ids a transcript
+carries are positions in the active profile's channel list, so a window kept
+open across a profile change would be filtering the right numbers against the
+wrong channels. Closing them is not a loss worth protecting: switching profiles
+is a setup action between productions, not something done during a show.
+
 Two streams reading the *same* device channel is allowed — mirroring one
 channel into two views is unusual but not wrong — so it is a warning rather
 than an error. During setup it is nearly always a slip, and the symptom, every
@@ -697,11 +765,11 @@ appear in two groups and is visible in both ✔; all configured channels start
 from one action ✔. Starting again after a Stop retains the preceding chat
 history and appends new segments to it ✔. Clear all communication requires
 confirmation ✔, removes every displayed transcript across all groups and
-sessions ✔ and leaves the channel, group and vocabulary configuration intact ✔;
-removing the *stored* transcripts waits on P10, because there is no store yet.
-Opening a group in its own window shows the same existing and incoming messages
-as the main window, limited to that group's channels, without starting another
-capture session.
+sessions ✔ — in every open window at once ✔ — and leaves the channel, group and
+vocabulary configuration intact ✔; removing the *stored* transcripts waits on
+P10, because there is no store yet. Opening a group in its own window shows the
+same existing and incoming messages as the main window, limited to that group's
+channels, without starting another capture session ✔.
 
 ### P8 — Levels & stream health — **Partial**
 
@@ -1096,12 +1164,20 @@ The attention request is counted per bubble and not per segment: one sentence
 arrives as three segments, and three flashes for one sentence is exactly the
 noise this must not add.
 
-**Outstanding:** the other two views. A detached group window (P7) and the LAN
-viewer (P16) are what the match ranges travel for, and neither exists yet — so
-the main window is currently both the "every applicable view" and the only
-window that can be asked for attention. Unicode normalisation is also still
-missing: a term and a transcript that differ only in composed and decomposed
-umlauts do not match today.
+Which window asks, and for what, is one rule in `ui/src/lib/attention.ts` that
+both views call, so they cannot drift into counting differently. The main
+window is urgent about every alert term whichever group is selected — it is the
+view of the whole session, and a word that must not be missed must not be
+missed because of what is on screen — and flashes only for the group it is
+showing. A group window is the other way round: urgent only for its own
+members, since it never claimed to be a view of the session, and always
+flashing when that group asks for it, because it *is* that group's view and
+there is no "while it is selected" to qualify.
+
+**Outstanding:** the LAN viewer (P16), which is the third view the match ranges
+travel for. Unicode normalisation is also still missing: a term and a
+transcript that differ only in composed and decomposed umlauts do not match
+today.
 
 **Accepted when:** adding a term in Settings survives a restart, a matching
 incoming transcript highlights the exact match in every applicable chat view,
@@ -1109,7 +1185,8 @@ and an unfocused main or applicable group window requests attention once; a
 non-matching word and a partial-word false positive do neither. With a group's
 flash-on-message setting enabled, an unfocused view of that group requests
 attention for a non-alert message; disabled groups do not. ✔ for the main
-window and its list; the other views wait on P7 and P16.
+window, the detached group windows and their lists; the browser view waits on
+P16.
 
 ### P16 — Read-only LAN viewer — **Open**
 

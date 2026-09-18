@@ -98,6 +98,21 @@ pub struct StoredGroup {
     /// that never offered it is the one wrong way to read its absence.
     #[serde(default)]
     pub flash: bool,
+    /// Whether this group's detached window (P7) stays in front of other
+    /// windows.
+    ///
+    /// Set on that window itself, by the pin in its header, and stored here
+    /// only so the next window this group opens comes up the same way. Per
+    /// group rather than a property of every group window — the stage
+    /// manager's view is the one that has to stay visible over whatever else
+    /// is being worked in, and the general talkback covering it would be the
+    /// opposite of useful.
+    ///
+    /// `#[serde(default)]` — off — because a file written before this existed
+    /// has no such field, and a setup that suddenly opens windows nothing can
+    /// be put in front of is not what its absence meant.
+    #[serde(default)]
+    pub on_top: bool,
 }
 
 /// One production's setup: which interface, which channels, which views.
@@ -422,6 +437,7 @@ mod tests {
                         name: "Bühne".into(),
                         members: vec![1],
                         flash: true,
+                        on_top: true,
                     }],
                 },
             ],
@@ -512,6 +528,9 @@ mod tests {
         assert!(config.alerts.is_empty());
         assert_eq!(config.profiles[0].groups[0].members, vec![0]);
         assert!(!config.profiles[0].groups[0].flash);
+        // And its window opens like any other one: a setup that suddenly put
+        // windows in front of everything is not what a missing field meant.
+        assert!(!config.profiles[0].groups[0].on_top);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 // field names.
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /// One language whisper can be given, as the sidecar reports it. `code` is
 /// ISO 639-1 ("de"), `name` is whisper's own spelling ("german").
@@ -183,6 +183,10 @@ export interface StoredGroup {
   /// message rather than only on an alert term (P17). Optional because a file
   /// written before it existed has none, which reads as off.
   flash?: boolean;
+  /// Whether this group's detached window stays in front of other windows
+  /// (P7). Optional for the same reason as `flash`: a file written before it
+  /// existed has none, which reads as off.
+  onTop?: boolean;
   /// Positions in `StoredProfile.channels`, not the channel keys membership
   /// uses while the setup is being edited. `profiles.ts` owns the conversion.
   members: number[];
@@ -355,6 +359,73 @@ export const setAlertTerms = (terms: string[]) =>
 export const requestAttention = (urgent: boolean) =>
   invoke<void>("request_attention", { urgent });
 
+// --- The chat, and the windows onto it (P7) -------------------------------
+
+/// When one session's clock was zero, in epoch milliseconds.
+export interface SessionStart {
+  sessionId: number;
+  startedAtMs: number;
+}
+
+/// The chat as it stands, for a window that has just opened.
+///
+/// Mirrors `crates/app/src/history.rs`. Asked for once per window: a detached
+/// group window is opened in the middle of a show and would otherwise start
+/// blank, and the main window uses it to come back from a reload with its chat
+/// intact.
+export interface Snapshot {
+  transcripts: TranscriptEvent[];
+  sessions: SessionStart[];
+  /// `null` when nothing has run yet in this process.
+  state: SessionState | null;
+}
+
+export const sessionSnapshot = () => invoke<Snapshot>("session_snapshot");
+
+/// Empties the chat, in every window at once.
+///
+/// The backend holds the copy every view is caught up from, so this is where
+/// the deletion has to happen — a window clearing only itself would leave a
+/// group window showing what the main window was just told is gone. Every
+/// window then empties its own list on `communication-cleared`, including the
+/// one that asked.
+export const clearCommunication = () => invoke<void>("clear_communication");
+
+/// Opens a group in a window of its own, or focuses the one already open.
+///
+/// `group` is the group's position in the active profile — the same position
+/// the configuration file stores membership by, and what the window's label is
+/// built from. `name` is only the window's title.
+export const openGroupWindow = (group: number, name: string, onTop: boolean) =>
+  invoke<void>("open_group_window", { group, name, onTop });
+
+/// A group window asking for its "keep this window in front" setting to be
+/// remembered.
+///
+/// The window applies it to itself the moment it is clicked — that is its own
+/// window and its own business — and this only asks for it to be *stored*. It
+/// goes to the main window rather than to the backend because the
+/// configuration has exactly one writer: the main window holds it and saves it
+/// whole through its debounce, and a second writer editing the file underneath
+/// that would be overwritten by the next keystroke on the Settings page.
+export interface GroupOnTop {
+  /// The group's position in the active profile — how a group is addressed
+  /// between windows. See `openGroupWindow`.
+  group: number;
+  onTop: boolean;
+}
+
+export const requestGroupOnTop = (group: number, onTop: boolean) =>
+  emit("group-on-top", { group, onTop } satisfies GroupOnTop);
+
+export const onGroupOnTop = (fn: (e: GroupOnTop) => void): Promise<UnlistenFn> =>
+  listen<GroupOnTop>("group-on-top", (e) => fn(e.payload));
+
+/// Closes every detached group window. Called when the active profile changes:
+/// a group window filters by stream id, and those are positions in the active
+/// profile's channel list.
+export const closeGroupWindows = () => invoke<void>("close_group_windows");
+
 export const listDevices = () => invoke<DeviceOption[]>("list_devices");
 /// Every language the sidecar accepts — around a hundred, in whisper's own
 /// order. Asked for rather than listed in the UI, so that adding a language is
@@ -378,6 +449,16 @@ export const onOverload = (fn: (e: OverloadEvent) => void): Promise<UnlistenFn> 
 
 export const onSessionState = (fn: (e: SessionState) => void): Promise<UnlistenFn> =>
   listen<SessionState>("session-state", (e) => fn(e.payload));
+
+/// The chat was emptied, by this window or by another one.
+export const onCleared = (fn: () => void): Promise<UnlistenFn> =>
+  listen<null>("communication-cleared", () => fn());
+
+/// The configuration was written. What a detached group window follows: a
+/// group renamed, refilled or given its flash setting on the Settings page
+/// reaches the window showing it this way and no other.
+export const onConfigChanged = (fn: (config: StoredConfig) => void): Promise<UnlistenFn> =>
+  listen<StoredConfig>("config-changed", (e) => fn(e.payload));
 
 /// Once a second, for as long as the app is open.
 export const onResources = (fn: (e: ResourceUsage) => void): Promise<UnlistenFn> =>

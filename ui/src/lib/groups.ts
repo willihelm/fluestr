@@ -28,6 +28,17 @@ export interface Group {
   /// Off by default — an app that starts by flashing at everything gets its
   /// attention requests ignored.
   flash: boolean;
+  /// Whether this group's detached window (P7) stays in front of other
+  /// windows.
+  ///
+  /// Set on that window itself, by the pin in its header, and stored here only
+  /// so the next window this group opens comes up the same way — during a show
+  /// "keep this one where I can see it" is asked of the window in front of the
+  /// operator, not of a page in another one. Per group rather than a property
+  /// of every group window, because a window that is always in front is a
+  /// window covering something: the stage manager's view is worth that, the
+  /// general talkback is not. Off by default for the same reason.
+  onTop: boolean;
 }
 
 /// The all-channels view, which is not a group and cannot be edited or
@@ -41,6 +52,7 @@ export const newGroup = (existing: Group[]): Group => ({
   name: `Group ${existing.length + 1}`,
   members: [],
   flash: false,
+  onTop: false,
 });
 
 /// A group read back from the stored configuration (P12).
@@ -52,11 +64,13 @@ export const restoreGroup = (
   name: string,
   members: number[],
   flash: boolean = false,
+  onTop: boolean = false,
 ): Group => ({
   key: nextKey++,
   name,
   members,
   flash,
+  onTop,
 });
 
 export const isMember = (group: Group, channel: Channel): boolean =>

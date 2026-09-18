@@ -50,7 +50,7 @@ const stored: StoredProfile = {
     { channel: 0, label: "Regie", language: "de", color: "#6ea8fe" },
     { channel: 3, label: "Licht", language: "en", color: "#5fd38d" },
   ],
-  groups: [{ name: "Bühne", flash: false, members: [1] }],
+  groups: [{ name: "Bühne", flash: false, onTop: false, members: [1] }],
 };
 
 describe("toStored", () => {
@@ -391,6 +391,22 @@ describe("alert terms and flashing", () => {
 
   it("keeps a file written before flashing existed quiet", () => {
     expect(fromStored(stored).groups[0].flash).toBe(false);
+  });
+
+  // The window setting travels the same way and for the same reason: a group
+  // whose window is meant to stay in front and comes back behind everything is
+  // a view an operator believes they can see and cannot.
+  it("carries a group's window setting across a save and a load", () => {
+    const profile = aProfile();
+    profile.groups[0].onTop = true;
+
+    expect(fromStored(toStored(profile)).groups[0].onTop).toBe(true);
+  });
+
+  it("opens the windows of a file written before that setting like any other", () => {
+    expect(fromStored({ ...stored, groups: [{ name: "Bühne", members: [1] }] }).groups[0].onTop).toBe(
+      false,
+    );
   });
 
   it("stores the alert list without the editor's empty row", () => {

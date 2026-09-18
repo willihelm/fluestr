@@ -9,6 +9,7 @@
 
 pub mod alerts;
 pub mod config;
+pub mod history;
 pub mod models;
 pub mod pool;
 pub mod resources;
@@ -17,6 +18,7 @@ pub mod worker;
 
 use alerts::Matcher;
 use config::Config;
+use history::{History, Snapshot};
 use models::{ModelsView, Progress};
 use session::{
     DeviceOption, EventSink, LevelsEvent, OverloadEvent, Session, SessionConfig, SessionState,
@@ -40,6 +42,24 @@ pub const EVENT_SESSION_STATE: &str = "session-state";
 pub const EVENT_MODEL_PROGRESS: &str = "model-progress";
 /// What the app and its workers are costing the machine, once a second (P8).
 pub const EVENT_RESOURCES: &str = "resources";
+/// The chat was emptied. Carries no payload: every window empties its own
+/// copy, and the one thing they need to agree on is *when*.
+pub const EVENT_CLEARED: &str = "communication-cleared";
+/// The configuration was written. Sent to every window, and read by the
+/// detached group windows (P7): a group renamed, refilled or given its flash
+/// setting on the Settings page has to reach the window that is showing it,
+/// and that window has no other way to hear about it.
+pub const EVENT_CONFIG: &str = "config-changed";
+
+/// What a detached group window's label starts with, followed by the group's
+/// position in the active profile.
+///
+/// The label is how the window knows which group it is: the frontend reads its
+/// own label rather than a query string, so the answer is there before the
+/// first paint and survives a reload of the webview. It is also what makes
+/// opening the same group twice focus the window that is already open instead
+/// of stacking a second one on it.
+pub const GROUP_WINDOW_PREFIX: &str = "group-";
 
 /// Sends session output over the Tauri bridge.
 ///
@@ -51,6 +71,10 @@ pub const EVENT_RESOURCES: &str = "resources";
 struct TauriEvents {
     app: AppHandle,
     alerts: Arc<Mutex<Matcher>>,
+    /// What a window opened later is caught up from — see [`history`]. Written
+    /// here because this is the one place every view's copy comes from, so it
+    /// is also the only place that can record what they were all sent.
+    history: Arc<Mutex<History>>,
 }
 
 impl EventSink for TauriEvents {
@@ -64,6 +88,13 @@ impl EventSink for TauriEvents {
             Ok(_) => {}
             Err(err) => tracing::error!(error = %err, "the alert list is unreadable"),
         }
+        // Recorded with its alert ranges, after the matching and before the
+        // emit: a group window opened in ten minutes has to highlight the same
+        // characters as the window that is open now.
+        match self.history.lock() {
+            Ok(mut history) => history.push(event.clone()),
+            Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
+        }
         let _ = self.app.emit(EVENT_TRANSCRIPT, event);
     }
 
@@ -76,6 +107,10 @@ impl EventSink for TauriEvents {
     }
 
     fn state(&self, event: SessionState) {
+        match self.history.lock() {
+            Ok(mut history) => history.note_state(&event),
+            Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
+        }
         let _ = self.app.emit(EVENT_SESSION_STATE, event);
     }
 }
@@ -108,6 +143,12 @@ struct AppState {
     /// with every session's event sink through the `Arc` — so a term added
     /// mid-show takes effect on the next segment without restarting anything.
     alerts: Arc<Mutex<Matcher>>,
+    /// The transcripts already emitted, and the session state around them.
+    ///
+    /// Shared with every session's event sink through the `Arc`, like the
+    /// alert list, and for the same reason: it has to outlive any one session,
+    /// because Start is non-destructive and the chat spans several of them.
+    history: Arc<Mutex<History>>,
     /// The sidecar's language list, once it has been asked for.
     ///
     /// Cached because it is a table compiled into whisper.cpp — it cannot
@@ -170,13 +211,27 @@ fn load_config(state: tauri::State<'_, AppState>) -> Result<Config, String> {
 /// which half is authoritative — which is exactly the drift the single file
 /// exists to avoid.
 #[tauri::command]
-fn save_config(state: tauri::State<'_, AppState>, config: Config) -> Result<(), String> {
+fn save_config(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    config: Config,
+) -> Result<(), String> {
     let path = state.config_path()?;
     config::save(&path, &config).map_err(|err| {
         // With the chain of causes, which the UI string flattens away.
         tracing::error!(error = ?err, "saving the configuration failed");
         err.to_string()
-    })
+    })?;
+
+    // Announced to every window, which is how a detached group window (P7)
+    // learns that its group was renamed, refilled or switched to another
+    // profile. The main window is the one that saved and ignores its own echo.
+    //
+    // After the write, not before: a window that reacted to a configuration
+    // the disk then refused would be showing something nothing else agrees
+    // with.
+    let _ = app.emit(EVENT_CONFIG, config);
+    Ok(())
 }
 
 // --- The model manager (P11) ---------------------------------------------
@@ -436,6 +491,119 @@ fn request_attention(window: tauri::Window, urgent: bool) -> Result<(), String> 
         .map_err(|err| err.to_string())
 }
 
+// --- The chat, and the windows onto it (P7) -------------------------------
+
+/// The chat as it stands: every transcript still held, the sessions' zero
+/// points, and the session state.
+///
+/// Asked for once by every window as it opens. The main window uses it to come
+/// back from a reload with its chat intact; a detached group window uses it
+/// because it is opened in the middle of a show and would otherwise start
+/// blank while the room is full of things that were already said.
+#[tauri::command]
+fn session_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
+    Ok(state
+        .history
+        .lock()
+        .map_err(|_| "the chat history is poisoned".to_string())?
+        .snapshot())
+}
+
+/// Empties the chat — every transcript, in every group and from every session.
+///
+/// A backend command rather than each window clearing itself, which is what it
+/// was while there was only one window. With several views onto one chat, the
+/// action has to happen in the one place they are all caught up from,
+/// otherwise a group window would keep showing what the main window was just
+/// told had been deleted.
+///
+/// Changes no configuration: channels, colours, groups and the vocabulary all
+/// survive it. The confirmation is the caller's — see `ClearCommunication`.
+#[tauri::command]
+fn clear_communication(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state
+        .history
+        .lock()
+        .map_err(|_| "the chat history is poisoned".to_string())?
+        .clear();
+    let _ = app.emit(EVENT_CLEARED, ());
+    Ok(())
+}
+
+/// Opens a group in a window of its own, or focuses the one already open.
+///
+/// A second WebView on the same frontend, backed by the same session state: it
+/// starts no capture and no worker pool, so Start and Stop stay global and a
+/// group window costs the machine a view rather than a second transcription of
+/// the same audio.
+///
+/// `group` is the group's position in the active profile — the same position
+/// the configuration file stores membership by. It travels in the window's
+/// label rather than in a query string, so the window knows which group it is
+/// before its first paint, and reopening the same group finds the window
+/// instead of stacking another one on it.
+///
+/// `on_top` is the group's "keep this window in front" setting, applied at
+/// creation so the window is born in front rather than jumping there a moment
+/// after it appears. It is stored with the group, so it can also change while
+/// the window is open — the window then applies it to itself.
+#[tauri::command]
+fn open_group_window(
+    app: AppHandle,
+    group: usize,
+    name: String,
+    on_top: bool,
+) -> Result<(), String> {
+    let label = format!("{GROUP_WINDOW_PREFIX}{group}");
+    // The group's own name first: this window is read from a Dock icon and a
+    // window menu, where "Intercom2Chat" is what every one of them says.
+    let title = format!("{name} — Intercom2Chat");
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        // Already open: bring it forward and let it pick up a rename. Asking
+        // for a group that is on screen behind three other windows is asking
+        // to see it, not asking for a duplicate of it.
+        let _ = existing.set_title(&title);
+        let _ = existing.set_always_on_top(on_top);
+        let _ = existing.unminimize();
+        return existing.set_focus().map_err(|err| err.to_string());
+    }
+
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title(title)
+        .always_on_top(on_top)
+        // Narrow and tall by default: a group is a handful of channels, and
+        // these windows are put down the side of a screen next to whatever
+        // else is being worked in.
+        .inner_size(520.0, 780.0)
+        .min_inner_size(360.0, 320.0)
+        .build()
+        .map(|_| ())
+        .map_err(|err| {
+            tracing::error!(error = ?err, group, "opening a group window failed");
+            err.to_string()
+        })
+}
+
+/// Closes every detached group window.
+///
+/// Called when the active profile changes. A group window is a view onto a
+/// group of the profile that is running, and the stream ids its transcripts
+/// carry are positions in *that* profile's channel list — carried over to
+/// another production it would be filtering the right numbers against the
+/// wrong channels. Switching profiles is a setup action, not something done
+/// during a show, so closing the windows costs an operator a layout they were
+/// about to rebuild anyway.
+#[tauri::command]
+fn close_group_windows(app: AppHandle) -> Result<(), String> {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(GROUP_WINDOW_PREFIX) {
+            let _ = window.close();
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn list_devices() -> Result<Vec<DeviceOption>, String> {
     session::list_devices().map_err(|e| e.to_string())
@@ -493,10 +661,21 @@ fn start_session(
     let events: Arc<dyn EventSink> = Arc::new(TauriEvents {
         app,
         alerts: Arc::clone(&state.alerts),
+        history: Arc::clone(&state.history),
     });
     match Session::start(config, events.clone(), models) {
         Ok((session, running)) => {
             *slot = Some(session);
+            // Announced as well as returned. The window that pressed Start
+            // learns from the answer, but it is not the only window any more:
+            // a detached group window (P7) has nothing but the event, and
+            // without this it goes on saying "not running" through a running
+            // session — and, having no zero point for it, times every line
+            // as "+0:12" instead of as a time of day.
+            //
+            // The sink is also what records the state in the history, so a
+            // window opened later is caught up on it too.
+            events.state(running.clone());
             Ok(running)
         }
         Err(err) => {
@@ -588,6 +767,10 @@ pub fn run() {
             list_languages,
             set_alert_terms,
             request_attention,
+            session_snapshot,
+            clear_communication,
+            open_group_window,
+            close_group_windows,
             start_session,
             stop_session
         ])

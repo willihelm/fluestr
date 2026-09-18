@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Lets the frontend subscribe to backend events. Commands defined by this app need no permission; the core event plugin does, and without this the webview's listen() is rejected — so transcripts, levels and session state never arrive. Deliberately narrow: only what is actually used, so a future need fails loudly rather than being silently pre-granted.",
-  "windows": ["main"],
+  "description": "Lets the frontend subscribe to backend events. Commands defined by this app need no permission; the core event plugin does, and without this the webview's listen() is rejected — so transcripts, levels and session state never arrive. Deliberately narrow: only what is actually used, so a future need fails loudly rather than being silently pre-granted. The detached group windows (P7) are the same frontend on the same events, so they are named by the glob their labels are built from — see GROUP_WINDOW_PREFIX; a window that is not covered here comes up blank and silent, which is why the pattern has to follow that constant.",
+  "windows": ["main", "group-*"],
   "permissions": ["core:event:default"]
 }
