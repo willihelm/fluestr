@@ -19,6 +19,15 @@ export interface Channel {
   color: string;
 }
 
+/// The language a setup starts on when nothing has chosen one — a new profile,
+/// or one read from a file written before profiles had a default.
+///
+/// The only language named in the frontend, and a starting point rather than a
+/// constraint: the picker is fed from whisper's own list (`listLanguages`), so
+/// adding a language is never a change here. DE because that is the house this
+/// was built for; one pick on the Settings page changes it for a profile.
+export const DEFAULT_LANGUAGE = "de";
+
 let nextKey = 0;
 
 /// A new row, preset to the first free channel and the next palette colour.
@@ -28,7 +37,15 @@ let nextKey = 0;
 /// Deliberately not clamped to the device's channel count: a setup may hold
 /// more channels than the interface currently plugged in has, and those start
 /// muted rather than blocking the session — see [`mutedChannels`].
-export const newChannel = (existing: Channel[]): Channel => {
+export const newChannel = (
+  existing: Channel[],
+  /// The profile's default language — what the picker above the channel list
+  /// shows. Presetting a new row rather than leaving it on a fixed "de" is the
+  /// whole point of that picker: eight channels of one production are
+  /// overwhelmingly in one language, and setting it eight times is eight
+  /// chances to miss one.
+  language: string = DEFAULT_LANGUAGE,
+): Channel => {
   const taken = new Set(existing.map((c) => c.channel));
   let channel = 0;
   while (taken.has(channel)) channel += 1;
@@ -37,7 +54,7 @@ export const newChannel = (existing: Channel[]): Channel => {
     key: nextKey++,
     channel,
     label: `Channel ${channel + 1}`,
-    language: "de",
+    language,
     color: paletteColor(existing.length),
   };
 };
@@ -54,6 +71,24 @@ export const restoreChannel = (stored: Omit<Channel, "key">): Channel => ({
   ...stored,
   key: nextKey++,
 });
+
+/// Every channel put onto one language.
+///
+/// The deliberate half of the profile's default: changing the picker presets
+/// what is added next and leaves what is already there alone, because a setup
+/// an operator built is not something to rewrite behind their back. Pressing
+/// Apply is how they ask for exactly that — so it is one button and not a side
+/// effect of the picker.
+export const applyLanguage = (channels: Channel[], language: string): Channel[] =>
+  channels.map((c) => (c.language === language ? c : { ...c, language }));
+
+/// Which languages the setup actually uses, in the order the channels are in.
+///
+/// What the picker needs to say whether it still describes the setup below it:
+/// one entry and it matches, several and the channels disagree with it.
+export const usedLanguages = (channels: Channel[]): string[] => [
+  ...new Set(channels.map((c) => c.language)),
+];
 
 /// What `start_session` is sent. The order is the order of the list, because
 /// that is what defines the stream ids.

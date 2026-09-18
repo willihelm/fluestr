@@ -9,6 +9,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+/// One language whisper can be given, as the sidecar reports it. `code` is
+/// ISO 639-1 ("de"), `name` is whisper's own spelling ("german").
+export interface Language {
+  code: string;
+  name: string;
+}
+
 export interface DeviceOption {
   name: string;
   channels: number;
@@ -137,6 +144,10 @@ export interface StoredGroup {
 export interface StoredProfile {
   name: string;
   device: string;
+  /// The language a channel added to this profile starts on. Optional here
+  /// only because a file written before it existed has none — `profiles.ts`
+  /// fills it in, and the backend serialises it from then on.
+  language?: string;
   channels: StoredChannel[];
   groups: StoredGroup[];
 }
@@ -241,6 +252,11 @@ export const downloadModel = (id: string) => invoke<void>("download_model", { id
 export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
 export const removeModel = (id: string) => invoke<void>("remove_model", { id });
 export const listDevices = () => invoke<DeviceOption[]>("list_devices");
+/// Every language the sidecar accepts — around a hundred, in whisper's own
+/// order. Asked for rather than listed in the UI, so that adding a language is
+/// a whisper.cpp version and never a change here. Needs no model, so it
+/// answers on a machine that has downloaded nothing.
+export const listLanguages = () => invoke<Language[]>("list_languages");
 /// Resolves with the running state, so the UI does not have to wait for an
 /// event to learn that the session it just asked for actually started.
 export const startSession = (config: SessionConfig) =>

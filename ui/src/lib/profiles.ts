@@ -19,7 +19,7 @@
 // re-pointing every group below it; the position is what still means something
 // after a restart, when every key is a number this window has never issued.
 
-import { newChannel, restoreChannel, type Channel } from "./streams";
+import { newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
 import { restoreGroup, type Group } from "./groups";
 import { CONFIG_VERSION, type StoredConfig, type StoredProfile } from "./bridge";
 
@@ -29,6 +29,10 @@ export interface Profile {
   key: number;
   name: string;
   device: string;
+  /// What a channel added to this profile starts on, and what the picker above
+  /// the channel list shows. Every channel keeps its own language; this only
+  /// decides what a new one is born with.
+  language: string;
   channels: Channel[];
   groups: Group[];
 }
@@ -40,11 +44,20 @@ let nextKey = 0;
 /// With one channel rather than none, for the same reason the app has always
 /// started with one: an empty channel list is a dead end that the operator has
 /// to work out how to leave.
-export const newProfile = (existing: Profile[], device: string): Profile => ({
+export const newProfile = (
+  existing: Profile[],
+  device: string,
+  /// Carried over from the profile being worked on rather than reset: an
+  /// operator who sets up a second production in the same house is not
+  /// switching language, and the one place a language is named by default
+  /// stays `DEFAULT_LANGUAGE`.
+  language: string = DEFAULT_LANGUAGE,
+): Profile => ({
   key: nextKey++,
   name: `Profile ${existing.length + 1}`,
   device,
-  channels: [newChannel([])],
+  language,
+  channels: [newChannel([], language)],
   groups: [],
 });
 
@@ -57,6 +70,7 @@ export const toStored = (profile: Profile): StoredProfile => {
   return {
     name: profile.name,
     device: profile.device,
+    language: profile.language,
     channels: profile.channels.map((c) => ({
       channel: c.channel,
       label: c.label,
@@ -89,6 +103,9 @@ export const fromStored = (stored: StoredProfile): Profile => {
     key: nextKey++,
     name: stored.name,
     device: stored.device,
+    // A file written before profiles had a default language has none, and
+    // "" would make every channel added afterwards languageless.
+    language: stored.language ?? DEFAULT_LANGUAGE,
     channels,
     groups: stored.groups.map((g) =>
       restoreGroup(

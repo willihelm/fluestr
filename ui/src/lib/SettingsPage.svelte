@@ -56,7 +56,8 @@
   import ModelPicker from "./ModelPicker.svelte";
   import { lengthWarning } from "./vocabulary";
   import type { ModelChoice, Profile } from "./profiles";
-  import type { DeviceOption } from "./bridge";
+  import { listLanguages, type DeviceOption, type Language } from "./bridge";
+  import { onMount } from "svelte";
 
   interface Props {
     devices: DeviceOption[];
@@ -112,6 +113,26 @@
   // whether this machine can transcribe at all. Nothing else on the page can
   // work it out — it is a question about files on disk, not about the setup.
   let modelFlag = $state<Flag>(null);
+
+  // The sidecar's language list, fetched once for the whole page and handed to
+  // every picker on it. `null` until it arrives, and it stays `null` if the
+  // call fails — which is a state the picker has to render rather than an
+  // error the page reports, because a missing list costs discoverability and
+  // not the ability to set a language.
+  //
+  // Not fetched in `App`: nothing outside this page asks what languages exist.
+  let languages = $state<Language[] | null>(null);
+
+  onMount(async () => {
+    try {
+      languages = await listLanguages();
+    } catch (e) {
+      // Worth a line in the console, not a strip on the page: the fallback is
+      // the field this replaced, and an operator who never opens the picker
+      // never notices.
+      console.warn("no language list from the sidecar:", e);
+    }
+  });
 
   let flags = $derived<Record<Section, Flag>>({
     // Never flagged: a failed save is about the whole file, not about the
@@ -226,7 +247,13 @@
             </p>
           </section>
 
-          <StreamSetup bind:channels={active.channels} {deviceChannels} {locked} />
+          <StreamSetup
+            bind:channels={active.channels}
+            bind:language={active.language}
+            {languages}
+            {deviceChannels}
+            {locked}
+          />
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>

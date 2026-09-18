@@ -10,23 +10,60 @@
   // every show. Editing is locked while a session runs, because the channel
   // map is fixed when capture opens.
 
-  import { newChannel, duplicateChannels, mutedChannels, type Channel } from "./streams";
+  import {
+    newChannel,
+    duplicateChannels,
+    mutedChannels,
+    applyLanguage,
+    usedLanguages,
+    type Channel,
+  } from "./streams";
+  import LanguagePicker from "./LanguagePicker.svelte";
+  import type { Language } from "./bridge";
 
   interface Props {
     channels: Channel[];
     deviceChannels: number;
+    /// The profile's default language: what a channel added here starts on.
+    /// Bound, because the picker that sets it lives in this header — it is
+    /// part of the channel setup and belongs where the channels are.
+    language: string;
+    /// The sidecar's language list, or `null` while it is being fetched or
+    /// after it failed. Fetched once by the page above and handed down.
+    languages: Language[] | null;
     locked: boolean;
   }
 
-  let { channels = $bindable(), deviceChannels, locked }: Props = $props();
+  let {
+    channels = $bindable(),
+    deviceChannels,
+    language = $bindable(),
+    languages,
+    locked,
+  }: Props = $props();
 
   let duplicates = $derived(duplicateChannels(channels));
   // Not an error either: a row the current device has no channel for starts
   // muted, so one setup serves the desk and the laptop interface alike.
   let muted = $derived(new Set(mutedChannels(channels, deviceChannels)));
 
+  // What the picker above the list still describes. One language and it speaks
+  // for the whole setup; several and it only speaks for the next channel —
+  // which is worth saying, because a picker reading "German" over three
+  // English rows is a lie the operator would otherwise find during a show.
+  let divergent = $derived(usedLanguages(channels).filter((l) => l !== language));
+
   const add = () => {
-    channels = [...channels, newChannel(channels)];
+    channels = [...channels, newChannel(channels, language)];
+  };
+
+  // Deliberately a button and not a side effect of the picker. Changing the
+  // preset must not rewrite a map the operator built channel by channel; and
+  // putting eight channels onto one language is common enough that doing it
+  // eight times is eight chances to miss one. Two separate acts, each of them
+  // what it says.
+  const applyToAll = () => {
+    channels = applyLanguage(channels, language);
   };
 
   const remove = (key: number) => {
@@ -38,6 +75,18 @@
   <header>
     <h2>Channels</h2>
     <span class="count">{channels.length} of {deviceChannels} on the device</span>
+
+    <!-- In this header rather than beside the device: it is the channels this
+         governs, and it governs them the moment one is added. -->
+    <label class="preset">
+      <span>New channels</span>
+      <LanguagePicker
+        bind:value={language}
+        {languages}
+        label="Default language for new channels"
+        disabled={locked}
+      />
+    </label>
     <!-- Not capped at the device's channel count: the setup describes the
          production, not whatever interface happens to be plugged in now. -->
     <button class="action" onclick={add} disabled={locked}>Add channel</button>
@@ -79,12 +128,11 @@
 
         <input type="text" aria-label="Label" bind:value={channel.label} disabled={locked} />
 
-        <input
-          type="text"
-          aria-label="Language"
+        <LanguagePicker
           bind:value={channel.language}
+          {languages}
+          label="Language of {channel.label}"
           disabled={locked}
-          title="ISO 639-1 code. The list comes from the sidecar in a later step — nothing is hard-coded to de/en."
         />
 
         <input type="color" aria-label="Colour" bind:value={channel.color} disabled={locked} />
@@ -100,6 +148,19 @@
       <p class="empty">No channels yet. Add one to start transcribing.</p>
     {/if}
   </div>
+
+  {#if divergent.length > 0}
+    <!-- Not a warning: channels on different languages is a legitimate setup —
+         a touring production with an English follow-spot operator is exactly
+         that. It is an offer, and it names what it would overwrite. -->
+    <p class="diverges">
+      {divergent.length === 1 ? "One language" : `${divergent.length} languages`} below
+      {divergent.length === 1 ? "differs" : "differ"} from this: {divergent.join(", ")}.
+      <button class="link" onclick={applyToAll} disabled={locked}>
+        Put all {channels.length} channels on {language}
+      </button>
+    </p>
+  {/if}
 
   {#if muted.size > 0}
     <!-- Said once, in full, rather than only implied by the greyed rows: an
@@ -135,7 +196,10 @@
   .head,
   .row {
     display: grid;
-    grid-template-columns: 0.6rem 4rem minmax(6rem, 1fr) 3.5rem 2.6rem 2rem;
+    /* The language column is wider than it was as a bare code field: it now
+       holds a name, and "Portuguese (pt)" truncated to "Portug…" is no better
+       than the code it replaced. */
+    grid-template-columns: 0.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 2.6rem 2rem;
     align-items: center;
     gap: 0.5rem;
   }
@@ -165,6 +229,44 @@
      the fix. */
   .row.muted {
     opacity: 0.55;
+  }
+
+  /* Sits with the count rather than with the Add button: it describes the
+     list, it does not act on it. */
+  .preset {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    min-width: 0;
+  }
+
+  .preset :global(select),
+  .preset :global(input) {
+    width: auto;
+    min-width: 8rem;
+  }
+
+  .diverges {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin: 0.5rem 0 0;
+  }
+
+  /* A link and not a second filled button: it is an offer next to a sentence,
+     and beside "Add channel" a solid button would read as of equal standing
+     with it. */
+  .link {
+    background: none;
+    color: var(--accent);
+    padding: 0;
+    font-weight: 500;
+    text-decoration: underline;
+  }
+
+  .link:disabled {
+    text-decoration: none;
   }
 
   .empty {

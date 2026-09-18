@@ -63,12 +63,12 @@ for now, with the reason recorded in the package.
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
 | P6 | Tauri API | **Partial** | No generated shared types; no `update_stream_config`, no `clear_communication` in the backend, no `search_session` |
-| P7 | Chat UI | **Partial** | No language picker from the sidecar's list; the window is a window, not a jump to an arbitrary position |
+| P7 | Chat UI | **Partial** | The window is a window, not a jump to an arbitrary position |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Open** | Was specified on P10's FTS index, which is not coming — needs a decision on what it searches instead |
 | P10 | SQLite persistence | **Deferred** | Set aside by the user on 2026-09-18: this is about live communication, not persistence |
 | P11 | Model manager | **Done** | — |
-| P12 | Settings & presets | **Partial** | Profiles are stored and read back; every threshold is still a constant in the code, and the device is recognised by its display name |
+| P12 | Settings & presets | **Partial** | Profiles are stored and read back, with their default language; every threshold is still a constant in the code, and the device is recognised by its display name |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box on Settings, stored since P12, but not named as a list and not yet measured against a baseline |
@@ -390,6 +390,13 @@ Two things learned here, both in the code as comments:
   so the transition the operator waits for after pressing the single global
   Start button arrives as the answer to that click. Events carry only what
   happens afterwards.
+- **`list_languages` needs no model and no session.** It runs the sidecar
+  binary with `--languages`, which prints whisper's compiled-in table and
+  exits, rather than sending `ListLanguages` down a worker's pipe — a worker
+  answers only once a model is loaded, and the picker this feeds is used while
+  the operator is still mapping channels on a machine that may have downloaded
+  nothing. Cached for the life of the process, because the table cannot change
+  within it.
 - **Start is non-destructive.** It starts or resumes capture without clearing
   the transcripts already displayed or stored for the current session. Clearing
   communication is the separate, explicit `clear_communication` action and is
@@ -593,17 +600,35 @@ channel into two views is unusual but not wrong — so it is a warning rather
 than an error. During setup it is nearly always a slip, and the symptom, every
 line appearing twice, does not point at its cause.
 
-**Outstanding:** per-stream language configuration from the sidecar's language
-list rather than a free-text field, and a one-click language override. Beyond
-the MVP line but worth naming: the window can only be walked backwards a page
-at a time, so jumping to an arbitrary position needs P9's search to drive it.
+**The language is picked, and picked once.** Every language field — the one
+above the channel list and the one on each row — is a menu built from whisper's
+own table, fetched through `list_languages` and never written down here. That
+command runs the sidecar with `--languages` rather than asking a worker over
+the protocol, because a worker only answers once a model is loaded and this
+list is wanted while an operator is still mapping channels, on a machine that
+may have downloaded nothing. The table cannot change while the app runs, so it
+is fetched once per process.
+
+The picker above the list sets the *profile's* default: what a channel added
+afterwards is born with. It presets and does not rewrite — a map built channel
+by channel is not something to change behind the operator's back — so when the
+rows below it disagree, the section says which languages differ and offers to
+put all of them onto the picker's in one press. Two separate acts: eight
+channels in one language is the normal case and setting it eight times is eight
+chances to miss one, but doing it silently on a picker change would lose a
+deliberate mixed setup. A code the running whisper build does not offer is kept
+as an option of its own rather than snapping to the first entry.
+
+**Outstanding:** a one-click language override on a running stream. Beyond the
+MVP line but worth naming: the window can only be walked backwards a page at a
+time, so jumping to an arbitrary position needs P9's search to drive it.
 
 **Accepted when:** eight streams run visibly live; speech that runs on is one
 bubble rather than one per segment ✔; scrolling stays smooth at 10,000
 segments — the DOM is now bounded by construction, but "smooth" is a claim
 about a machine under load and belongs to the P14 test; a third language can be
-chosen without a code change (any ISO code can be typed today; the picker is
-outstanding); a channel has a preselected but editable colour ✔; a channel can
+chosen without a code change ✔ — the picker offers whisper's hundred and holds
+no list of its own; a channel has a preselected but editable colour ✔; a channel can
 appear in two groups and is visible in both ✔; all configured channels start
 from one action ✔. Starting again after a Stop retains the preceding chat
 history and appends new segments to it ✔. Clear all communication requires
@@ -773,8 +798,9 @@ id, not the display name.
 memberships, survives a restart and a reconnect of the interface.
 
 **Done:** the presets, as **profiles**. `config.json` in the app's
-configuration directory holds a list of profiles — device, channel map with
-labels, languages and colours, groups with their memberships — plus the active
+configuration directory holds a list of profiles — device, default language,
+channel map with labels, languages and colours, groups with their memberships —
+plus the active
 vocabulary beside them and which profile was last in use. It is read at
 startup, written on every edit after a short debounce, and there is no Save
 button: a setup an operator believes is stored and is not is worse than no
@@ -786,6 +812,15 @@ setup is done once a show and deleting one should not be a click away from the
 fields it would discard. What it governs is named in the rail rather than
 explained in it: Audio and Groups are listed under the active profile's name,
 which is the whole of what a profile holds — see P7.
+
+A profile's **default language** joined them: the language a channel added to
+that profile is born with. In the profile rather than beside the vocabulary,
+although both are "set once and forget": a house may run a German main stage
+and an English touring production, and the thing this presets — the channel map
+— is profile-scoped too, so nothing here reaches across a scope boundary. A
+file written before it existed loads on the default rather than on an empty
+string, which would make every channel added afterwards languageless. See P7
+for what the picker itself does and does not rewrite.
 
 Three decisions worth keeping in view:
 
@@ -1005,10 +1040,6 @@ In this order, with the reason each one comes where it does.
    model as the app, but it introduces an access boundary the desktop app does
    not have: implement the revocable token and server-side read-only contract
    before exposing any browser URL.
-6. **P7's language picker** — `list_languages` through the Tauri API and a
-   picker in place of the free-text field. Small, and last of these, because a
-   typed `de` works today; it is discoverability that is missing, not
-   capability.
 
 ## Whole-system verification
 
@@ -1022,8 +1053,9 @@ In this order, with the reason each one comes where it does.
    2. Disable the global vocabulary list and repeat the same passage — the
       difference must be visible on every channel, otherwise P15 is not
       working.
-   3. Select a third language in the setup and put a stream on it — possible
-      without a code change.
+   3. Select a third language in the setup and put a stream on it — from the
+      picker, which offers every language the installed whisper knows, without
+      a code change.
 4. Overdrive one channel and leave another silent → P8 shows both.
 5. Enter a search term → hits across all streams, jumping works.
 6. `kill -9` a sidecar → the app keeps running, the worker comes back.

@@ -221,6 +221,35 @@ impl Drop for Worker {
     }
 }
 
+/// The languages whisper.cpp can be asked for, without loading a model.
+///
+/// Runs the sidecar once with `--languages`. That is deliberately not the
+/// `ListLanguages` request on the protocol: a worker only answers once a model
+/// is loaded, and this list is wanted while the operator is still mapping
+/// channels — on a machine that may have downloaded no model at all. The table
+/// is compiled into whisper.cpp and cannot change between two runs, so one
+/// process is all it ever costs.
+pub fn list_languages() -> Result<Vec<whisper_protocol::Language>> {
+    let binary = find_binary()?;
+    let output = Command::new(&binary)
+        .arg("--languages")
+        // Its log lines would otherwise land in the app's terminal for a call
+        // that is made whenever Settings is opened.
+        .stderr(Stdio::null())
+        .output()
+        .with_context(|| format!("running {} --languages", binary.display()))?;
+
+    if !output.status.success() {
+        bail!(
+            "{} --languages exited with {}",
+            binary.display(),
+            output.status
+        );
+    }
+
+    serde_json::from_slice(&output.stdout).context("the sidecar's language list is not JSON")
+}
+
 /// Locates the sidecar binary.
 ///
 /// In development it sits next to the app binary in the same target directory,
@@ -430,6 +459,27 @@ mod tests {
             panic!("spawning a nonexistent binary should fail");
         };
         assert!(err.to_string().contains("/nonexistent/whisper-worker"));
+    }
+
+    #[test]
+    fn the_language_list_comes_back_without_a_model() {
+        // The point of the whole `--languages` path: it must answer on a
+        // machine that has downloaded nothing. Skipped when the sidecar has
+        // not been built, which is the case for a bare `cargo test`.
+        let Ok(binary) = find_binary() else {
+            return;
+        };
+        let _ = binary;
+
+        let languages = list_languages().expect("the sidecar's language list");
+        // Whisper knows around a hundred; the two the app was built for have
+        // to be among them, and no language list is hard-coded anywhere but
+        // here, in a test.
+        assert!(languages.len() > 50, "suspiciously short: {languages:?}");
+        assert!(languages.iter().any(|l| l.code == "de"));
+        assert!(languages.iter().any(|l| l.code == "en"));
+        // A code without a name would render as an empty row in the picker.
+        assert!(languages.iter().all(|l| !l.name.is_empty()));
     }
 
     #[test]

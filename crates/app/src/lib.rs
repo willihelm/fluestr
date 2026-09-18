@@ -79,6 +79,12 @@ struct AppState {
     /// and the VAD are two different downloads an operator may reasonably
     /// start together — and cancelling one of them must not stop the other.
     downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The sidecar's language list, once it has been asked for.
+    ///
+    /// Cached because it is a table compiled into whisper.cpp — it cannot
+    /// change while the app runs — and because fetching it means spawning a
+    /// process, which should not happen every time Settings is opened.
+    languages: Mutex<Option<Vec<whisper_protocol::Language>>>,
 }
 
 impl AppState {
@@ -252,6 +258,32 @@ fn remove_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), Str
     })
 }
 
+/// Every language the sidecar can be given, for the picker on the channel
+/// setup.
+///
+/// Fetched from whisper.cpp rather than listed here, so that no language list
+/// exists anywhere in this repository: adding one is a whisper.cpp version,
+/// never a code change of ours.
+#[tauri::command]
+fn list_languages(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<whisper_protocol::Language>, String> {
+    let mut cached = state
+        .languages
+        .lock()
+        .map_err(|_| "language list poisoned")?;
+    if let Some(languages) = cached.as_ref() {
+        return Ok(languages.clone());
+    }
+
+    let languages = worker::list_languages().map_err(|err| {
+        tracing::error!(error = ?err, "asking the sidecar for its language list failed");
+        err.to_string()
+    })?;
+    *cached = Some(languages.clone());
+    Ok(languages)
+}
+
 #[tauri::command]
 fn list_devices() -> Result<Vec<DeviceOption>, String> {
     session::list_devices().map_err(|e| e.to_string())
@@ -385,6 +417,7 @@ pub fn run() {
             cancel_download,
             remove_model,
             list_devices,
+            list_languages,
             start_session,
             stop_session
         ])

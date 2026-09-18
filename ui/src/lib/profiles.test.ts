@@ -16,7 +16,7 @@ import {
   toStoredConfig,
   type Profile,
 } from "./profiles";
-import { restoreChannel } from "./streams";
+import { restoreChannel, DEFAULT_LANGUAGE } from "./streams";
 import { restoreGroup } from "./groups";
 import type { StoredProfile } from "./bridge";
 
@@ -32,6 +32,7 @@ const aProfile = (): Profile => {
     key: 99,
     name: "Grosses Haus",
     device: "MADIface",
+    language: "de",
     channels,
     groups: [restoreGroup("Bühne", [channels[1].key])],
   };
@@ -40,6 +41,7 @@ const aProfile = (): Profile => {
 const stored: StoredProfile = {
   name: "Grosses Haus",
   device: "MADIface",
+  language: "de",
   channels: [
     { channel: 0, label: "Regie", language: "de", color: "#6ea8fe" },
     { channel: 3, label: "Licht", language: "en", color: "#5fd38d" },
@@ -145,6 +147,19 @@ describe("newProfile", () => {
     expect(created.channels).toHaveLength(1);
     expect(created.groups).toEqual([]);
   });
+
+  it("carries the language over, down to the channel it starts with", () => {
+    // Same argument as the device: a second production in the same house is
+    // not a second language.
+    const created = newProfile([], "MADIface", "en");
+
+    expect(created.language).toBe("en");
+    expect(created.channels[0].language).toBe("en");
+  });
+
+  it("falls back to the one default language when none is given", () => {
+    expect(newProfile([], "MADIface").language).toBe(DEFAULT_LANGUAGE);
+  });
 });
 
 describe("the configuration as a whole", () => {
@@ -201,6 +216,22 @@ describe("the configuration as a whole", () => {
     // "Never chose", which resolves to the recommended model — not
     // `undefined`, which would travel straight back into the next save.
     expect(restored.models).toEqual({ model: null, vadModel: null, modelPath: null });
+  });
+
+  it("keeps a file written before profiles had a default language readable", () => {
+    // Same trade as above, and with a sharper failure: an empty string here
+    // would travel into the picker and out again into every channel added
+    // afterwards, which whisper cannot be given.
+    const { language: _, ...withoutLanguage } = stored;
+
+    const restored = fromStoredConfig({
+      version: 1,
+      active: 0,
+      vocabulary: "Standby.",
+      profiles: [withoutLanguage],
+    });
+
+    expect(restored.profiles[0].language).toBe(DEFAULT_LANGUAGE);
   });
 
   it("stores a cleared model path as nothing rather than as an empty string", () => {

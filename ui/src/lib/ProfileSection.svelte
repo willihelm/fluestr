@@ -37,9 +37,10 @@
   let active = $derived(profiles.find((p) => p.key === activeKey) ?? null);
 
   const add = () => {
-    // Inherits the device of the profile being left: a second setup on the
-    // same machine is usually the same interface patched differently.
-    const created = newProfile(profiles, active?.device ?? "");
+    // Inherits the device and the language of the profile being left: a second
+    // setup on the same machine is usually the same interface patched
+    // differently, in the same house and therefore the same language.
+    const created = newProfile(profiles, active?.device ?? "", active?.language);
     profiles = [...profiles, created];
     activeKey = created.key;
   };

@@ -19,6 +19,19 @@ use whisper_rs::{
     WhisperVadContext, WhisperVadContextParams,
 };
 
+/// What the process was asked to do.
+///
+/// `--languages` is not a request on the protocol even though `ListLanguages`
+/// exists there: the list is a table compiled into whisper.cpp, and asking for
+/// it through the pipe would mean loading a model first. The app needs it
+/// while the operator is still setting up channels, on a machine that may not
+/// have downloaded a model yet.
+enum Mode {
+    Serve(Args),
+    /// Print the language list as JSON on stdout and exit.
+    Languages,
+}
+
 struct Args {
     model: String,
     /// Silero VAD model. Optional, but without it whisper transcribes whatever
@@ -28,7 +41,7 @@ struct Args {
     gpu: bool,
 }
 
-fn parse_args() -> Result<Args> {
+fn parse_args() -> Result<Mode> {
     let mut model = None;
     let mut vad_model = None;
     let mut threads = 4usize;
@@ -47,16 +60,19 @@ fn parse_args() -> Result<Args> {
                     .context("--threads is not a number")?
             }
             "--no-gpu" => gpu = false,
+            // Answered before anything else is validated, because it needs
+            // none of it — in particular not `--model`.
+            "--languages" => return Ok(Mode::Languages),
             other => anyhow::bail!("unknown argument: {other}"),
         }
     }
 
-    Ok(Args {
+    Ok(Mode::Serve(Args {
         model: model.context("--model <path> is required")?,
         vad_model,
         threads: threads.max(1),
         gpu,
-    })
+    }))
 }
 
 fn main() -> Result<()> {
@@ -73,7 +89,16 @@ fn main() -> Result<()> {
     // these hooks route it into `tracing` and thus to stderr.
     whisper_rs::install_logging_hooks();
 
-    let args = parse_args()?;
+    let args = match parse_args()? {
+        Mode::Serve(args) => args,
+        // Straight to stdout as plain JSON rather than as a protocol frame:
+        // the caller here is a one-shot `Command`, not a worker holding a
+        // pipe, and it has no reason to speak the framing to read one answer.
+        Mode::Languages => {
+            serde_json::to_writer(std::io::stdout(), &list_languages())?;
+            return Ok(());
+        }
+    };
 
     let t0 = Instant::now();
     let mut ctx_params = WhisperContextParameters::default();

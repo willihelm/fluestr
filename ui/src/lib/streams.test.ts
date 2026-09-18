@@ -1,13 +1,21 @@
 // The rules of the channel setup, asserted rather than argued about.
 
 import { describe, expect, it } from "vitest";
-import { mutedChannels, newChannel, validate, type Channel } from "./streams";
+import {
+  applyLanguage,
+  mutedChannels,
+  newChannel,
+  usedLanguages,
+  validate,
+  DEFAULT_LANGUAGE,
+  type Channel,
+} from "./streams";
 
-const channel = (device: number, label = `Channel ${device + 1}`): Channel => ({
+const channel = (device: number, label = `Channel ${device + 1}`, language = "de"): Channel => ({
   key: device,
   channel: device,
   label,
-  language: "de",
+  language,
   color: "#888888",
 });
 
@@ -80,5 +88,54 @@ describe("newChannel", () => {
 
   it("fills a gap left by a removed row", () => {
     expect(newChannel([channel(0), channel(2)]).channel).toBe(1);
+  });
+
+  it("is born on the profile's language, not on a fixed one", () => {
+    // The point of the picker above the list: a production in English adds
+    // eight channels without touching the language once.
+    expect(newChannel([], "en").language).toBe("en");
+    expect(newChannel([]).language).toBe(DEFAULT_LANGUAGE);
+  });
+});
+
+describe("applyLanguage", () => {
+  it("puts every channel on one language", () => {
+    const channels = [channel(0, "Regie", "de"), channel(1, "FOH", "en")];
+
+    expect(applyLanguage(channels, "en").map((c) => c.language)).toEqual(["en", "en"]);
+  });
+
+  it("leaves the rows that already match untouched", () => {
+    // Identity, not equality: these are the objects the Settings page is
+    // bound to, and replacing one the operator is editing would cost them
+    // the field they are in.
+    const channels = [channel(0, "Regie", "en"), channel(1, "FOH", "de")];
+    const applied = applyLanguage(channels, "en");
+
+    expect(applied[0]).toBe(channels[0]);
+    expect(applied[1]).not.toBe(channels[1]);
+  });
+
+  it("changes nothing else about a row", () => {
+    const channels = [channel(3, "Licht", "de")];
+    const [applied] = applyLanguage(channels, "fr");
+
+    expect(applied).toEqual({ ...channels[0], language: "fr" });
+  });
+});
+
+describe("usedLanguages", () => {
+  it("names each language once, in the order the channels are in", () => {
+    const channels = [
+      channel(0, "Regie", "de"),
+      channel(1, "FOH", "en"),
+      channel(2, "Licht", "de"),
+    ];
+
+    expect(usedLanguages(channels)).toEqual(["de", "en"]);
+  });
+
+  it("is empty for a setup with no channels", () => {
+    expect(usedLanguages([])).toEqual([]);
   });
 });

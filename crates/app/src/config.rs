@@ -102,8 +102,31 @@ pub struct Profile {
     /// mismatch. A stored device that is not currently connected is kept and
     /// marked in the UI, never silently replaced with whatever is plugged in.
     pub device: String,
+    /// The language a channel added to this profile starts on, and what the
+    /// picker above the channel list shows.
+    ///
+    /// Per profile rather than per machine: a house may run a German main
+    /// stage and an English touring production, and the thing this presets —
+    /// the channel map — belongs to the profile too. Every channel still
+    /// carries its own language; this only decides what a new one is born
+    /// with.
+    ///
+    /// `#[serde(default)]` because a file written before this existed has no
+    /// such field, and its profiles must keep loading.
+    #[serde(default = "default_language")]
+    pub language: String,
     pub channels: Vec<StoredChannel>,
     pub groups: Vec<StoredGroup>,
+}
+
+/// What a profile without a stored default language falls back to.
+///
+/// The only place in the backend that names a language at all. It is a
+/// starting point for a new channel, never a constraint: the picker is fed
+/// from whisper's own list (see `list_languages`), and any of the hundred
+/// entries there can be chosen.
+fn default_language() -> String {
+    "de".to_string()
 }
 
 /// The whole configuration file.
@@ -324,6 +347,7 @@ mod tests {
                 Profile {
                     name: "Probebühne".into(),
                     device: "Scarlett 2i2".into(),
+                    language: "de".into(),
                     channels: vec![StoredChannel {
                         channel: 0,
                         label: "Regie".into(),
@@ -335,6 +359,7 @@ mod tests {
                 Profile {
                     name: "Grosses Haus".into(),
                     device: "MADIface".into(),
+                    language: "en".into(),
                     channels: vec![
                         StoredChannel {
                             channel: 0,
@@ -483,6 +508,10 @@ mod tests {
         assert_eq!(loaded.model, None);
         assert_eq!(loaded.vad_model, None);
         assert_eq!(loaded.model_path, None);
+        // Same for the profile's default language, which the file predates: a
+        // profile without one has to keep loading, on the default rather than
+        // on an empty string that would make a new channel languageless.
+        assert_eq!(loaded.profiles[0].language, "de");
         assert!(
             !dir.join("config.bad.json").exists(),
             "nothing was quarantined"

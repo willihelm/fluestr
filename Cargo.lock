@@ -4908,6 +4908,7 @@ dependencies = [
  "anyhow",
  "audio-core",
  "hound",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "whisper-protocol",
