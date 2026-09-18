@@ -77,6 +77,7 @@ for now, with the reason recorded in the package.
 | P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. No authentication — by decision |
 | P17 | Alert terms & visual attention | **Done** | — |
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
+| P19 | Rules: triggers and actions | **Open** | Everything — generalises P17's two hard-wired reactions into triggers and actions, with MIDI and webhooks as later actions |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -948,6 +949,11 @@ add. The browser viewer highlights the same characters and, having no window to
 ask the platform about, makes the rest of the request with its own surface and
 tab title.
 
+Both of these reactions are hard-wired: a term always highlights and asks for
+attention, a view's setting always floods. P19 is the generalisation — the
+trigger and what it does become separate things — and it subsumes this package
+rather than extending it.
+
 ### P16 — LAN remote client — **Partial**
 
 The operator can optionally enable a local-network client from Settings. The
@@ -1169,6 +1175,99 @@ that only real hardware can confirm — and it should be answered on the target
 interface early, because the answer decides whether the opt-in ASIO route is a
 corner case or the normal one.
 
+### P19 — Rules: triggers and actions — **Open**
+
+**What it is.** One list of **rules**, each a *trigger* and one or more
+*actions*, replacing the two hard-wired reactions the app has today. A rule is
+written on the Settings page, stored in `config.json`, and evaluated once per
+transcript wherever the reaction it asks for belongs.
+
+Today there are exactly two reactions and they are two different features. An
+alert term highlights its word and asks the platform for attention (P17); a
+view's **Flash on every new message** floods the window (P17). They are asked
+at different scopes — terms are global, flashing is per view — matched in
+different places, and cannot be combined or extended. The three things an
+operator asks for next are all outside that shape: *"Feuer, but only on the
+stage manager's channel"*, *"anything at all on channel 3"*, and *"when the
+inspector says Go, fire the cue"*. None of the three is a variation on the
+existing two; all three are the same shape once triggers and actions are
+separate things.
+
+**Triggers.** A word or phrase, with P17's matcher behind it unchanged —
+case-insensitive, NFC-normalised, whole-word, so `cue` still does not fire on
+`rescue`. A channel: any message on it. A group: any message from its members,
+which is what a view's flash setting is today, expressed once and usable by any
+action. Combinable, because the interesting rules are conjunctions: a phrase
+*and* a set of channels is the case that cannot be written today at all. A
+trigger fires per **bubble**, not per segment, which is P17's rule and the
+reason one sentence spoken across three segments is one event; a rule that
+fires an outbound action makes that difference load-bearing rather than merely
+tidy.
+
+**Actions, in the order they are worth building.**
+
+1. *Flash the window* — the flood that exists, become one action among several.
+2. *Highlight the match, ring the bubble* — the alert term's chat behaviour,
+   which only a word trigger can ask for.
+3. *Ask the platform for attention*, urgently or once — today's two requests.
+4. *Fire a MIDI cue.* The action the app is actually wanted for in a theatre:
+   a note or MSC message on a virtual port, which the desk already listens to.
+   Local, offline, and exactly the kind of thing an intercom phrase should be
+   able to start.
+5. *Call a webhook.* The general escape hatch, and the one that needs a
+   decision recorded before it is built — see the constraint below.
+
+**Where a rule runs, and why that is the hard part.** The two kinds of action
+have opposite homes, and the split has to be designed before the first rule is
+stored:
+
+- A *flash* is about a **view**. Which window flashes depends on what that
+  window is showing, which is why `ui/src/lib/attention.ts` decides it per
+  window today. Several windows may each answer for the same transcript, and
+  that is correct.
+- A *MIDI cue or a webhook* is about the **session**. It must fire exactly
+  once per matching bubble — not once per open window, not twice because the
+  LAN viewer is also connected, and not zero times because every window was
+  closed. That puts it in the backend, beside `app::alerts` in
+  `TauriEvents::transcript`, which is already the one place every view's copy
+  of an event comes from.
+
+So a rule is evaluated in both places against the same compiled list: the
+backend fires the outbound actions and tags the event with which rules matched;
+each view reads those tags and applies the visible ones by its own scope. The
+alternative — evaluating only in the frontend — makes a fired cue depend on
+which windows happen to be open, which is not a property a cue may have.
+
+**The constraint webhooks run into.** *Offline is a hard requirement* and the
+remote deliberately never leaves the local network (P16). A webhook is an
+outbound HTTP call from the machine holding crew communication, so it is not a
+setting like the others: it must be per rule, explicit about its destination,
+off unless written, and it must not be reachable through the LAN remote's
+configuration path without a decision about who may write one. MIDI has none of
+this problem, which is the other reason it comes first.
+
+**Migration.** The existing configuration has to become rules without the
+operator rewriting it: each alert term becomes a word trigger with the
+highlight and attention actions; each view with flashing on becomes a
+group trigger with the flash action. The all-channels view's flag becomes a
+rule with no channel restriction. Nothing is lost and nothing has to be
+re-entered, which also means P17's Settings sections are replaced by one
+editor rather than kept beside it.
+
+**Accepted when:** a rule saying "Go on the inspector's channel" flashes one
+window and fires one MIDI cue, once, with two group windows and a browser
+viewer open; a rule with a channel trigger and no word fires on every bubble
+from that channel; deleting a channel leaves no rule pointing at nothing; and
+an existing `config.json` from P17 comes back as the equivalent rules.
+
+**Risk:** a rule with a channel trigger fires on every bubble, which on a busy
+talkback is several per minute — fine for a flash, potentially a flood of MIDI
+or HTTP. Rate limiting per rule is part of the package, not an afterthought,
+and the defaults for it are one of the numbers P12 should be exposing rather
+than hard-coding. The second risk is the editor: triggers, conjunctions and
+actions are a small language, and a settings page that renders it badly is how
+a feature this general goes unused.
+
 ---
 
 ## Dependencies
@@ -1185,6 +1284,8 @@ P0 Scaffolding
                                        v
                             P6 Tauri API (commands/events)
                               ├─> P17 Alert terms ──> P7 Chat UI ──> P8 Health/levels ──> P9 Search/filter
+                              │        │
+                              │        └─> P19 Rules (triggers/actions)
                               │
                               └─> P16 LAN remote client   (P10 SQLite: deferred)
                                        │
@@ -1195,6 +1296,10 @@ P0 Scaffolding
                                        v
                                  P18 Windows port
 ```
+
+P19 hangs off P17 because it generalises it rather than adding to it: the
+matcher, the per-bubble counting and the two reactions all become one case of a
+rule, and its outbound actions need P12's file to write them down in.
 
 P18 hangs below everything because it reopens three packages rather than
 following them: P1's capture, P4's GPU backend and P13's packaging, each for a
