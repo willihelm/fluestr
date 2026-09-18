@@ -24,7 +24,7 @@
 
   import ChatList from "./ChatList.svelte";
   import StreamMeters from "./StreamMeters.svelte";
-  import { visibleStreams, type Group } from "./groups";
+  import { viewStreams, visibleStreams, type Group } from "./groups";
   import { fromStoredConfig } from "./profiles";
   import { mergeHistory, toBubbles } from "./bubbles";
   import { attentionFor } from "./attention";
@@ -106,6 +106,7 @@
         : visibleStreams(target, channels)!,
   );
   let shown = $derived(messages.filter((m) => visible.has(m.streamId)));
+  let searchable = $derived(viewStreams(channels, visible));
   // While a session runs this is the backend's own answer rather than the UI's
   // copy of the setup — the authoritative mapping, and the two would differ the
   // moment the device is swapped under a running session. Only meaningful
@@ -343,6 +344,7 @@
       {colors}
       starts={sessionStarts}
       flash={target?.flash === true}
+      streams={searchable}
     />
   {/if}
 </main>

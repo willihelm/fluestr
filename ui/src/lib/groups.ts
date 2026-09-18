@@ -112,3 +112,17 @@ export const visibleStreams = (
   });
   return streams;
 };
+
+/// The channels of one view, in stream order, for the chat's channel filter
+/// (P9).
+///
+/// The stream id is the channel's position in the profile, which is how the
+/// backend assigns it (`SessionConfig::streams`) and how every event names it.
+/// `visible` is the group's set, or `null` for the all-channels view.
+export const viewStreams = (
+  channels: Channel[],
+  visible: Set<number> | null,
+): { streamId: number; label: string }[] =>
+  channels
+    .map((channel, streamId) => ({ streamId, label: channel.label }))
+    .filter(({ streamId }) => visible === null || visible.has(streamId));

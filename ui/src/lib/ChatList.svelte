@@ -3,7 +3,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import type { TranscriptEvent } from "./bridge";
   import { toBubbles, type Bubble } from "./bubbles";
-  import { pieces } from "./alerts";
+  import { findAll, matches, split } from "./search";
 
   /// How many bubbles are in the DOM at once, and how many more each step back
   /// through the history adds.
@@ -39,17 +39,74 @@
     /// *is* looking at the chat, at eight interleaved channels, is exactly who
     /// needs to be told which line is the new one.
     flash: boolean;
+    /// The channels this view shows, in stream order, for the channel filter
+    /// (P9). Handed down rather than derived from the bubbles: a channel that
+    /// has not spoken yet is still one an operator may want to sit on, and a
+    /// picker whose entries appear as people talk is a picker that moves under
+    /// the cursor.
+    streams: { streamId: number; label: string }[];
   }
 
-  let { messages, colors, starts, flash }: Props = $props();
+  let { messages, colors, starts, flash, streams }: Props = $props();
+
+  // --- Search and filter (P9) ---------------------------------------------
+  //
+  // All of it local to this component, and that is the design rather than an
+  // implementation detail: every view onto the chat mounts its own, so the
+  // operator at the desk, the one at a detached group window and every browser
+  // on the LAN (P16) search independently. Nothing here is emitted, saved or
+  // sent anywhere — see `search.ts`.
+  //
+  // It also means the feature comes with the component: a view that renders
+  // the chat can search it, and there is no second place to add it to.
+
+  let query = $state("");
+  /// Only the lines that match, rather than the whole chat with the hits
+  /// marked. The two readings of one box — "did anyone mention this" wants the
+  /// chat around the answer, "let me watch for this" wants only the answer —
+  /// and an operator switches between them mid-question.
+  let onlyMatches = $state(false);
+  /// One channel of this view, or `null` for all of them.
+  let stream = $state<number | null>(null);
+  /// Which hit the ↑/↓ buttons are on, as a position in `hits`.
+  let focus = $state(0);
+
+  let searching = $derived(query.trim() !== "");
 
   // Consecutive segments of the same channel are one bubble; see
   // [`toBubbles`] for where a bubble ends.
   let bubbles = $derived(toBubbles(messages));
 
+  /// The chat as this view has narrowed it: one channel, and under the toggle
+  /// only the lines that match.
+  ///
+  /// The window, the "N earlier" button and the follow-to-the-bottom effect
+  /// all work on this rather than on `bubbles`, so a filtered chat scrolls and
+  /// pages like any other — there is no second reading mode to maintain.
+  let listed = $derived(
+    bubbles.filter(
+      (b) =>
+        (stream === null || b.streamId === stream) &&
+        (!onlyMatches || !searching || matches(b.text, query)),
+    ),
+  );
+
+  /// Where the hits are, as positions in `listed`.
+  ///
+  /// By line and not by occurrence: ↑ and ↓ move the view, and two hits in one
+  /// bubble are one place to look. The count says "lines" so it cannot be
+  /// misread as the number of times the word was said.
+  let hits = $derived(
+    searching
+      ? listed.flatMap((b, index) => (matches(b.text, query) ? [index] : []))
+      : [],
+  );
+
   let limit = $state(PAGE);
-  let shown = $derived(bubbles.slice(Math.max(0, bubbles.length - limit)));
-  let hidden = $derived(bubbles.length - shown.length);
+  let shown = $derived(listed.slice(Math.max(0, listed.length - limit)));
+  let hidden = $derived(listed.length - shown.length);
+  /// The bubble the ↑/↓ buttons are sitting on, by key, or `null`.
+  let focused = $derived(searching ? (listed[hits[focus]]?.key ?? null) : null);
 
   const colorOf = (streamId: number) => colors.get(streamId) ?? "var(--accent)";
 
@@ -100,6 +157,71 @@
     await tick();
     if (container) container.scrollTop += container.scrollHeight - before;
   };
+
+  /// Brings the hit at `focus` onto the screen (P9).
+  ///
+  /// The window is the reason this is not one line. The list renders the last
+  /// `limit` bubbles, and a hit an hour back is simply not in the DOM — so the
+  /// window is first grown far enough to contain it, rounded up to whole pages
+  /// so that repeated jumps backwards do not re-render on every step. This is
+  /// what the window was always going to need: reaching a point an hour back by
+  /// scrolling takes several steps, and jumping to it takes none.
+  const reveal = async () => {
+    const index = hits[focus];
+    if (index === undefined || !container) return;
+
+    // Landing on a line in the middle of the history is the operator reading
+    // back, so the view stops chasing the bottom. They get it back with "Jump
+    // to latest", which is the same way they get it back from scrolling up.
+    following = false;
+
+    const needed = listed.length - index;
+    if (needed > limit) limit = Math.ceil(needed / PAGE) * PAGE;
+    await tick();
+
+    // `block: "center"` rather than "nearest": a hit scrolled to the very edge
+    // of the viewport is found and then has to be found again.
+    container
+      ?.querySelector('[data-focused="true"]')
+      ?.scrollIntoView({ block: "center" });
+  };
+
+  /// Steps to the next or previous line that matches, wrapping round.
+  ///
+  /// Wrapping rather than stopping at the end: the count beside the buttons
+  /// says how many there are, so an operator who passes the last one has been
+  /// told where they are, and being unable to get back to the first without
+  /// retyping the query would be the worse of the two surprises.
+  const jump = (delta: number) => {
+    if (hits.length === 0) return;
+    focus = (focus + delta + hits.length) % hits.length;
+    void reveal();
+  };
+
+  // A new query starts at the *last* hit — the most recent thing said that
+  // matches. "Did anyone mention the fly bar" is nearly always asking about
+  // this evening rather than about the top of the chat, and ↑ from there walks
+  // backwards through the history, which is the direction the question runs in.
+  //
+  // Only when the query itself changed. Recomputing on every arriving line
+  // would drag the view back to a hit each time somebody spoke, which is the
+  // one thing a search must not do to a chat that is still filling.
+  let searched: string | null = null;
+  $effect(() => {
+    const current = query;
+    untrack(() => {
+      if (current === searched) return;
+      searched = current;
+      focus = Math.max(0, hits.length - 1);
+      if (hits.length > 0) void reveal();
+    });
+  });
+
+  // A hit that scrolled out of reach — the chat was cleared, the filter
+  // narrowed — must not leave the buttons pointing past the end of the list.
+  $effect(() => {
+    if (focus >= hits.length) focus = Math.max(0, hits.length - 1);
+  });
 
   const onScroll = () => {
     if (!container) return;
@@ -211,9 +333,79 @@
   };
 </script>
 
+<!-- The search bar belongs to this view and to no other (P9). Above the list
+     rather than in the window header, because the header is Start, Stop and
+     the session — things that act on the whole app — and this acts on what is
+     below it. -->
+<div class="search">
+  <!-- Enter steps to the next match and Shift+Enter to the previous one, which
+       is what a search box does everywhere else; Escape clears it and gives
+       the chat back. Without them the only way to walk a search is to take a
+       hand off the keyboard for two small buttons, in a room where the other
+       hand is on a fader. -->
+  <input
+    type="search"
+    class="query"
+    placeholder="Search this view"
+    aria-label="Search the chat"
+    bind:value={query}
+    onkeydown={(e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        jump(e.shiftKey ? -1 : 1);
+      } else if (e.key === "Escape") {
+        query = "";
+      }
+    }}
+  />
+
+  {#if streams.length > 1}
+    <!-- Only when there is a choice to make. On a single-channel view a picker
+         reading "All channels" over one channel is furniture. -->
+    <select class="channel" aria-label="Limit to one channel" bind:value={stream}>
+      <option value={null}>All channels</option>
+      {#each streams as option (option.streamId)}
+        <option value={option.streamId}>{option.label || "Stream " + option.streamId}</option>
+      {/each}
+    </select>
+  {/if}
+
+  {#if searching}
+    <span class="count" aria-live="polite">
+      {hits.length === 0
+        ? "no matches"
+        : `${focus + 1} of ${hits.length} ${hits.length === 1 ? "line" : "lines"}`}
+    </span>
+
+    <button
+      class="step"
+      onclick={() => jump(-1)}
+      disabled={hits.length === 0}
+      title="Previous match">↑</button
+    >
+    <button
+      class="step"
+      onclick={() => jump(1)}
+      disabled={hits.length === 0}
+      title="Next match">↓</button
+    >
+
+    <label class="only">
+      <input type="checkbox" bind:checked={onlyMatches} />
+      Only matches
+    </label>
+  {/if}
+</div>
+
 <div class="chat" bind:this={container} onscroll={onScroll}>
   {#if messages.length === 0}
     <p class="empty">Nothing transcribed yet. Speak into one of the channels.</p>
+  {:else if listed.length === 0}
+    <!-- The chat is not empty, the view is — which is a different thing to be
+         told, because it has a cause the operator can undo. -->
+    <p class="empty">
+      Nothing here matches. Clear the search or widen it to see the chat again.
+    </p>
   {/if}
 
   {#if hidden > 0}
@@ -229,6 +421,8 @@
   {#each shown as bubble (bubble.key)}
     <article
       class:arriving={arriving.has(bubble.key)}
+      class:focused={bubble.key === focused}
+      data-focused={bubble.key === focused}
       onanimationend={() => arriving.delete(bubble.key)}
       style="--channel: {colorOf(bubble.streamId)}"
     >
@@ -247,7 +441,7 @@
            On one line on purpose — Svelte keeps the whitespace between the
            pieces, and an indented loop body would put a line break into the
            middle of every highlighted word. -->
-      <p>{#each pieces(bubble.text, bubble.alerts) as piece}{#if piece.alert}<mark>{piece.text}</mark>{:else}{piece.text}{/if}{/each}</p>
+      <p>{#each split(bubble.text, bubble.alerts, findAll(bubble.text, query)) as piece}{#if piece.alert || piece.hit}<mark class:hit={piece.hit} class:alert={piece.alert}>{piece.text}</mark>{:else}{piece.text}{/if}{/each}</p>
     </article>
   {/each}
 </div>
@@ -345,6 +539,93 @@
     border-radius: 0.15rem;
     padding: 0 0.1rem;
     font-weight: 600;
+  }
+
+  /* A search hit, which is not an alert and must not look like one (P9). The
+     alert amber is the house's standing rule and is meant to be recognised
+     across the room; this is the operator's own question of the moment, so it
+     is the interface's own accent rather than a second warning colour. A piece
+     that is both keeps the amber — the standing rule is the louder of the two
+     and is what someone glancing over should still see. */
+  mark.hit:not(.alert) {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* The line the ↑/↓ buttons are on. A ring and not a fill: the bubble already
+     carries its channel's colour and its own highlights, and the one thing
+     still to say is "this is the one you were brought to". */
+  article.focused {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* --- The search bar (P9) ---------------------------------------------- */
+
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--border);
+    /* Never scrolls away with the chat: the box is how the operator got to
+       where they are, and it has to stay reachable from there. */
+    flex: none;
+  }
+
+  .query {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .query,
+  .channel {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.25rem 0.4rem;
+    font: inherit;
+    font-size: 0.85rem;
+  }
+
+  .count {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    /* Wide enough for "12 of 148 lines" so the buttons beside it do not move
+       under the cursor as the count changes while typing. */
+    min-width: 7rem;
+    text-align: right;
+  }
+
+  .step {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.1rem 0.45rem;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .step:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .step:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .only {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    cursor: pointer;
   }
 
   /* The arrival flash: bright for a moment, then the bubble it was. Long

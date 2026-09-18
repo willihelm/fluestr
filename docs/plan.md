@@ -64,9 +64,9 @@ for now, with the reason recorded in the package.
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
 | P6 | Tauri API | **Done** | `search_session` decided against — search is per view, see below |
-| P7 | Chat UI | **Partial** | The list is a window, not a jump to an arbitrary position |
+| P7 | Chat UI | **Done** | — |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
-| P9 | Live search & filter | **Open** | Was specified on P10's FTS index, which is not coming — needs a decision on what it searches instead |
+| P9 | Live search & filter | **Done** | Per view, over what the window holds. No time-range filter |
 | P10 | SQLite persistence | **Deferred** | Set aside by the user: this is about live communication, not persistence |
 | P11 | Model manager | **Done** | — |
 | P12 | Settings & presets | **Partial** | Profiles, default language and stable device id are stored; every threshold is still a constant in the code |
@@ -85,9 +85,10 @@ than refused, and what decides how many channels keep up is how many decodes
 run at once, which is an operator's to set on the Models page.
 Around it: a Settings page holding the device, the channel map — whose labels
 and languages can be changed while the session runs, without stopping capture —
-the global vocabulary, the global alert terms and the groups; a chat page with a group
-sidebar that narrows the view and detaches any group — or everything — into a
-window of its own; profiles that come back at the next start, keyed on an
+the global vocabulary, the global alert terms and the groups; a chat page with a
+group sidebar that narrows the view and detaches any group — or everything —
+into a window of its own, and a search that narrows it further to one channel or
+one word without any of that reaching the other screens; profiles that come back at the next start, keyed on an
 interface the app recognises after a rename; a model manager that brings a
 fresh machine to its first transcription without a terminal; and, optionally,
 the same UI served to a browser on the local network as a full peer.
@@ -413,7 +414,7 @@ in the frontend.
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
 it belongs with the P14 load test.
 
-### P7 — Chat UI (Svelte) — **Partial**
+### P7 — Chat UI (Svelte) — **Done**
 
 Two pages. **Settings** holds the input device, the editable channel list
 (device channel, label, language, colour), the global vocabulary, the alert
@@ -571,9 +572,10 @@ displayed transcript in every open window ✔ and leaves configuration intact �
 opening a group in its own window shows the same existing and incoming messages
 limited to that group's channels, without a second capture session ✔.
 
-**Outstanding:** a one-click language override on a running stream (beyond the
-MVP line). The list can only be walked backwards a page at a time, so jumping
-to an arbitrary position needs P9's search to drive it.
+Both of what this owed is now in: a running stream's language (and its label)
+can be changed from the channel list without stopping capture — P6's
+`update_stream_config` — and the list is no longer only walkable backwards a
+page at a time, because P9's search grows the window to whatever it jumps to.
 
 ### P8 — Levels & stream health — **Partial**
 
@@ -607,16 +609,73 @@ throughput. `WorkerPool` already exposes `workers()` and `queue_depth()`.
 **Accepted when:** a deliberately clipped channel and a silent one are both
 immediately recognisable in the UI.
 
-### P9 — Live search & filter — **Open**
+### P9 — Live search & filter — **Done**
 
-**Needs respecifying.** It was full-text search over the stored session (SQLite
-FTS5), which P10's deferral removes. What is left to search is the messages the
-window is holding — a smaller job, and one that runs into the chat's DOM
-window, since a hit may lie outside the rendered range. Filters for streams and
-time range are unaffected.
+**Respecified after P10 was set aside.** It was full-text search over the
+stored session (SQLite FTS5); what it is now is a search over the messages the
+window is holding, which is the whole chat — every view is caught up from
+`session_snapshot` and then fed by `transcript`, so nothing has to be fetched
+to search it.
+
+**It belongs to the view and to nothing else.** The chat is shared — the desk,
+a detached group window and every browser served over the LAN are looking at
+the same lines — but a search is one person's question of it, and pushing it
+onto the other screens would put one operator's filter in front of everyone
+else's show. So it is frontend state in `ChatList`, emitted nowhere and stored
+nowhere, and `search_session` was decided against in P6 for the same reason.
+That it lives in the component is also why every view has it: a window that
+renders the chat can search it, and there is no second place to add it to.
+
+**One box, two readings**, because an operator switches between them in the
+middle of a question. Typing marks the hits and leaves the chat around them —
+"did anyone mention the fly bar" wants the sentences either side of the answer.
+The *only matches* toggle throws the rest away — "let me watch for this word"
+wants nothing else on screen. Beside them, a channel picker narrows the view to
+one of its channels, which is the other half of "search in any channel": the
+group sidebar already narrows to a group, this narrows inside one.
+
+**Matching is the alert list's rule minus the whole-word requirement.**
+Case-insensitive, NFC-normalised, so "Bühne", "BÜHNE" and the decomposed
+spelling of either are one word — the same fold the backend's matcher uses
+(`crates/app/src/alerts.rs`), because two matchers that disagreed about an
+umlaut would highlight a word for the house's alert list and not for the
+operator looking for it. Whole words are *not* required, and that difference is
+deliberate: an alert fires by itself and a false one teaches the operator to
+ignore the next, while a search is read by the person who just typed it, so
+"Bühne" finding "Bühnenmeister" is the answer they wanted.
+
+The offsets survive the folding because the fold is done one cluster at a time
+and each unit of the folded form remembers where its cluster began. Without
+that map a decomposed umlaut earlier in the line moves every later highlight
+onto the wrong characters — which is exactly the line this house's transcripts
+are full of.
+
+**A hit an hour back is not in the DOM**, which is the one place this runs into
+P7's window. ↑ and ↓ therefore grow the window to whole pages until the line is
+in it, and then scroll to it — so the window's cost, that a point an hour back
+takes several steps of scrolling to reach, is paid by a search that takes none.
+Landing there stops the view chasing the bottom, exactly as scrolling up does,
+and "Jump to latest" is how it is given back. Enter and Shift+Enter step, and
+Escape clears: the other hand is on a fader.
+
+**Both kinds of highlight share one string.** An alert term is the house's
+standing rule and a hit is this operator's current question; a word can be
+both, and the line is cut at every boundary of either so that neither has to be
+dropped. A piece that is both keeps the alert amber — it is the louder of the
+two, and what somebody glancing across the room should still see.
+
+**No time-range filter.** The plan named one and it was not built: the channel
+picker and the query are what the question is actually asked in, and a
+from/to pair on a chat that is read as a chronology is a fourth control to
+maintain for something ↑ and ↓ already do. Worth adding if an operator asks for
+it; not worth guessing at.
 
 **Accepted when:** incremental search while typing, with highlighting and a
-jump into the chat position, over a session of realistic length.
+jump into the chat position, over a session of realistic length. *Met — checked
+against 600 bubbles: the hit count follows every keystroke, stepping to the
+oldest of 86 hits grew the window from 200 to 600 bubbles and put the line in
+the viewport, and the channel picker and the only-matches toggle narrow the
+list as specified.*
 
 ### P10 — SQLite persistence — **Deferred**
 
@@ -1032,12 +1091,12 @@ In this order, with the reason each one comes where it does.
 3. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel. The control exists and is global; what is missing is the
    evidence that any particular list is better than another.
-4. **P9, respecified.** What it becomes is a search over what the window holds,
-   which runs into the chat's DOM window. Worth deciding before it is built.
-5. **The remote, on a real network.** P16 has not had a second machine, a house
+4. **The remote, on a real network.** P16 has not had a second machine, a house
    network and somebody working from it. That comes before authentication —
    the obvious next thing to want, and the wrong thing to build against an
    arrangement nobody has used yet.
+5. **P13, packaging and signing.** With P6, P7, P9 and P17 in, what is left
+   between this and a machine that is not this one is a notarised build.
 
 ## Whole-system verification
 
@@ -1053,7 +1112,11 @@ In this order, with the reason each one comes where it does.
    3. Select a third language in the setup and put a stream on it — from the
       picker, without a code change.
 4. Overdrive one channel and leave another silent → P8 shows both.
-5. Enter a search term → hits across all streams, jumping works (P9).
+5. Enter a search term → the hits are marked across every stream in the view,
+   ↑ and ↓ walk them and reach one from the top of a long session, "only
+   matches" leaves the rest out, and the channel picker narrows to one of them.
+   None of it changes what a second window or a browser on the LAN is showing
+   (P9).
 6. `kill -9` a sidecar → the app keeps running, the worker comes back.
 7. On a machine that has never run this: no model, and the Settings page says
    so and offers the download. Fetch it, interrupt it, resume it, then

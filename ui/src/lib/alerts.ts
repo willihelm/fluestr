@@ -8,7 +8,10 @@
 // up to the first term with an umlaut in it.
 //
 // The offsets are UTF-16 code units, which is what `slice` counts — so they
-// are used exactly as they arrive.
+// are used exactly as they arrive. Drawing them over a line is `search.ts`'
+// job, together with the hits of whatever the operator is looking for (P9):
+// the two kinds of highlight land on one string and are cut out of it in one
+// pass.
 
 import type { AlertMatch } from "./bridge";
 
@@ -45,41 +48,6 @@ export const cleanTerms = (terms: string[]): string[] => {
 /// recompile a reordered list than to explain when it does not matter.
 export const sameTerms = (a: string[], b: string[]): boolean =>
   a.length === b.length && a.every((term, i) => term === b[i]);
-
-/// One piece of a transcript on its way into the DOM.
-export interface Piece {
-  text: string;
-  /// Whether this piece is an alert term and gets the highlight.
-  alert: boolean;
-}
-
-/// Splits a line into highlighted and plain pieces.
-///
-/// Defensive about the ranges rather than trusting them: they were matched
-/// against the text of *one segment*, and a bubble is several segments joined
-/// (see `bubbles.ts`). A range that survived a re-grouping bug as an offset
-/// into the wrong string must cost a highlight, never the line itself — the
-/// text is why the chat exists.
-export const pieces = (text: string, alerts: AlertMatch[]): Piece[] => {
-  if (alerts.length === 0) return [{ text, alert: false }];
-
-  const result: Piece[] = [];
-  let at = 0;
-
-  for (const { start, end } of alerts) {
-    const from = Math.max(at, Math.min(start, text.length));
-    const to = Math.max(from, Math.min(end, text.length));
-    if (to === from) continue;
-
-    if (from > at) result.push({ text: text.slice(at, from), alert: false });
-    result.push({ text: text.slice(from, to), alert: true });
-    at = to;
-  }
-
-  if (at < text.length) result.push({ text: text.slice(at), alert: false });
-
-  return result;
-};
 
 /// The same ranges, moved along by `offset` code units.
 ///
