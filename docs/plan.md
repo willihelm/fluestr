@@ -867,6 +867,40 @@ documented.
 quiet room. Real intercom traffic with noise, compression and crosstalk will do
 worse. The numbers are an upper bound, not a promise.
 
+**The cheapest latency experiment, and the one to run first.** The ~330 ms is
+measured from the *end* of a segment, which is not what anybody waits for. What
+an operator waits for is `silence_timeout` plus however long the speaker keeps
+going — bounded by `max_segment`, so the worst case is six seconds of talking
+before a word of it is readable. Both numbers are constants today (P12), and
+both are cheap to sweep: 500 → 300 → 200 ms of silence, 6 → 4 → 2 s of ceiling,
+over the fixture set, recording the time from the last spoken word to the text
+appearing *and* the word error rate for each pair. Shorter forced segments cost
+accuracy — whisper is trained on 30 s windows and degrades badly below about
+two seconds of audio, which is where the `[BREAK]` and the invented sentences
+come from — so the sweep is not looking for a better default. It is measuring
+the exchange rate between latency and accuracy, which is the thing nobody here
+knows and every later decision about responsiveness rests on.
+
+Two couplings will corrupt the result if they are not accounted for first:
+
+- **`flush_window_frames` is derived from `silence_frames`** (segmenter.rs).
+  Lowering the timeout also shrinks the window in which a forced cut looks for
+  the quietest frame, so a single number moves two behaviours. Decouple them
+  before the sweep, or the accuracy column measures both at once.
+- **`SileroVad` fails open**, so the counter only advances on a frame the model
+  confidently calls silence (P3). A lower timeout buys the shorter wait only
+  where the detector is decisive, and the fixture set should therefore include
+  material where it is not.
+
+It comes before any work on streaming partial hypotheses — re-decoding a
+growing buffer and committing only what two successive decodes agree on, the
+LocalAgreement policy. That approach can deliver text while somebody is still
+speaking, but because whisper's encoder always runs on a padded 30 s window, a
+one-second partial costs about as much as a six-second segment: it multiplies
+decoder load per stream and would be the first thing to break the P5 budget.
+Paying that is only justified if the exchange rate measured here turns out to
+be bad. If it is good, the same responsiveness is a changed constant.
+
 ### P15 — Vocabulary & prompt management — **Partial**
 
 Today: **one** free-text vocabulary on the Settings page, applied to every
@@ -1336,7 +1370,9 @@ In this order, with the reason each one comes where it does.
    segmenter's `silence_timeout` and `max_segment` are still constants. They
    come *after* step 1 on purpose: exposing a number as a setting fixes the
    default somebody will keep, and the current defaults are single-stream
-   guesses.
+   guesses. The latency/accuracy sweep described under P14 is what turns the
+   two segmenter constants from guesses into a measured trade-off, and it needs
+   step 1's fixture set to run at all.
 3. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel. The control exists and is global; what is missing is the
    evidence that any particular list is better than another.
