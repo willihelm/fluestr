@@ -10,8 +10,11 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-18, after Unicode normalisation closed
-P17 and P18 was written up — the Windows port, which moved out of
+**Status of this document:** 2026-09-18, after P19's rules landed — triggers
+and actions, which subsume P17's alert terms and flash flags and migrate an
+existing `config.json` into them; its two outbound actions, a MIDI cue and a
+webhook, are what is left of the package. Before that, Unicode normalisation
+closed P17 and P18 was written up — the Windows port, which moved out of
 *Deliberately out of scope* and into a package of its own. P10 (SQLite
 persistence) was set aside the same day; see the package for what that costs. P3b (language stabiliser) was dropped with the auto mode it
 existed for — see *Deliberately out of scope*. This revision keeps what still
@@ -45,7 +48,7 @@ architectural decisions look arbitrary without them.
 | Frontend | **Svelte + TypeScript** |
 | Whisper | **Sidecar process** (crash-isolated), pool of workers |
 | Models | **Downloaded on first start**, selectable in settings |
-| UI scope, MVP | Chat view with a group sidebar, live search and filter, levels and stream health, vocabulary editor, global alert terms with visual attention, a separate Settings page for channel setup, and an optional read-only LAN viewer in a browser |
+| UI scope, MVP | Chat view with a group sidebar, live search and filter, levels and stream health, vocabulary editor, rules with visual attention, a separate Settings page for channel setup, and an optional read-only LAN viewer in a browser |
 | Not in the MVP | Export, markers, diarisation, cloud, interactive multi-user control |
 
 ---
@@ -65,7 +68,7 @@ for now, with the reason recorded in the package.
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
 | P6 | Tauri API | **Done** | `search_session` decided against — search is per view, see below |
-| P7 | Chat UI | **Done** | — |
+| P7 | Chat UI | **Partial** | Configurable chat sort direction (newest at top or bottom) |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Done** | Per view, over what the window holds. No time-range filter |
 | P10 | SQLite persistence | **Deferred** | Set aside by the user: this is about live communication, not persistence |
@@ -75,9 +78,9 @@ for now, with the reason recorded in the package.
 | P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
 | P15 | Vocabulary & prompt management | **Partial** | One global box, stored, but not named lists and not measured against a baseline |
 | P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. No authentication — by decision |
-| P17 | Alert terms & visual attention | **Done** | — |
+| P17 | Alert terms & visual attention | **Done** | Subsumed by P19: the terms and the flash flags are rules now, and an existing file is migrated into them |
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
-| P19 | Rules: triggers and actions | **Open** | Everything — generalises P17's two hard-wired reactions into triggers and actions, with MIDI and webhooks as later actions |
+| P19 | Rules: triggers and actions | **Partial** | The two outbound actions: a MIDI cue, and a webhook with the decision its offline constraint needs |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -88,7 +91,7 @@ than refused, and what decides how many channels keep up is how many decodes
 run at once, which is an operator's to set on the Models page.
 Around it: a Settings page holding the device, the channel map — whose labels
 and languages can be changed while the session runs, without stopping capture —
-the global vocabulary, the global alert terms and the groups; a chat page with a
+the global vocabulary, the groups and the rules that fire on them; a chat page with a
 group sidebar that narrows the view and detaches any group — or everything —
 into a window of its own, and a search that narrows it further to one channel or
 one word without any of that reaching the other screens; profiles that come back at the next start, keyed on an
@@ -380,7 +383,7 @@ value that arrives as `undefined` during a show.
 One thing the generation *changed*, rather than only restated: the bindings
 describe what the backend **sends**, and the backend fills every
 `#[serde(default)]` before it sends anything. So the fields the frontend used
-to treat as optional — a group's `flash`, a profile's `deviceId` — are not
+to treat as optional — a rule's `enabled`, a profile's `deviceId` — are not
 optional on the wire, and the tolerance for a file written by an older version
 lives in one place, in serde, where it is tested. The frontend's own fallbacks
 are now belt and braces, and the tests that build a short file say so in as
@@ -417,7 +420,7 @@ in the frontend.
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
 it belongs with the P14 load test.
 
-### P7 — Chat UI (Svelte) — **Done**
+### P7 — Chat UI (Svelte) — **Partial**
 
 Two pages. **Settings** holds the input device, the editable channel list
 (device channel, label, language, colour), the global vocabulary, the alert
@@ -445,10 +448,27 @@ scrollbar that lies. What it costs is that a point an hour back takes several
 steps to reach — which is what P9's search and its jump into the chat position
 are for.
 
+**Sort direction has a global default and local overrides.** The Chat section
+of Settings stores one application-wide default — **Newest at bottom** by
+default, or **Newest at top** — in `config.json`. A newly opened main window,
+group window or LAN browser starts with that direction. A control in the chat
+header may override it for that one view, and offers **Use global default** to
+return to the shared choice. The override lives in the view's local storage,
+like the sidebar width, so an operator can deliberately read one group in the
+opposite direction without changing every other screen.
+
+The underlying bubble sequence remains chronological in both modes — merging a
+continuing utterance therefore still has one unambiguous last bubble — while
+the renderer chooses which end appears first. In newest-at-bottom mode, older
+pages are added above and new bubbles arrive below; in newest-at-top mode those
+directions are mirrored. The follow edge and the “Jump to newest” button move
+with the newest edge, and an operator reading older communication keeps their
+scroll anchor when a new bubble arrives.
+
 **The Settings page is split by scope, not by topic.** Its scoped sections sit
 in a rail on the left under a heading naming what each belongs to: Audio and
 Groups under the *profile* (listed under the active profile's name), Vocabulary
-and Alerts under *all profiles*, Models under *this machine*. Scope is the
+and Alerts under *all profiles*, Chat and Models under *this machine*. Scope is the
 thing an operator gets wrong. Profiles sit first in the rail, above the scope
 headings, as a list with one row per setup — name, channel and group count,
 device, Duplicate and Delete — rather than a permanent strip across the top,
@@ -520,9 +540,10 @@ all-channels view** — a live view of its channels that receives history,
 transcripts, meters and session state from the shared backend and reflects
 later membership changes. It does not own a capture session, so Start/Stop
 stays global; closing it closes only that view. All channels is not a group, so
-what it remembers sits on the profile rather than in `groups`: it carries the
-same flash-on-message preference the groups do, and a pin that lasts as long as
-the window does.
+what it remembers sits on the profile rather than in `groups`: a pin that lasts
+as long as the window does. What it *reacts* to is no longer a preference of
+its own — a rule with no channel restriction is how "flash on everything" is
+written now (P19).
 
 **How it is one app in several windows.** The same bundle is mounted in every
 WebView, and the window's *label* says which view it is — `group-3` is the
@@ -575,6 +596,12 @@ history ✔; Clear all communication requires confirmation ✔, removes every
 displayed transcript in every open window ✔ and leaves configuration intact ✔;
 opening a group in its own window shows the same existing and incoming messages
 limited to that group's channels, without a second capture session ✔.
+The sort direction is still fixed to newest at bottom; the two-direction
+control and mirrored pagination/follow behaviour are outstanding.
+**It is accepted when additionally:** switching direction leaves the same
+bubbles visible in the inverse visual order, preserves the reading position,
+and makes new bubbles and “Jump to newest” use the selected edge in the main
+window, a detached group window and the LAN client independently.
 
 Both of what this owed is now in: a running stream's language (and its label)
 can be changed from the channel list without stopping capture — P6's
@@ -760,16 +787,15 @@ its first transcription — needs P13.
 ### P12 — Settings & configuration persistence — **Partial**
 
 **Accepted when:** a preset, including channel colours and non-exclusive group
-memberships, and the global vocabulary and alert terms survive a restart and a
-reconnect of the interface; each view's flash-on-message preference does too.
+memberships, and the global vocabulary survive a restart and a reconnect of the
+interface; the rules that fire on those channels and groups do too (P19).
 ✔ for the identity half — the reconnect is verified against real hardware in
 `capture_live.rs`, `#[ignore]`d because CI has no interface.
 
 **Done:** the presets, as **profiles**. `config.json` in the app's
 configuration directory holds a list of profiles — device, default language,
-channel map with labels, languages and colours, groups with their memberships
-and flash-on-message preference, and that preference for the all-channels view —
-plus the active vocabulary, alert terms, the
+channel map with labels, languages and colours, groups with their memberships,
+and the rules that fire on them (P19) — plus the active vocabulary, the
 remote block and which profile was last in use. It is read at startup and
 written on every edit after a short debounce; there is no Save button, because
 a setup an operator believes is stored and is not is worse than no persistence
@@ -983,10 +1009,16 @@ add. The browser viewer highlights the same characters and, having no window to
 ask the platform about, makes the rest of the request with its own surface and
 tab title.
 
-Both of these reactions are hard-wired: a term always highlights and asks for
-attention, a view's setting always floods. P19 is the generalisation — the
-trigger and what it does become separate things — and it subsumes this package
-rather than extending it.
+**Superseded by P19.** Both of these reactions were hard-wired — a term always
+highlighted and asked for attention, a view's setting always flooded — and P19
+took them apart into triggers and actions. The group flag's two halves survive
+as the two halves a rule now has: its channels are when the rule fires, its
+window is who is told. What is described above is still
+what the app *does*; what has changed is how it is asked for. The alert list
+and the two flash checkboxes are gone from Settings, replaced by one rules
+editor, and an existing `config.json` is migrated into the equivalent rules on
+the way in. The matcher in `crates/app/src/alerts.rs`, the UTF-16 ranges and
+the per-bubble counting are unchanged and are what P19 is built on.
 
 ### P16 — LAN remote client — **Partial**
 
@@ -1209,100 +1241,168 @@ that only real hardware can confirm — and it should be answered on the target
 interface early, because the answer decides whether the opt-in ASIO route is a
 corner case or the normal one.
 
-### P19 — Rules: triggers and actions — **Open**
+### P19 — Rules: triggers and actions — **Partial**
 
 **What it is.** One list of **rules**, each a *trigger* and one or more
-*actions*, replacing the two hard-wired reactions the app has today. A rule is
+*actions*, in place of the two hard-wired reactions the app had. A rule is
 written on the Settings page, stored in `config.json`, and evaluated once per
 transcript wherever the reaction it asks for belongs.
 
-Today there are exactly two reactions and they are two different features. An
-alert term highlights its word and asks the platform for attention (P17); a
-view's **Flash on every new message** floods the window (P17). They are asked
-at different scopes — terms are global, flashing is per view — matched in
-different places, and cannot be combined or extended. The three things an
-operator asks for next are all outside that shape: *"Feuer, but only on the
-stage manager's channel"*, *"anything at all on channel 3"*, and *"when the
-inspector says Go, fire the cue"*. None of the three is a variation on the
-existing two; all three are the same shape once triggers and actions are
-separate things.
+Before it there were exactly two reactions and they were two different
+features. An alert term highlighted its word and asked the platform for
+attention (P17); a view's **Flash on every new message** flooded the window
+(P17). They were asked at different scopes — terms global, flashing per view —
+matched in different places, and could not be combined or extended. The three
+things an operator asks for next were all outside that shape: *"Feuer, but only
+on the stage manager's channel"*, *"anything at all on channel 3"*, and *"when
+the inspector says Go, fire the cue"*. None of the three is a variation on the
+old two; all three are the same shape once triggers and actions are separate.
 
-**Triggers.** A word or phrase, with P17's matcher behind it unchanged —
-case-insensitive, NFC-normalised, whole-word, so `cue` still does not fire on
-`rescue`. A channel: any message on it. A group: any message from its members,
-which is what a view's flash setting is today, expressed once and usable by any
-action. Combinable, because the interesting rules are conjunctions: a phrase
-*and* a set of channels is the case that cannot be written today at all. A
-trigger fires per **bubble**, not per segment, which is P17's rule and the
-reason one sentence spoken across three segments is one event; a rule that
-fires an outbound action makes that difference load-bearing rather than merely
-tidy.
+**Done: the model, the evaluation, the editor and the migration.**
 
-**Actions, in the order they are worth building.**
+**Triggers** are a conjunction of two questions: *these words* (or any text)
+said on *these channels* (or any channel). The words go through P17's matcher
+unchanged — case-insensitive, NFC-normalised, whole-word, so `cue` still does
+not fire on `rescue`. An empty channel list is "every channel", which is what
+the all-channels flash flag became; an empty word list is "any text", which is
+what "anything at all on channel 3" needs. A trigger fires per **bubble**, not
+per segment — P17's rule, and the reason one sentence spoken across three
+segments is one event.
 
-1. *Flash the window* — the flood that exists, become one action among several.
-2. *Highlight the match, ring the bubble* — the alert term's chat behaviour,
-   which only a word trigger can ask for.
-3. *Ask the platform for attention*, urgently or once — today's two requests.
-4. *Fire a MIDI cue.* The action the app is actually wanted for in a theatre:
-   a note or MSC message on a virtual port, which the desk already listens to.
-   Local, offline, and exactly the kind of thing an intercom phrase should be
-   able to start.
-5. *Call a webhook.* The general escape hatch, and the one that needs a
-   decision recorded before it is built — see the constraint below.
+**A channel is an input; a group is a window**, and a rule says both
+separately. They were one list of "places" in the first cut of P19, and that
+was wrong in a way only the app showed: naming a group narrowed *when* a rule
+fired and said nothing about *who was told*, so a rule restricted to the stage
+manager's view still flooded every window that happened to show one of its
+channels — the main window included. Narrowing the trigger cannot narrow the
+audience. So the flash carries its own list: the **views** it is for, named by
+the group positions a group window is addressed by (`group-3`). A window
+floods when the channel is on screen *and* the flash was addressed to the view
+it currently is; the all-channels view is addressed only by a flash that names
+no view at all, which is the old "every window showing the channel" and still
+the default. The main window answers with whatever its sidebar has selected,
+because that is the view it is at that moment. The editor keeps the two in
+separate rows for the same reason the model does, and a group that is deleted
+switches off a rule addressed only to it rather than letting the flash widen
+to every window.
 
-**Where a rule runs, and why that is the hard part.** The two kinds of action
-have opposite homes, and the split has to be designed before the first rule is
-stored:
+**Actions, in the order they are worth building.** The first three are built.
+
+1. *Flash the window* — the flood that existed, now one action among several.
+2. *Highlight the match, ring the bubble* — the alert term's chat behaviour.
+   Only a rule with words can ask for it, and the editor disables the box on
+   one without: there would be nothing to mark.
+3. *Ask the platform for attention*, urgently or once — the old two requests,
+   now two actions that can be asked for separately.
+4. *Fire a MIDI cue.* **Open.** The action the app is actually wanted for in a
+   theatre: a note or MSC message on a virtual port, which the desk already
+   listens to. Local, offline, and exactly the kind of thing an intercom phrase
+   should be able to start. It is one arm of `rules::Action` and one match in
+   `Rules::evaluate`, because the evaluation was put where an action can fire
+   exactly once — see below.
+5. *Call a webhook.* **Open**, and still waiting on the decision recorded
+   below.
+
+**Where a rule runs.** The two kinds of action have opposite homes, and the
+split was designed before the first rule was stored:
 
 - A *flash* is about a **view**. Which window flashes depends on what that
-  window is showing, which is why `ui/src/lib/attention.ts` decides it per
-  window today. Several windows may each answer for the same transcript, and
-  that is correct.
+  window is showing *and* on which views the rule named. Several windows may
+  each answer for one transcript, and that is correct — but only the ones the
+  rule is for.
 - A *MIDI cue or a webhook* is about the **session**. It must fire exactly
   once per matching bubble — not once per open window, not twice because the
   LAN viewer is also connected, and not zero times because every window was
-  closed. That puts it in the backend, beside `app::alerts` in
-  `TauriEvents::transcript`, which is already the one place every view's copy
-  of an event comes from.
+  closed.
 
-So a rule is evaluated in both places against the same compiled list: the
-backend fires the outbound actions and tags the event with which rules matched;
-each view reads those tags and applies the visible ones by its own scope. The
-alternative — evaluating only in the frontend — makes a fired cue depend on
-which windows happen to be open, which is not a property a cue may have.
+So the rules are evaluated in `crates/app/src/rules.rs`, from
+`TauriEvents::transcript`, which is the one place every view's copy of an event
+comes from: it produces the highlight ranges and the list of actions the
+segment asked for, and both travel with the event. Each view then applies the
+*visible* ones by its own scope — `ui/src/lib/attention.ts` — and counts them
+per bubble, where the bubbles are: a group window's bubbles are not the main
+window's. That is also what makes the outbound actions a matter of adding an
+arm rather than a second mechanism. Evaluating only in the frontend would have
+made a fired cue depend on which windows happen to be open, which is not a
+property a cue may have.
 
-**The constraint webhooks run into.** *Offline is a hard requirement* and the
-remote deliberately never leaves the local network (P16). A webhook is an
+**Compiled on the way in.** A rule crosses the bridge with its channels
+already resolved to stream ids and its views reduced to group positions
+(`set_rules`), because groups exist only in the frontend — the backend has
+never had a notion of one — and a rule is evaluated against a stream id. The
+positions it never interprets: they ride back out with the event, and each
+window compares them with the view it is. The same argument as `set_alert_terms` before it applies
+to *when*: the rules are pushed when they change rather than read from the
+file, because the file is a debounce behind the rule just written, and a rule
+that starts working a second late is a rule nobody can tell is working. A rule
+narrowed to channels that have all been deleted is left out of what is sent
+rather than sent with an empty stream list, because "listens to nothing" and
+"listens to everything" must not look alike on the wire.
+
+**Rules live on the profile**, unlike the vocabulary and unlike the alert list
+they replace. A trigger names channels and groups, and neither exists outside a
+profile: a shared list could hold "anything on channel 3", and channel 3 is a
+different channel in the next production. The cost is that a word rule wanted
+everywhere is written in each profile, which is why the migration copies the
+old global terms into *every* profile rather than into the first.
+
+**Rate limiting is per rule**, stored and editable, zero by default. A channel
+trigger fires on every bubble, which on a busy talkback is several a minute:
+harmless for a highlight, and exactly the flood the outbound actions must not
+become. A rule inside its interval does nothing at all, including highlighting
+— "this rule is quiet for a second" is one state an operator can hold, and a
+rule that half-fires is two. The limit is spent by *firing*, not by being
+asked, so a channel nobody stops talking on cannot keep a word rule quiet for a
+word that was never said.
+
+**A deleted channel leaves no rule pointing at nothing.** Positions are pruned
+the way group membership is, on load and live, with one addition: a rule whose
+*every* named place is gone is switched off rather than left to fire. With the
+last of its channels deleted the trigger would read as "anywhere", and a rule
+that grew louder because something was deleted is the one surprise a show
+cannot absorb. It stays in the list, so it can be seen and re-pointed.
+
+**Migration.** `config.json` went to version 2, and a version 1 file is
+migrated on the way in: each alert term becomes a word rule with the highlight
+and urgent-attention actions; each group with flashing on becomes a group
+trigger with the flash action; the all-channels view's flag becomes a rule with
+no trigger at all. The three legacy fields are read and never written, so the
+migration is a one-way trip rather than a flag that comes back beside the rule
+it became. Nothing is lost and nothing has to be re-entered — which is also why
+P17's two Settings sections are replaced by one editor rather than kept beside
+it.
+
+**The editor** is a card per rule with the whole rule on it: the name and the
+switch, the words as one comma-separated field, the channels and groups as
+chips, the actions as checkboxes, and the interval. Triggers, conjunctions and
+actions are a small language, and the way a small language goes unused is a
+page that hides half of it behind a disclosure — so the line under the name
+says the rule back in words ("Feuer, on Bühne"), which is what makes a list of
+six of them scannable. Editable while a session runs, like the alert list it
+replaces: a rule written mid-show takes effect on the next segment.
+
+**What is left.** The two outbound actions. MIDI needs a virtual port and a
+message format and has none of the webhook's problem, which is why it comes
+first.
+
+**The constraint webhooks still run into.** *Offline is a hard requirement* and
+the remote deliberately never leaves the local network (P16). A webhook is an
 outbound HTTP call from the machine holding crew communication, so it is not a
 setting like the others: it must be per rule, explicit about its destination,
 off unless written, and it must not be reachable through the LAN remote's
-configuration path without a decision about who may write one. MIDI has none of
-this problem, which is the other reason it comes first.
-
-**Migration.** The existing configuration has to become rules without the
-operator rewriting it: each alert term becomes a word trigger with the
-highlight and attention actions; each view with flashing on becomes a
-group trigger with the flash action. The all-channels view's flag becomes a
-rule with no channel restriction. Nothing is lost and nothing has to be
-re-entered, which also means P17's Settings sections are replaced by one
-editor rather than kept beside it.
+configuration path without a decision about who may write one. That decision is
+still to be made, and the rule editor being reachable from the remote today is
+exactly why it has to be made before the action exists.
 
 **Accepted when:** a rule saying "Go on the inspector's channel" flashes one
 window and fires one MIDI cue, once, with two group windows and a browser
 viewer open; a rule with a channel trigger and no word fires on every bubble
 from that channel; deleting a channel leaves no rule pointing at nothing; and
 an existing `config.json` from P17 comes back as the equivalent rules.
-
-**Risk:** a rule with a channel trigger fires on every bubble, which on a busy
-talkback is several per minute — fine for a flash, potentially a flood of MIDI
-or HTTP. Rate limiting per rule is part of the package, not an afterthought,
-and the defaults for it are one of the numbers P12 should be exposing rather
-than hard-coding. The second risk is the editor: triggers, conjunctions and
-actions are a small language, and a settings page that renders it badly is how
-a feature this general goes unused.
+✔ for everything but the MIDI cue, which is action 4.
 
 ---
+
 
 ## Dependencies
 
@@ -1342,9 +1442,9 @@ second platform. Nothing between them changes.
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached; what P5
 still owes is a load test on live audio.*
 
-**Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17. *All in place. What
-is left is the settings proper — every threshold is still a constant in the
-code.*
+**Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17, P19. *What is left
+is P7's configurable sort direction, the settings proper — every threshold is
+still a constant in the code — and P19's two outbound actions.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P8, P9, P13. *P10 left it on 2026-09-18; P3b was dropped.*
@@ -1376,13 +1476,21 @@ In this order, with the reason each one comes where it does.
 3. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel. The control exists and is global; what is missing is the
    evidence that any particular list is better than another.
-4. **The remote, on a real network.** P16 has not had a second machine, a house
+4. **P7's sort direction.** It is view-local but touches the chat's core
+   windowing and scroll anchoring in both directions; build it against a long
+   live chat rather than treating a reversed array as the whole feature.
+5. **The remote, on a real network.** P16 has not had a second machine, a house
    network and somebody working from it. That comes before authentication —
    the obvious next thing to want, and the wrong thing to build against an
    arrangement nobody has used yet.
-5. **P13, packaging and signing.** With P6, P7, P9 and P17 in, what is left
+6. **P13, packaging and signing.** With P6, P7, P9 and P19 in, what is left
    between this and a machine that is not this one is a notarised build.
-6. **P18, the Windows port.** Last, and not because it is hard: it reopens
+7. **P19's MIDI cue.** The action the app is actually wanted for in a theatre,
+   and the one the rules were designed around: the evaluation already fires
+   exactly once per event, per rule and under a rate limit, so what is left is
+   a virtual port and a message format. The webhook stays behind it until the
+   question of who may write one from the LAN remote has an answer.
+8. **P18, the Windows port.** Last, and not because it is hard: it reopens
    capture, the GPU backend and packaging, and each of the three is cheaper to
    redo once the macOS answer it is being ported from is measured rather than
    assumed. The one part worth pulling forward is the hardware question in its
@@ -1436,20 +1544,29 @@ In this order, with the reason each one comes where it does.
     connected, the picker offers both and each profile keeps the one it was set
     to (P12).
 12. Run the P14 reference load test, record p95 latency.
-13. Add `cue` to Alerts, unfocus the main window and speak "Cue fünf" → the
-    exact word is highlighted and the window requests attention; "rescue" does
-    neither. Repeat from a channel in an open group to verify its separate
-    window. Then enable that group's **Flash on every new message** and speak a
-    non-alert message → the whole window floods dark orange, focused or not;
-    disable it and repeat → the new line is still marked in the chat and the
-    window is not. Repeat both with the all-channels view's own setting. Verify
-    that the browser highlights the same characters, floods the same way, and
-    flashes its own surface and tab title (P17, P16).
+13. Write a rule on `cue` that highlights and asks urgently, unfocus the main
+    window and speak "Cue fünf" → the exact word is highlighted and the window
+    requests attention; "rescue" does neither. Repeat from a channel in an open
+    group to verify its separate window. Then narrow the same rule to one
+    channel → it fires there and nowhere else. Write a second rule with no
+    words, one group and the flash action, and speak on a member channel → the
+    whole window floods dark orange, focused or not; a channel outside the
+    group does not flood a window that is not showing it. Give that rule a
+    two-second limit and speak twice in a second → it fires once. Delete the
+    channel the first rule named → the rule is still there and switched off,
+    never widened to every channel. Verify that the browser highlights the same
+    characters, floods the same way, and flashes its own surface and tab title
+    (P19, P17, P16).
 14. On Windows, with a DAW holding the same interface: start a session on eight
     channels and let the DAW run through it — the transcripts appear and the
     DAW is undisturbed. Then switch the capture route to ASIO on a driver that
     is single-client and confirm the app says the interface is busy instead of
     taking it (P18).
+15. With a long chat open, switch to **Newest at top** while reading an older
+    bubble → the same bubble stays under the cursor, older pages load below and
+    a new transcript appears at the top. Switch back to **Newest at bottom**
+    and verify the inverse; the main window, an open group window and the LAN
+    browser retain their own chosen direction (P7).
 
 There is deliberately no "restart and the session loads" step: with P10 set
 aside the chat lives in the window, and killing the app loses it by design.

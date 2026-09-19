@@ -9,7 +9,7 @@
  * `config::VERSION`; the backend refuses to reinterpret a file claiming a
  * higher one.
  */
-export const CONFIG_VERSION = 1;
+export const CONFIG_VERSION = 2;
 
 /**
  * The id the custom model is selected by. Mirrors `models::CUSTOM`. Not a

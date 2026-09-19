@@ -39,7 +39,7 @@ export const GROUP_WINDOW_PREFIX = "group-";
 /// A word rather than a number, because every number is already a group: a
 /// sentinel index would be one off-by-one away from being somebody's eighth
 /// group, and this has to be readable in a URL a person can type.
-export const ALL_CHANNELS_VIEW = "all";
+export const ALL_CHANNELS_VIEW = "all" as const;
 
 /// Which view a detached window or tab shows: one group, by its position in
 /// the active profile, or every channel.

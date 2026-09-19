@@ -21,7 +21,7 @@
 
 import { newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
 import { restoreGroup, type Group } from "./groups";
-import { cleanTerms } from "./alerts";
+import { restoreRule, type Rule } from "./rules";
 import {
   CONFIG_VERSION,
   MAX_WORKERS,
@@ -83,12 +83,13 @@ export interface Profile {
   language: string;
   channels: Channel[];
   groups: Group[];
-  /// Whether the all-channels view floods its window on every message, the way
-  /// a group with its `flash` setting on does (P17).
+  /// What fires on this profile's channels, and what it does (P19).
   ///
-  /// On the profile because the all-channels view is not a group: it is the
-  /// state of having selected none. See `groups.ts`.
-  allChannelsFlash: boolean;
+  /// On the profile rather than beside it, unlike the vocabulary and unlike
+  /// the alert list it replaces: a trigger names channels and groups, and
+  /// neither exists outside a profile. A shared list could hold "anything on
+  /// channel 3", and channel 3 is a different channel in the next production.
+  rules: Rule[];
 }
 
 let nextKey = 0;
@@ -118,7 +119,7 @@ export const newProfile = (
   groups: [],
   // Quiet to begin with, for the reason a new group is: an app that starts by
   // flashing at everything gets its attention requests ignored.
-  allChannelsFlash: false,
+  rules: [],
 });
 
 /// A profile as the file holds it. Membership translated from channel keys to
@@ -126,13 +127,16 @@ export const newProfile = (
 /// same thing `forgetChannels` does live.
 export const toStored = (profile: Profile): StoredProfile => {
   const position = new Map(profile.channels.map((c, index) => [c.key, index]));
+  // Groups are stored by position too, for the same reason membership is: a
+  // rule that names a group has to still name it after a restart, and the key
+  // is a counter this window handed out.
+  const groupPosition = new Map(profile.groups.map((g, index) => [g.key, index]));
 
   return {
     name: profile.name,
     device: profile.device,
     deviceId: profile.deviceId,
     language: profile.language,
-    allChannelsFlash: profile.allChannelsFlash,
     channels: profile.channels.map((c) => ({
       channel: c.channel,
       label: c.label,
@@ -141,7 +145,6 @@ export const toStored = (profile: Profile): StoredProfile => {
     })),
     groups: profile.groups.map((g) => ({
       name: g.name,
-      flash: g.flash,
       onTop: g.onTop,
       // `flatMap` rather than a filter: a key with no position is a channel
       // that is no longer there, and dropping it is what `forgetChannels`
@@ -150,6 +153,25 @@ export const toStored = (profile: Profile): StoredProfile => {
         const index = position.get(key);
         return index === undefined ? [] : [index];
       }),
+    })),
+    rules: profile.rules.map((rule) => ({
+      name: rule.name,
+      enabled: rule.enabled,
+      words: rule.words,
+      // `flatMap` for the members' reason: a key with no position names
+      // something that is no longer there, and `forget` already drops it live.
+      channels: rule.channels.flatMap((key) => {
+        const index = position.get(key);
+        return index === undefined ? [] : [index];
+      }),
+      // The windows the flash is for, by the same positions the group
+      // windows are named by.
+      views: rule.views.flatMap((key) => {
+        const index = groupPosition.get(key);
+        return index === undefined ? [] : [index];
+      }),
+      actions: rule.actions,
+      minIntervalMs: rule.minIntervalMs,
     })),
   };
 };
@@ -162,6 +184,15 @@ export const toStored = (profile: Profile): StoredProfile => {
 /// their setup.
 export const fromStored = (stored: StoredProfile): Profile => {
   const channels = stored.channels.map(restoreChannel);
+  const groups = stored.groups.map((g) =>
+    restoreGroup(
+      g.name,
+      g.members.filter((p) => p >= 0 && p < channels.length).map((p) => channels[p].key),
+      // A file that predates the window setting opens its group windows like
+      // any other window.
+      g.onTop ?? false,
+    ),
+  );
 
   return {
     key: nextKey++,
@@ -174,22 +205,26 @@ export const fromStored = (stored: StoredProfile): Profile => {
     // A file written before profiles had a default language has none, and
     // "" would make every channel added afterwards languageless.
     language: stored.language ?? DEFAULT_LANGUAGE,
-    // A file written before the all-channels view had the setting has no such
-    // field, and that view starts quiet — the same reading a group's missing
-    // `flash` gets.
-    allChannelsFlash: stored.allChannelsFlash ?? false,
     channels,
-    groups: stored.groups.map((g) =>
-      restoreGroup(
-        g.name,
-        g.members.filter((p) => p >= 0 && p < channels.length).map((p) => channels[p].key),
-        // A file written before flashing existed has no such field, and its
-        // groups start quiet.
-        g.flash ?? false,
-        // The same for the window setting: a file that predates it opens its
-        // group windows like any other window.
-        g.onTop ?? false,
-      ),
+    groups,
+    // A file written before P19 has no rules; the backend's migration is what
+    // fills them in from the alert terms and the flash flags, so by the time
+    // one reaches here it has them. `?? []` is for the one case that migration
+    // does not cover: a hand-written file.
+    rules: (stored.rules ?? []).map((rule) =>
+      restoreRule({
+        name: rule.name,
+        enabled: rule.enabled ?? true,
+        words: rule.words ?? [],
+        channels: (rule.channels ?? [])
+          .filter((p) => p >= 0 && p < channels.length)
+          .map((p) => channels[p].key),
+        views: (rule.views ?? [])
+          .filter((p) => p >= 0 && p < groups.length)
+          .map((p) => groups[p].key),
+        actions: rule.actions ?? [],
+        minIntervalMs: rule.minIntervalMs ?? 0,
+      }),
     ),
   };
 };
@@ -261,10 +296,6 @@ export const toStoredConfig = (
   activeKey: number,
   vocabulary: string,
   models: ModelChoice = {},
-  /// The alert terms (P17). Beside the profiles like the vocabulary, and
-  /// cleaned on the way out: the editor's empty row is how a term is added,
-  /// and it has no business in the file.
-  alerts: string[] = [],
   /// The LAN remote client (P16). Beside the profiles like the model, and for
   /// the model's reason: which interface this machine can be reached on is a
   /// property of the machine and of the house it is standing in, not of the
@@ -289,7 +320,6 @@ export const toStoredConfig = (
   // middle of a number: the window closing is the case the last-ditch save
   // exists for, and the backend would rather not be handed a `0`.
   workers: clampWorkers(models.workers ?? null),
-  alerts: cleanTerms(alerts),
   // Not the object as the page holds it: the port is a number box, and a box
   // an operator has cleared holds `null` until it is left. This save can
   // happen before that — the window closing is the case the last-ditch save
@@ -326,7 +356,6 @@ export const fromStoredConfig = (
   activeKey: number | null;
   vocabulary: string | null;
   models: ModelChoice;
-  alerts: string[];
   remote: StoredRemote;
 } => {
   const profiles = stored.profiles.map(fromStored);
@@ -345,9 +374,6 @@ export const fromStoredConfig = (
       modelPath: stored.modelPath ?? null,
       workers: stored.workers ?? null,
     },
-    // A file written before P17 has no alert list, which is the same thing as
-    // an empty one: nobody has to use this.
-    alerts: stored.alerts ?? [],
     // A file written before P16 has no remote block, and reading its absence
     // as anything but "off" is the one way this feature could start serving a
     // network nobody asked it to.
@@ -390,18 +416,30 @@ export const reuseKeys = (fresh: Profile[], previous: Profile[]): Profile[] =>
     // key it was read with, and maps to itself.
     const carried = new Map(profile.channels.map((c, i) => [c.key, channels[i].key]));
 
+    const groups = profile.groups.map((group, position) => {
+      const same = before.groups[position];
+      return {
+        ...group,
+        key: same ? same.key : group.key,
+        members: group.members.map((member) => carried.get(member) ?? member),
+      };
+    });
+    // The same map for groups, because a rule's flash points at them too
+    // (P19): a rule left holding a fresh group key while the sidebar held the
+    // carried one would be a flash that quietly stops reaching the window it
+    // names.
+    const carriedGroups = new Map(profile.groups.map((g, i) => [g.key, groups[i].key]));
+
     return {
       ...profile,
       key: before.key,
       channels,
-      groups: profile.groups.map((group, position) => {
-        const same = before.groups[position];
-        return {
-          ...group,
-          key: same ? same.key : group.key,
-          members: group.members.map((member) => carried.get(member) ?? member),
-        };
-      }),
+      groups,
+      rules: profile.rules.map((rule) => ({
+        ...rule,
+        channels: rule.channels.map((key) => carried.get(key) ?? key),
+        views: rule.views.map((key) => carriedGroups.get(key) ?? key),
+      })),
     };
   });
 

@@ -14,20 +14,16 @@
 
 import type { Channel } from "./streams";
 
+/// What a group no longer carries is its "flash on every message" setting: a
+/// group is a *view* again, and what a view does when something is said on it
+/// is a rule (P19) — one that names this group as its trigger. The setting was
+/// the only reaction that could be asked for per group, and it could not be
+/// combined with a word or narrowed to one channel of the group.
 export interface Group {
   key: number;
   name: string;
   /// Channel keys, not stream ids. See the note above.
   members: number[];
-  /// Whether a view of this group asks for the window's attention on every
-  /// message, not only on an alert term (P17).
-  ///
-  /// Per group because that is the scope the question is asked at: the stage
-  /// manager's group is worth looking up for whatever is said on it, the
-  /// general talkback is not, and one setting for both would have to be off.
-  /// Off by default — an app that starts by flashing at everything gets its
-  /// attention requests ignored.
-  flash: boolean;
   /// Whether this group's detached window (P7) stays in front of other
   /// windows.
   ///
@@ -51,7 +47,6 @@ export const newGroup = (existing: Group[]): Group => ({
   key: nextKey++,
   name: `Group ${existing.length + 1}`,
   members: [],
-  flash: false,
   onTop: false,
 });
 
@@ -63,13 +58,11 @@ export const newGroup = (existing: Group[]): Group => ({
 export const restoreGroup = (
   name: string,
   members: number[],
-  flash: boolean = false,
   onTop: boolean = false,
 ): Group => ({
   key: nextKey++,
   name,
   members,
-  flash,
   onTop,
 });
 

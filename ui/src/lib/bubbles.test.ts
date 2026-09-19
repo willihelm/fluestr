@@ -9,6 +9,7 @@ let seq = 0;
 const event = (e: Partial<TranscriptEvent> & { tStartMs: number }): TranscriptEvent => ({
   sessionId: 1,
   streamId: 0,
+  flashViews: null,
   seq: seq++,
   label: "Regie",
   tEndMs: e.tStartMs + 1000,
@@ -17,6 +18,7 @@ const event = (e: Partial<TranscriptEvent> & { tStartMs: number }): TranscriptEv
   decodeMs: 300,
   latencyMs: 330,
   alerts: [],
+  actions: [],
   ...e,
 });
 

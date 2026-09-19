@@ -148,6 +148,8 @@ mod tests {
             decode_ms: 10,
             latency_ms: 20,
             alerts: Vec::new(),
+            actions: Vec::new(),
+            flash_views: None,
         }
     }
 

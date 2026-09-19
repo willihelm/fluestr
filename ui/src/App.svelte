@@ -8,6 +8,7 @@
   import ResourceMeter from "./lib/ResourceMeter.svelte";
   import { toConfig, validate, mutedChannels } from "./lib/streams";
   import { forgetChannels, viewStreams, visibleStreams } from "./lib/groups";
+  import { forget as forgetInRules } from "./lib/rules";
   import {
     adoptDeviceIds,
     canonical,
@@ -21,9 +22,10 @@
     type Profile,
   } from "./lib/profiles";
   import { DEFAULT_VOCABULARY, toConfig as vocabularyConfig } from "./lib/vocabulary";
-  import { cleanTerms, sameTerms } from "./lib/alerts";
+  import { compile as compileRules, sameCompiled, type CompiledRule } from "./lib/rules";
   import { mergeHistory, toBubbles } from "./lib/bubbles";
   import { attentionFor } from "./lib/attention";
+  import { ALL_CHANNELS_VIEW, type GroupView } from "./lib/windows";
   import { beforeLeaving, whenEditingEnds } from "./lib/editing";
   import {
     clearCommunication as clearOnBackend,
@@ -45,7 +47,7 @@
     requestAttention,
     saveConfig,
     sessionSnapshot,
-    setAlertTerms,
+    setRules,
     startSession,
     stopSession,
     updateStreamConfig,
@@ -85,11 +87,6 @@
   let profiles = $state<Profile[]>([]);
   let activeKey = $state<number | null>(null);
   let vocabulary = $state(DEFAULT_VOCABULARY);
-  // The words that must not be missed (P17). Beside the profiles like the
-  // vocabulary, and empty by default: nobody has to use this, and an app that
-  // ships with someone else's idea of an emergency is worse than one with
-  // none. The matching itself happens on the backend — see `lib/alerts.ts`.
-  let alerts = $state<string[]>([]);
   // Which model transcribes (P11). Empty is "never chose", which resolves to
   // the recommended one — so a fresh machine is not asked a question it has no
   // way to answer yet.
@@ -123,9 +120,9 @@
   let deviceId = $derived(active?.deviceId ?? "");
   let channels = $derived(active?.channels ?? []);
   let groups = $derived(active?.groups ?? []);
-  // The all-channels view's own flash setting. On the profile because that
-  // view is not a group — see `groups.ts`.
-  let allChannelsFlash = $derived(active?.allChannelsFlash ?? false);
+  // What fires on this profile's channels, and what it does (P19). On the
+  // profile because a trigger names channels and groups — see `rules.ts`.
+  let rules = $derived(active?.rules ?? []);
 
   let status = $state<SessionState | { state: "starting" } | { state: "idle" }>({
     state: "idle",
@@ -201,16 +198,17 @@
   );
 
   let group = $derived(groups.find((g) => g.key === selectedGroup) ?? null);
+  // Which view this window currently *is*, as a rule addresses one: the
+  // selected group's position, or the view of everything. The sidebar changes
+  // it, which is right — a rule that flashes the stage manager's window
+  // flashes this one while this one is showing that group.
+  let viewing = $derived<GroupView>(
+    group === null ? ALL_CHANNELS_VIEW : groups.findIndex((g) => g.key === group.key),
+  );
   // `null` means every stream, which is not the same as an empty set: a group
   // with no members shows nothing, and saying so is more useful than silently
   // falling back to showing everything.
   let visible = $derived(visibleStreams(group, channels));
-  /// Whether the view on screen floods the window on every message (P17) — the
-  /// selected group's setting, or the profile's for the all-channels view.
-  let flashing = $derived(group === null ? allChannelsFlash : group.flash);
-  /// Every stream of the profile, for the all-channels view: `visible` says
-  /// "every stream" with `null`, and the attention request needs the set.
-  let everyStream = $derived(new Set(channels.map((_, streamId) => streamId)));
   let searchable = $derived(viewStreams(channels, visible));
   let shown = $derived(
     visible === null ? messages : messages.filter((m) => visible.has(m.streamId)),
@@ -261,7 +259,6 @@
             activeKey: null,
             vocabulary: null,
             models: {},
-            alerts: [],
             remote: { ...NO_REMOTE },
           };
 
@@ -290,7 +287,6 @@
       // back.
       if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
       models = restored.models;
-      alerts = restored.alerts;
       remote = restored.remote;
 
       loaded = true;
@@ -400,7 +396,7 @@
     // Built here rather than in the timer: this is what reads every field, and
     // reading them is what makes this effect run again when one of them
     // changes.
-    const config = toStoredConfig(profiles, activeKey, vocabulary, models, alerts, remote);
+    const config = toStoredConfig(profiles, activeKey, vocabulary, models, remote);
     latest = config;
 
     let stopWaiting: (() => void) | null = null;
@@ -455,32 +451,38 @@
     activeKey = profiles[stored.active]?.key ?? profiles[0]?.key ?? null;
     if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
     models = restored.models;
-    alerts = restored.alerts;
     remote = restored.remote;
   };
 
-  // The compiled alert list lives on the backend, where every transcript is
-  // matched against it before it reaches any view (P17). Pushed from here
-  // whenever it changes rather than read from the file by the backend: the
-  // file is a debounce behind the term that was just typed, and a term that
-  // starts working a second late is a term nobody can tell is working.
+  // The compiled rules live on the backend, where every transcript is
+  // evaluated against them before it reaches any view (P19). Pushed from here
+  // whenever they change rather than read from the file by the backend: the
+  // file is a debounce behind the rule that was just written, and a rule that
+  // starts working a second late is a rule nobody can tell is working.
   //
-  // Sent even when it is empty — that is how clearing the list takes effect,
-  // and how a restart of the window matches a backend that still holds the
-  // terms from before it.
-  let compiled: string[] | null = null;
+  // Compiled against the *active profile's* channels and groups, so this also
+  // runs when a group gains a member or a channel is deleted: a rule that
+  // names a group follows it, and the stream ids it resolves to are what
+  // changed. Switching profile is the same event — the other profile's rules
+  // are other rules — which is why this reads `rules`, `channels` and `groups`
+  // rather than only the first.
+  //
+  // Sent even when it is empty: that is how deleting the last rule takes
+  // effect, and how a reloaded window matches a backend still holding what it
+  // was told before.
+  let compiled: CompiledRule[] | null = null;
   $effect(() => {
     if (!loaded) return;
-    const terms = cleanTerms(alerts);
-    // Typing a term is one keystroke at a time, and every intermediate state
-    // is a list: without this, "Feuer" is five compilations, four of which
-    // highlight a word nobody is looking for.
-    if (compiled !== null && sameTerms(compiled, terms)) return;
+    const next = compileRules(rules, channels, groups);
+    // Writing a word is one keystroke at a time, and every intermediate state
+    // is a rule: without this, "Feuer" is five compilations, four of which
+    // fire on a word nobody is looking for.
+    if (compiled !== null && sameCompiled(compiled, next)) return;
 
     const timer = setTimeout(() => {
-      setAlertTerms(terms)
-        .then(() => (compiled = terms))
-        .catch((e) => console.warn("the alert list was not compiled:", e));
+      setRules(next)
+        .then(() => (compiled = next))
+        .catch((e) => console.warn("the rules were not compiled:", e));
     }, SAVE_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
@@ -498,6 +500,21 @@
       const pruned = forgetChannels(active.groups, active.channels);
       if (pruned.some((g, i) => g.members.length !== active.groups[i].members.length)) {
         active.groups = pruned;
+      }
+      // And out of every rule that named it (P19). A rule left pointing at a
+      // deleted channel is worse than a group left pointing at one: with the
+      // last of its channels gone the trigger reads as "anywhere", so `forget`
+      // switches that rule off rather than letting it grow louder than it was
+      // written.
+      const rewritten = forgetInRules(active.rules, active.channels, active.groups);
+      if (
+        rewritten.some(
+          (r, i) =>
+            r.channels.length !== active.rules[i].channels.length ||
+            r.views.length !== active.rules[i].views.length,
+        )
+      ) {
+        active.rules = rewritten;
       }
     }
     if (selectedGroup !== null && !groups.some((g) => g.key === selectedGroup)) {
@@ -580,38 +597,33 @@
     };
   });
 
-  /// Asks the window to flash for a transcript that warrants it (P17).
+  /// Makes this window's half of what the rules asked for (P19).
   ///
-  /// Two reasons, and they are not the same request. An alert term is urgent
-  /// and the main chat sees every one of them, whichever group is on screen —
-  /// it is the view of the whole session, and a word that must not be missed
-  /// must not be missed because a group happened to be selected. A group's
-  /// flash-on-message is the loud one — the whole window in dark orange — and
-  /// it follows the view: only while the view that asked for it is the one on
-  /// screen. The all-channels view asks for it too, with the setting it keeps
-  /// on the profile.
+  /// *What* was decided on the backend, once, for every view. What is decided
+  /// here is whether this window answers for it. An attention request is made
+  /// for every stream: this is the view of the whole session, and a rule that
+  /// fires on a channel the operator is not currently looking at must still
+  /// reach them. The flood is narrower on both counts — only for what is on
+  /// screen, and only for a rule addressed to the view this window currently
+  /// is. A rule that names the stage manager's window does not flood the view
+  /// of everything just because everything includes that channel.
   ///
-  /// Counted per **bubble**, not per segment. The event that just arrived is
-  /// in the last bubble either way; what decides is whether it brought the
-  /// first alert into that bubble, or opened it. Without that, one sentence
-  /// spoken across three segments is three flashes.
+  /// Counted per **bubble**, not per segment: one sentence spoken across three
+  /// segments would otherwise be three flashes. See `attention.ts`.
   ///
   /// Whether the window is focused is the backend's question, because the
   /// window is: an operator already looking at the chat is not asked to look
   /// at it. And never a sound — this is a room that is already full of speech.
   const attend = (event: TranscriptEvent) => {
     const asking = attentionFor(event, bubbles[bubbles.length - 1], {
-      // Every stream: this is the view of the whole session, and a word that
-      // must not be missed must not be missed because of what is on screen.
-      alerts: null,
-      // The flood follows the view instead — whichever view is on screen, and
-      // whatever that view's own setting says. `visible` is `null` for the
-      // all-channels view, which here has to be spelled out as the streams it
-      // shows: "off" is the only thing `null` means to `attentionFor`.
-      flash: flashing ? (visible ?? everyStream) : null,
+      attention: null,
+      // `visible` is `null` for the all-channels view, which is exactly what
+      // `shown` means by it.
+      shown: visible,
+      view: viewing,
     });
     if (!asking) return;
-    requestAttention(asking.urgent, asking.loud).catch((e) =>
+    requestAttention(asking.ask, asking.loud).catch((e) =>
       console.warn("no attention request:", e),
     );
   };
@@ -774,7 +786,6 @@
       bind:profiles
       bind:activeKey
       bind:vocabulary
-      bind:alerts
       bind:models
       bind:remote
       {deviceChannels}

@@ -14,7 +14,6 @@ const group = (key: number, members: number[]): Group => ({
   key,
   name: `Group ${key}`,
   members,
-  flash: false,
   onTop: false,
 });
 

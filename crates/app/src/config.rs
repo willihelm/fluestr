@@ -26,14 +26,19 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::rules;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Schema version of the configuration file.
 ///
 /// Written on every save and checked on every load. A file from a *newer*
-/// version is not silently reinterpreted — see [`load`].
-pub const VERSION: u32 = 1;
+/// version is not silently reinterpreted — see [`load`]. An *older* one is
+/// migrated on the way in — see [`Config::migrate`], which is what turned the
+/// alert list and the two flash flags of version 1 into the rules of version
+/// 2.
+pub const VERSION: u32 = 2;
 
 /// The file inside the app's configuration directory.
 pub const FILE_NAME: &str = "config.json";
@@ -87,18 +92,17 @@ pub struct StoredGroup {
     /// than refused: a hand-edited file should cost a group its member, not
     /// the operator their whole setup.
     pub members: Vec<usize>,
-    /// Whether a view of this group asks for the window's attention on *every*
-    /// message, not only on an alert term (P17).
+    /// **Version 1 only.** Whether a view of this group flooded its window on
+    /// every message (P17).
     ///
-    /// Per group because that is the scope at which the question is asked: the
-    /// stage manager's group is worth looking up for whatever is said on it,
-    /// the general talkback is not, and one setting for both would have to be
-    /// off.
-    ///
-    /// `#[serde(default)]` — off — because a file written before this existed
-    /// has no such field, and inheriting "flash on everything" from a version
-    /// that never offered it is the one wrong way to read its absence.
-    #[serde(default)]
+    /// Read, never written: [`Config::migrate`] turns it into a rule with a
+    /// group trigger and the flash action, which is the same thing said once
+    /// in the one place every reaction is now written. Kept as a field so that
+    /// a file from before P19 can still be read; `skip_serializing` is what
+    /// makes the migration a one-way trip rather than a flag that comes back
+    /// beside the rule it became.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
     pub flash: bool,
     /// Whether this group's detached window (P7) stays in front of other
     /// windows.
@@ -115,6 +119,73 @@ pub struct StoredGroup {
     /// be put in front of is not what its absence meant.
     #[serde(default)]
     pub on_top: bool,
+}
+
+/// One rule: a trigger, and what it does (P19).
+///
+/// Stored as the operator wrote it — words as words, channels and views as
+/// positions — and *compiled* elsewhere: the frontend resolves the channels
+/// into stream ids and hands [`crate::rules::CompiledRule`] to the backend.
+/// This is the form a human can read and edit in the file, which is the same
+/// reason the alert terms it replaces were a list of strings rather than a
+/// serialised matcher.
+///
+/// **Channels and views are not two spellings of one thing.** The trigger is
+/// a conjunction of two questions — these words (or any text) said on any of
+/// these *channels* (or on any channel) — and a channel is an input. A
+/// *view* is a window, and it answers a question the trigger cannot: which
+/// window the flash is for. An empty channel list is every channel, which is
+/// how "flash on every message" is written; an empty word list is any text,
+/// which is how "anything at all on channel 3" is; an empty view list is
+/// every window that shows the channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts")]
+pub struct StoredRule {
+    /// What the operator calls it. Free-form and allowed to be empty: the
+    /// editor shows the trigger anyway, and a name nobody needed is a field
+    /// that would have to be invented to save a rule.
+    pub name: String,
+    /// Off keeps a rule without deleting it — the show where the cue is not
+    /// wanted is not the show where the rule should be rewritten from memory.
+    #[serde(default = "enabled")]
+    pub enabled: bool,
+    /// Words and phrases, matched whole-word, case-insensitively and
+    /// NFC-normalised — P17's matcher, unchanged. Empty is no word condition.
+    #[serde(default)]
+    pub words: Vec<String>,
+    /// Positions in [`Profile::channels`], like [`StoredGroup::members`] and
+    /// for the same reason: a saved file is a snapshot, and a position is the
+    /// one of position and key that still means something after a restart. Out
+    /// of range is dropped on load.
+    #[serde(default)]
+    pub channels: Vec<usize>,
+    /// Positions in [`Profile::groups`]: the windows the *flash* is for.
+    ///
+    /// A group is a view, so naming one here does not narrow *when* the rule
+    /// fires — [`StoredRule::channels`] does that — but *who is told*. Empty
+    /// is every window that shows the channel, which is what the flash did
+    /// before it could be addressed at all.
+    #[serde(default)]
+    pub views: Vec<usize>,
+    pub actions: Vec<crate::rules::Action>,
+    /// At most one firing per this many milliseconds. Zero — the default — is
+    /// unthrottled.
+    ///
+    /// Per rule and not per action, and stored rather than hard-coded, because
+    /// a channel trigger on a busy talkback fires several times a minute:
+    /// harmless for a highlight, and exactly the flood P19's later actions
+    /// must not turn into a stream of MIDI. A rule inside its interval does
+    /// nothing at all — see [`crate::rules`].
+    #[serde(default)]
+    pub min_interval_ms: u64,
+}
+
+/// What a rule without a stored `enabled` is: on. A rule that was written is a
+/// rule that was wanted, and a file hand-edited to add one should not need the
+/// field that says so.
+fn enabled() -> bool {
+    true
 }
 
 /// One production's setup: which interface, which channels, which views.
@@ -162,20 +233,29 @@ pub struct Profile {
     pub language: String,
     pub channels: Vec<StoredChannel>,
     pub groups: Vec<StoredGroup>,
-    /// Whether the all-channels view flashes its window on every message, the
-    /// way a group with [`StoredGroup::flash`] does.
+    /// **Version 1 only.** Whether the all-channels view flooded its window on
+    /// every message (P17).
     ///
-    /// On the profile rather than in `groups`, because the all-channels view is
-    /// not a group: it is the state of having selected none, and inventing a
-    /// group containing everything to hang one flag off would be a group the
-    /// operator can see, rename and delete. One flag per profile instead, next
-    /// to the channel list it is a view of.
-    ///
-    /// `#[serde(default)]` — off — for [`StoredGroup::flash`]'s reason: a file
-    /// written before this existed has no such field, and a setup that comes
-    /// back flashing at everything is not what its absence meant.
-    #[serde(default)]
+    /// Read, never written, like [`StoredGroup::flash`]: it becomes a rule
+    /// with no trigger at all — every message, on every channel — which is
+    /// what the flag said and what P19 can now write down.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
     pub all_channels_flash: bool,
+    /// The rules of this profile: what fires, when (P19).
+    ///
+    /// On the profile rather than beside it, unlike the vocabulary and unlike
+    /// the alert list it replaces. A trigger names channels and groups, and
+    /// neither exists outside a profile: a shared list could hold "anything on
+    /// channel 3", and channel 3 is a different channel in the next
+    /// production. The cost is that a word rule an operator wants everywhere
+    /// is written in each profile — which is why the migration copies the old
+    /// global alert terms into every one of them rather than into the first.
+    ///
+    /// `#[serde(default)]` because a file written before P19 has no such
+    /// field; [`Config::migrate`] is what fills it in for those.
+    #[serde(default)]
+    pub rules: Vec<StoredRule>,
 }
 
 /// What a profile without a stored default language falls back to.
@@ -251,16 +331,13 @@ pub struct Config {
     /// number this version will not serve keeps saying what it asked for.
     #[serde(default)]
     pub workers: Option<usize>,
-    /// The words that must not be missed (P17), one per entry.
+    /// **Version 1 only.** The words that must not be missed (P17).
     ///
-    /// Beside the profiles, like the vocabulary: "Feuer" means the same thing
-    /// in every production the machine is carried to, and a copy per profile
-    /// is a copy that is missing a term in exactly the profile that needed it.
-    ///
-    /// Stored as a list rather than as one block of text — each entry is a
-    /// term, and a file a human may have to read should say so. Empty is the
-    /// normal state; nobody has to use this.
-    #[serde(default)]
+    /// Read, never written: [`Config::migrate`] turns each term into a rule
+    /// that highlights it and asks urgently for attention — what an alert term
+    /// did, now written as the trigger and the two actions it always was.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
     pub alerts: Vec<String>,
     /// The LAN remote client (P16): whether it is served, and on which
     /// address.
@@ -328,8 +405,31 @@ impl Config {
     fn sanitise(&mut self) {
         for profile in &mut self.profiles {
             let channels = profile.channels.len();
+            let groups = profile.groups.len();
             for group in &mut profile.groups {
                 group.members.retain(|&m| m < channels);
+            }
+            // A rule pointing at a channel or a group that is not there any
+            // more is the one failure mode a rule has that an alert term did
+            // not: it looks like a narrowed rule and behaves like a broader
+            // one. Dropped on the same terms group membership is — the rule
+            // loses the channel, not the operator their rule — except where
+            // dropping would *widen* it, which is what `enabled` catches
+            // below.
+            for rule in &mut profile.rules {
+                let located = !rule.channels.is_empty();
+                let addressed = !rule.views.is_empty();
+                rule.channels.retain(|&c| c < channels);
+                rule.views.retain(|&v| v < groups);
+                // Everything it named is gone. Left in the file, so the
+                // operator can see what it said and re-point it, but switched
+                // off: a rule that was "Feuer on the stage manager's channel"
+                // must not quietly become "Feuer everywhere" because the
+                // channel was deleted, and one addressed to one window must
+                // not become one that floods them all because the group was.
+                if (located && rule.channels.is_empty()) || (addressed && rule.views.is_empty()) {
+                    rule.enabled = false;
+                }
             }
         }
 
@@ -338,6 +438,87 @@ impl Config {
         }
 
         self.version = VERSION;
+    }
+
+    /// Turns a version 1 file into a version 2 one: the alert list and the two
+    /// flash flags become rules (P19).
+    ///
+    /// Nothing is lost and nothing has to be re-entered. Each alert term
+    /// becomes a rule that highlights it and asks urgently for attention,
+    /// which is what an alert term did; each group with its flash flag on
+    /// becomes a rule triggered by that group's *channels* and addressed to
+    /// that group's *window*, which is exactly what the flag did; the
+    /// all-channels view's flag becomes a rule with no trigger at all.
+    ///
+    /// The terms were global and the rules are per profile, so each profile
+    /// gets its own copy of them — the alternative is an operator whose alert
+    /// terms work in one production and are missing in the next, which is the
+    /// exact failure the global list existed to prevent.
+    ///
+    /// Run on the way *in*, so it costs nothing on a file that has already
+    /// been migrated: a version 2 file has no legacy fields to read.
+    fn migrate(&mut self) {
+        let terms = std::mem::take(&mut self.alerts);
+
+        for profile in &mut self.profiles {
+            let mut rules = Vec::new();
+
+            for term in &terms {
+                rules.push(StoredRule {
+                    name: term.clone(),
+                    enabled: true,
+                    words: vec![term.clone()],
+                    channels: Vec::new(),
+                    views: Vec::new(),
+                    actions: vec![rules::Action::Highlight, rules::Action::UrgentAttention],
+                    min_interval_ms: 0,
+                });
+            }
+
+            for (position, group) in profile.groups.iter().enumerate() {
+                if !group.flash {
+                    continue;
+                }
+                rules.push(StoredRule {
+                    name: group.name.clone(),
+                    enabled: true,
+                    words: Vec::new(),
+                    // Both halves, because the flag was both: it fired on what
+                    // the group could hear and it flooded the window of that
+                    // group. Written as one list each, it is now sayable — and
+                    // separable, which it never was.
+                    channels: group.members.clone(),
+                    views: vec![position],
+                    actions: vec![rules::Action::Flash],
+                    min_interval_ms: 0,
+                });
+            }
+
+            if profile.all_channels_flash {
+                rules.push(StoredRule {
+                    // Named after what it does, because the flag it comes from
+                    // had no name: it was a checkbox on a view.
+                    name: "Every message".to_string(),
+                    enabled: true,
+                    words: Vec::new(),
+                    channels: Vec::new(),
+                    views: Vec::new(),
+                    actions: vec![rules::Action::Flash],
+                    min_interval_ms: 0,
+                });
+            }
+
+            for group in &mut profile.groups {
+                group.flash = false;
+            }
+            profile.all_channels_flash = false;
+
+            // Ahead of whatever the file already held, which for a version 1
+            // file is nothing. Appending rather than replacing is what makes
+            // running this twice harmless.
+            rules.extend(std::mem::take(&mut profile.rules));
+            profile.rules = rules;
+        }
     }
 }
 
@@ -364,6 +545,18 @@ pub fn load(path: &Path) -> Config {
 
     match serde_json::from_str::<Config>(&text) {
         Ok(mut config) if config.version <= VERSION => {
+            // Before the tidying, because it is what fills in the rules the
+            // tidying then prunes: a version 1 file's groups become group
+            // triggers, and a hand-truncated channel list has to cost one of
+            // those its channel like any other.
+            if config.version < VERSION {
+                tracing::info!(
+                    from = config.version,
+                    to = VERSION,
+                    "migrating the configuration"
+                );
+                config.migrate();
+            }
             config.sanitise();
             tracing::info!(
                 profiles = config.profiles.len(),
@@ -464,7 +657,9 @@ mod tests {
             vad_model: Some("silero-v5.1.2".into()),
             model_path: None,
             workers: Some(4),
-            alerts: vec!["Feuer".into(), "Arzt".into()],
+            // Version 1 only, and never written: a fixture that set them
+            // would not survive its own round trip.
+            alerts: Vec::new(),
             remote: crate::remote::RemoteConfig {
                 enabled: true,
                 address: "192.168.1.20".into(),
@@ -484,6 +679,7 @@ mod tests {
                     }],
                     groups: vec![],
                     all_channels_flash: false,
+                    rules: vec![],
                 },
                 Profile {
                     name: "Grosses Haus".into(),
@@ -507,10 +703,30 @@ mod tests {
                     groups: vec![StoredGroup {
                         name: "Bühne".into(),
                         members: vec![1],
-                        flash: true,
+                        flash: false,
                         on_top: true,
                     }],
-                    all_channels_flash: true,
+                    all_channels_flash: false,
+                    rules: vec![
+                        StoredRule {
+                            name: "Feuer".into(),
+                            enabled: true,
+                            words: vec!["Feuer".into()],
+                            channels: vec![],
+                            views: vec![],
+                            actions: vec![rules::Action::Highlight, rules::Action::UrgentAttention],
+                            min_interval_ms: 0,
+                        },
+                        StoredRule {
+                            name: "Go bei der Inspizienz".into(),
+                            enabled: true,
+                            words: vec!["Go".into()],
+                            channels: vec![1],
+                            views: vec![0],
+                            actions: vec![rules::Action::Flash],
+                            min_interval_ms: 1_000,
+                        },
+                    ],
                 },
             ],
         }
@@ -570,8 +786,8 @@ mod tests {
     #[test]
     fn a_file_from_before_the_alert_list_still_loads() {
         // Every field P17 added is optional on the way in, so a setup built
-        // with an earlier version comes back whole — with no alert terms and
-        // with no group flashing, which is what "never asked for" means.
+        // with an earlier version comes back whole — and, having asked for
+        // neither alert terms nor flashing, it comes back with no rules.
         let path = temp_dir().join(FILE_NAME);
         fs::write(
             &path,
@@ -597,16 +813,110 @@ mod tests {
 
         let config = load(&path);
 
-        assert!(config.alerts.is_empty());
+        assert!(config.profiles[0].rules.is_empty());
         // And it decodes with the default worker count rather than none.
         assert_eq!(config.workers, None);
         assert_eq!(config.profiles[0].groups[0].members, vec![0]);
-        assert!(!config.profiles[0].groups[0].flash);
         // And its window opens like any other one: a setup that suddenly put
         // windows in front of everything is not what a missing field meant.
         assert!(!config.profiles[0].groups[0].on_top);
-        // And the all-channels view of that profile is quiet too.
+    }
+
+    /// The acceptance criterion P19 is signed off against: a version 1 file
+    /// comes back as the equivalent rules, without the operator re-entering
+    /// anything.
+    #[test]
+    fn a_version_one_file_comes_back_as_rules() {
+        let path = temp_dir().join(FILE_NAME);
+        fs::write(
+            &path,
+            r##"{
+              "version": 1,
+              "active": 0,
+              "vocabulary": null,
+              "alerts": ["Feuer", "Arzt"],
+              "profiles": [
+                {
+                  "name": "Grosses Haus",
+                  "device": "MADIface",
+                  "channels": [
+                    { "channel": 0, "label": "Regie", "language": "de", "color": "#6ea8fe" },
+                    { "channel": 3, "label": "Licht", "language": "de", "color": "#5fd38d" }
+                  ],
+                  "groups": [
+                    { "name": "Bühne", "members": [1], "flash": true },
+                    { "name": "Licht", "members": [1], "flash": false }
+                  ],
+                  "allChannelsFlash": true
+                }
+              ]
+            }"##,
+        )
+        .expect("writing the version 1 file");
+
+        let config = load(&path);
+        assert_eq!(config.version, VERSION);
+        let rules = &config.profiles[0].rules;
+
+        // Two terms, the one flashing group, and the all-channels flag.
+        assert_eq!(rules.len(), 4);
+
+        assert_eq!(rules[0].words, ["Feuer"]);
+        assert!(rules[0].channels.is_empty() && rules[0].views.is_empty());
+        assert_eq!(
+            rules[0].actions,
+            [rules::Action::Highlight, rules::Action::UrgentAttention],
+            "an alert term highlighted and asked urgently — both, and nothing else"
+        );
+        assert_eq!(rules[1].words, ["Arzt"]);
+
+        // The group that flashed, as the two halves it always was: its
+        // channels are when it fires, its window is who is told.
+        assert_eq!(rules[2].views, [0]);
+        assert_eq!(rules[2].channels, [1]);
+        assert!(rules[2].words.is_empty());
+        assert_eq!(rules[2].actions, [rules::Action::Flash]);
+
+        // The all-channels view's flag: no trigger at all.
+        assert!(rules[3].words.is_empty());
+        assert!(rules[3].channels.is_empty() && rules[3].views.is_empty());
+        assert_eq!(rules[3].actions, [rules::Action::Flash]);
+
+        // And the flags they came from are spent, so re-saving cannot produce
+        // the same rules a second time.
+        assert!(config.alerts.is_empty());
+        assert!(!config.profiles[0].groups[0].flash);
         assert!(!config.profiles[0].all_channels_flash);
+    }
+
+    /// P19's other acceptance criterion: deleting a channel leaves no rule
+    /// pointing at nothing — and, where that was the whole of the rule's
+    /// trigger, no rule that has quietly become louder than it was written.
+    #[test]
+    fn a_rule_pointing_past_the_channels_loses_the_channel_and_not_its_narrowing() {
+        let path = temp_dir().join(FILE_NAME);
+        let mut config = a_config();
+        config.profiles[1].rules[1].channels = vec![1, 9];
+        config.profiles[1].rules.push(StoredRule {
+            name: "nur auf Kanal 9".into(),
+            enabled: true,
+            words: vec!["Go".into()],
+            channels: vec![9],
+            views: vec![],
+            actions: vec![rules::Action::Flash],
+            min_interval_ms: 0,
+        });
+        save(&path, &config).expect("saving");
+
+        let loaded = load(&path);
+        let rules = &loaded.profiles[1].rules;
+        assert_eq!(rules[1].channels, [1], "the channel that is there survives");
+        assert!(rules[1].enabled);
+
+        assert!(
+            rules[2].channels.is_empty() && !rules[2].enabled,
+            "a rule whose every channel is gone is kept and switched off, never widened"
+        );
     }
 
     #[test]
@@ -733,7 +1043,6 @@ mod tests {
             keys(&json),
             [
                 "active",
-                "alerts",
                 "model",
                 "modelPath",
                 "profiles",
@@ -746,15 +1055,7 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]),
-            [
-                "allChannelsFlash",
-                "channels",
-                "device",
-                "deviceId",
-                "groups",
-                "language",
-                "name"
-            ]
+            ["channels", "device", "deviceId", "groups", "language", "name", "rules"]
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
@@ -763,7 +1064,19 @@ mod tests {
         // The second profile, because it is the one with groups in it.
         assert_eq!(
             keys(&json["profiles"][1]["groups"][0]),
-            ["flash", "members", "name", "onTop"]
+            ["members", "name", "onTop"]
+        );
+        assert_eq!(
+            keys(&json["profiles"][1]["rules"][0]),
+            [
+                "actions",
+                "channels",
+                "enabled",
+                "minIntervalMs",
+                "name",
+                "views",
+                "words"
+            ]
         );
         assert_eq!(keys(&json["remote"]), ["address", "enabled", "port"]);
     }

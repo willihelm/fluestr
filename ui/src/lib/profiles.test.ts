@@ -23,6 +23,7 @@ import {
 import type { StoredConfig } from "./bridge";
 import { restoreChannel, DEFAULT_LANGUAGE } from "./streams";
 import { restoreGroup } from "./groups";
+import { restoreRule } from "./rules";
 import type { DeviceOption, StoredProfile } from "./bridge";
 
 /// A file as an **older version wrote it**: the fields that version did not
@@ -44,6 +45,8 @@ const aProfile = (): Profile => {
     restoreChannel({ channel: 3, label: "Licht", language: "en", color: "#5fd38d" }),
   ];
 
+  const groups = [restoreGroup("Bühne", [channels[1].key])];
+
   return {
     key: 99,
     name: "Grosses Haus",
@@ -51,8 +54,27 @@ const aProfile = (): Profile => {
     deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
     language: "de",
     channels,
-    groups: [restoreGroup("Bühne", [channels[1].key], false)],
-    allChannelsFlash: true,
+    groups,
+    rules: [
+      restoreRule({
+        name: "Feuer",
+        enabled: true,
+        words: ["Feuer"],
+        channels: [],
+        views: [],
+        actions: ["highlight", "urgentAttention"],
+        minIntervalMs: 0,
+      }),
+      restoreRule({
+        name: "Go auf der Bühne",
+        enabled: true,
+        words: ["Go"],
+        channels: [channels[1].key],
+        views: [groups[0].key],
+        actions: ["flash"],
+        minIntervalMs: 1_000,
+      }),
+    ],
   };
 };
 
@@ -65,8 +87,27 @@ const stored: StoredProfile = {
     { channel: 0, label: "Regie", language: "de", color: "#6ea8fe" },
     { channel: 3, label: "Licht", language: "en", color: "#5fd38d" },
   ],
-  groups: [{ name: "Bühne", flash: false, onTop: false, members: [1] }],
-  allChannelsFlash: true,
+  groups: [{ name: "Bühne", onTop: false, members: [1] }],
+  rules: [
+    {
+      name: "Feuer",
+      enabled: true,
+      words: ["Feuer"],
+      channels: [],
+      views: [],
+      actions: ["highlight", "urgentAttention"],
+      minIntervalMs: 0,
+    },
+    {
+      name: "Go auf der Bühne",
+      enabled: true,
+      words: ["Go"],
+      channels: [1],
+      views: [0],
+      actions: ["flash"],
+      minIntervalMs: 1_000,
+    },
+  ],
 };
 
 describe("toStored", () => {
@@ -415,23 +456,10 @@ describe("the configuration as a whole", () => {
   });
 });
 
-describe("alert terms and flashing", () => {
-  it("carries a group's flash setting across a save and a load", () => {
-    // A group set to flash that comes back quiet is a view an operator
-    // believes is watching them and is not.
-    const profile = aProfile();
-    profile.groups[0].flash = true;
-
-    expect(fromStored(toStored(profile)).groups[0].flash).toBe(true);
-  });
-
-  it("keeps a file written before flashing existed quiet", () => {
-    expect(fromStored(stored).groups[0].flash).toBe(false);
-  });
-
-  // The window setting travels the same way and for the same reason: a group
-  // whose window is meant to stay in front and comes back behind everything is
-  // a view an operator believes they can see and cannot.
+describe("rules across the file", () => {
+  // The window setting travels with the group: one whose window is meant to
+  // stay in front and comes back behind everything is a view an operator
+  // believes they can see and cannot.
   it("carries a group's window setting across a save and a load", () => {
     const profile = aProfile();
     profile.groups[0].onTop = true;
@@ -447,32 +475,42 @@ describe("alert terms and flashing", () => {
     ).toBe(false);
   });
 
-  it("keeps the all-channels view's flash setting across the file", () => {
-    expect(fromStored(toStored(aProfile())).allChannelsFlash).toBe(true);
+  // The whole rule, because every part of it is load-bearing: a rule that
+  // comes back without its channel fires everywhere, and one that comes back
+  // without its limit floods.
+  it("carries a rule across a save and a load", () => {
+    const rule = fromStored(toStored(aProfile())).rules[1];
+
+    expect(rule.words).toEqual(["Go"]);
+    expect(rule.actions).toEqual(["flash"]);
+    expect(rule.minIntervalMs).toBe(1_000);
   });
 
-  it("reads a file written before the all-channels view had that setting as quiet", () => {
-    const { allChannelsFlash: _, ...before } = stored;
-    expect(fromStored(anOldFile<StoredProfile>(before)).allChannelsFlash).toBe(false);
+  // Positions on the way out, keys on the way in — the same translation group
+  // membership gets, and for the same reason: a key is a counter this window
+  // handed out.
+  it("stores a rule's channels and views as positions and reads them back as keys", () => {
+    const profile = aProfile();
+    const written = toStored(profile).rules[1];
+
+    expect(written.channels).toEqual([1]);
+    expect(written.views).toEqual([0]);
+
+    const read = fromStored(toStored(profile));
+    expect(read.rules[1].channels).toEqual([read.channels[1].key]);
+    expect(read.rules[1].views).toEqual([read.groups[0].key]);
   });
 
-  it("stores the alert list without the editor's empty row", () => {
-    const config = toStoredConfig([aProfile()], 99, "Standby", {}, ["Feuer", "  ", "Feuer"]);
+  it("drops a rule's channel whose channel is gone rather than storing a dangling one", () => {
+    const profile = aProfile();
+    profile.channels = [profile.channels[0]];
 
-    expect(config.alerts).toEqual(["Feuer"]);
+    expect(toStored(profile).rules[1].channels).toEqual([]);
   });
 
-  it("reads a file from before the alert list as an empty one", () => {
-    const { alerts } = fromStoredConfig(
-      anOldFile<StoredConfig>({
-        version: 1,
-        active: 0,
-        vocabulary: null,
-        profiles: [stored],
-      }),
-    );
-
-    expect(alerts).toEqual([]);
+  it("reads a file written before rules existed as a profile without any", () => {
+    const { rules: _, ...before } = stored;
+    expect(fromStored(anOldFile<StoredProfile>(before)).rules).toEqual([]);
   });
 });
 
@@ -599,8 +637,19 @@ describe("adopting a configuration", () => {
         key: 9_100,
         name: "Regie",
         members: [profile.channels[0].key],
-        flash: true,
         onTop: true,
+      },
+    ];
+    profile.rules = [
+      {
+        key: 9_200,
+        name: "Feuer",
+        enabled: true,
+        words: ["Feuer", "Arzt"],
+        channels: [],
+        views: [profile.groups[0].key],
+        actions: ["highlight", "urgentAttention"],
+        minIntervalMs: 0,
       },
     ];
 
@@ -609,7 +658,6 @@ describe("adopting a configuration", () => {
       profile.key,
       "Standby, Cue, Go.",
       { model: "small-q5_1", vadModel: "silero-v5.1.2", modelPath: null, workers: 4 },
-      ["Feuer", "Arzt"],
       { enabled: true, address: "192.168.178.27", port: 8787 },
     );
   };
@@ -622,7 +670,6 @@ describe("adopting a configuration", () => {
       read.activeKey!,
       read.vocabulary ?? "",
       read.models,
-      read.alerts,
       read.remote,
     );
 
@@ -636,7 +683,7 @@ describe("adopting a configuration", () => {
   // in exactly the save that exists as a last resort.
   it("writes a port the backend can read even when the field was cleared", () => {
     const profile = newProfile([], { name: "Probe", id: "probe" });
-    const written = toStoredConfig([profile], profile.key, "", {}, [], {
+    const written = toStoredConfig([profile], profile.key, "", {}, {
       enabled: true,
       address: "192.168.178.27",
       port: null as unknown as number,
@@ -647,7 +694,7 @@ describe("adopting a configuration", () => {
 
   it("holds a port to what can actually be bound", () => {
     const profile = newProfile([], { name: "Probe", id: "probe" });
-    const low = toStoredConfig([profile], profile.key, "", {}, [], {
+    const low = toStoredConfig([profile], profile.key, "", {}, {
       enabled: true,
       address: "192.168.178.27",
       port: 80,
@@ -683,7 +730,6 @@ describe("adopting a configuration", () => {
         read.activeKey!,
         read.vocabulary ?? "",
         read.models,
-        read.alerts,
         read.remote,
       );
       expect(canonical(next)).toBe(canonical(stored));

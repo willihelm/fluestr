@@ -24,12 +24,13 @@ pub mod models;
 pub mod pool;
 pub mod remote;
 pub mod resources;
+pub mod rules;
 pub mod session;
 pub mod worker;
 
-use alerts::Matcher;
 use history::History;
 use remote::Hub;
+use rules::Rules;
 use serde::Serialize;
 use session::{
     EventSink, LevelsEvent, OverloadEvent, Session, SessionConfig, SessionState, TranscriptEvent,
@@ -38,6 +39,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Event names on the bridge. Constants because the UI subscribes by string
@@ -104,14 +106,16 @@ pub(crate) fn broadcast<R: Runtime, S: Serialize + Clone>(
 
 /// Sends session output to every view.
 ///
-/// The alert matcher rides along (P17): this is the one place every view's
-/// copy of a transcript comes from, so it is where the alert ranges are worked
-/// out. A detached group window and the LAN remote (P16) then highlight the
-/// same characters as the main chat because they are given the same numbers,
-/// not because three matchers happen to agree.
+/// The rules ride along (P19): this is the one place every view's copy of a
+/// transcript comes from, so it is where they are evaluated. A detached group
+/// window and the LAN remote (P16) then highlight the same characters as the
+/// main chat, and are asked for the same reactions, because they are given the
+/// same answer — not because three evaluations happen to agree. It is also the
+/// only place that can fire an action exactly *once* per event, which is what
+/// P19's outbound actions will need and what no window can promise.
 struct TauriEvents<R: Runtime> {
     app: AppHandle<R>,
-    alerts: Arc<Mutex<Matcher>>,
+    rules: Arc<Mutex<Rules>>,
     /// What a view opened later is caught up from — see [`history`]. Written
     /// here because this is the one place every view's copy comes from, so it
     /// is also the only place that can record what they were all sent.
@@ -120,18 +124,23 @@ struct TauriEvents<R: Runtime> {
 
 impl<R: Runtime> EventSink for TauriEvents<R> {
     fn transcript(&self, mut event: TranscriptEvent) {
-        // A poisoned lock here would cost every later transcript its
-        // highlighting, and silently. The text still has to reach the chat —
-        // an alert term that is not marked is a worse chat, an event that is
-        // dropped is no chat at all.
-        match self.alerts.lock() {
-            Ok(matcher) if !matcher.is_empty() => event.alerts = matcher.find(&event.text),
+        // A poisoned lock here would cost every later transcript its rules,
+        // and silently. The text still has to reach the chat — a rule that
+        // does not fire is a worse chat, an event that is dropped is no chat
+        // at all.
+        match self.rules.lock() {
+            Ok(mut rules) if !rules.is_empty() => {
+                let outcome = rules.evaluate(event.stream_id, &event.text, Instant::now());
+                event.alerts = outcome.alerts;
+                event.actions = outcome.actions;
+                event.flash_views = outcome.flash_views;
+            }
             Ok(_) => {}
-            Err(err) => tracing::error!(error = %err, "the alert list is unreadable"),
+            Err(err) => tracing::error!(error = %err, "the rule list is unreadable"),
         }
-        // Recorded with its alert ranges, after the matching and before the
-        // emit: a group window opened in ten minutes has to highlight the same
-        // characters as the window that is open now.
+        // Recorded with what the rules made of it, after the evaluation and
+        // before the emit: a group window opened in ten minutes has to
+        // highlight the same characters as the window that is open now.
         match self.history.lock() {
             Ok(mut history) => history.push(event.clone()),
             Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
@@ -183,12 +192,14 @@ pub struct AppState {
     /// and the VAD are two different downloads an operator may reasonably
     /// start together — and cancelling one of them must not stop the other.
     pub(crate) downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// The compiled alert list (P17).
+    /// The compiled rules (P19).
     ///
-    /// Compiled once when it changes rather than per transcript, and shared
-    /// with every session's event sink through the `Arc` — so a term added
+    /// Compiled once when they change rather than per transcript, and shared
+    /// with every session's event sink through the `Arc` — so a rule written
     /// mid-show takes effect on the next segment without restarting anything.
-    pub(crate) alerts: Arc<Mutex<Matcher>>,
+    /// Behind a `Mutex` rather than an `RwLock` because evaluating one is a
+    /// write: a rate-limited rule remembers when it last fired.
+    pub(crate) rules: Arc<Mutex<Rules>>,
     /// The transcripts already emitted, and the session state around them.
     ///
     /// Shared with every session's event sink through the `Arc`, like the
@@ -474,7 +485,7 @@ pub(crate) fn start_session<R: Runtime>(
 
     let events: Arc<dyn EventSink> = Arc::new(TauriEvents {
         app: app.clone(),
-        alerts: Arc::clone(&state.alerts),
+        rules: Arc::clone(&state.rules),
         history: Arc::clone(&state.history),
     });
     match Session::start(config, events.clone(), models, state.workers()) {

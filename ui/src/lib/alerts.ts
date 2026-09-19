@@ -1,11 +1,12 @@
-// Alert terms in the chat: the list an operator edits, and the pieces a view
-// renders (P17).
+// Highlighted words in the chat: the words an operator writes, and the pieces
+// a view renders (P17, P19).
 //
 // What is deliberately *not* here is the matching. The ranges arrive with the
-// transcript event, matched once on the backend (`crates/app/src/alerts.rs`),
-// so the main chat, a detached group window and the LAN viewer (P16) highlight
-// the same characters. A second matcher here would agree with that one right
-// up to the first term with an umlaut in it.
+// transcript event, matched once on the backend (`crates/app/src/alerts.rs`)
+// by whichever rules asked to highlight, so the main chat, a detached group
+// window and the LAN viewer (P16) highlight the same characters. A second
+// matcher here would agree with that one right up to the first term with an
+// umlaut in it.
 //
 // The offsets are UTF-16 code units, which is what `slice` counts — so they
 // are used exactly as they arrive. Drawing them over a line is `search.ts`'
@@ -15,18 +16,18 @@
 
 import type { AlertMatch } from "./bridge";
 
-/// The terms as the backend wants them: trimmed, without blanks, without
-/// duplicates.
-///
-/// The editor keeps a row per term and an empty row is how a term is added, so
-/// blanks are the normal state of the list being edited rather than a mistake
-/// — dropping them here is what keeps a half-typed row out of the file and out
-/// of the matcher.
-/// Two terms the compiled matcher would not tell apart
+/// Two words the compiled matcher would not tell apart
 /// (`crates/app/src/alerts.rs`).
 const same = (a: string, b: string): boolean =>
   a.normalize("NFC").toLowerCase() === b.normalize("NFC").toLowerCase();
 
+/// A rule's words as the backend wants them: trimmed, without blanks, without
+/// duplicates.
+///
+/// The editor's field is being typed into, so blanks and half-written repeats
+/// are the normal state of a list being edited rather than a mistake —
+/// dropping them here is what keeps them out of the file and out of the
+/// matcher.
 export const cleanTerms = (terms: string[]): string[] => {
   const kept: string[] = [];
   for (const term of terms) {
@@ -42,12 +43,6 @@ export const cleanTerms = (terms: string[]): string[] => {
   }
   return kept;
 };
-
-/// Whether two lists say the same thing, for deciding whether the compiled
-/// list on the backend is still current. Order counts — it is cheaper to
-/// recompile a reordered list than to explain when it does not matter.
-export const sameTerms = (a: string[], b: string[]): boolean =>
-  a.length === b.length && a.every((term, i) => term === b[i]);
 
 /// The same ranges, moved along by `offset` code units.
 ///

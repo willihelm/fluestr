@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanTerms, sameTerms, shift } from "./alerts";
+import { cleanTerms, shift } from "./alerts";
 
 describe("cleanTerms", () => {
   it("drops the empty row a term is added through", () => {
@@ -16,14 +16,6 @@ describe("cleanTerms", () => {
     // Two rows a keyboard can produce and nobody can tell apart on screen.
     // The backend compiles them to one term, so the list must show one.
     expect(cleanTerms(["B\u00fchne", "Bu\u0308hne"])).toEqual(["B\u00fchne"]);
-  });
-});
-
-describe("sameTerms", () => {
-  it("tells a changed list from an unchanged one", () => {
-    expect(sameTerms(["Feuer"], ["Feuer"])).toBe(true);
-    expect(sameTerms(["Feuer"], ["Feuer", "Arzt"])).toBe(false);
-    expect(sameTerms(["Feuer", "Arzt"], ["Arzt", "Feuer"])).toBe(false);
   });
 });
 

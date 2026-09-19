@@ -14,6 +14,7 @@
 
 import { shift } from "./alerts";
 import type { AlertMatch, TranscriptEvent } from "./bridge";
+import type { Action } from "./generated/rules";
 
 /// Silence that ends a bubble. Below this the speaker simply carried on;
 /// above it, the next segment is a new turn even from the same channel.
@@ -41,12 +42,19 @@ export interface Bubble {
   /// case here — a merged bubble genuinely can be both, and picking one of
   /// them to display would be a guess.
   languages: string[];
-  /// Where the alert terms are in `text` (P17), in UTF-16 code units.
+  /// Where the highlights are in `text` (P17, P19), in UTF-16 code units.
   ///
   /// Carried through the merge rather than matched again here: the ranges came
   /// from the backend's one matcher, and a bubble is its segments joined, so
   /// each part's ranges move along by whatever was joined in front of them.
   alerts: AlertMatch[];
+  /// What the rules asked for, across every part of the bubble (P19).
+  ///
+  /// Every part's actions, duplicates and all, rather than a set: what a
+  /// window needs to know is not *whether* this bubble asked for a flood but
+  /// whether the segment that just arrived is the one that asked first. One
+  /// occurrence means it is — see `attention.ts`.
+  actions: Action[];
   /// Of the most recent part: how fresh the text at the bottom is, which is
   /// what the number is read for.
   decodeMs: number;
@@ -87,6 +95,9 @@ const open = (e: TranscriptEvent): Bubble => ({
   text: e.text.trim(),
   languages: e.detectedLanguage ? [e.detectedLanguage] : [],
   alerts: placed(e, 0),
+  // `?? []` for `alerts`' reason: an event from a backend that predates P19
+  // has no actions, and the chat is the wrong place to discover that.
+  actions: [...(e.actions ?? [])],
   decodeMs: e.decodeMs,
   latencyMs: e.latencyMs,
   parts: 1,
@@ -118,6 +129,7 @@ const append = (bubble: Bubble, e: TranscriptEvent): Bubble => {
         ? [...bubble.languages, e.detectedLanguage]
         : bubble.languages,
     alerts: [...bubble.alerts, ...placed(e, offset)],
+    actions: [...bubble.actions, ...(e.actions ?? [])],
     decodeMs: e.decodeMs,
     latencyMs: e.latencyMs,
     parts: bubble.parts + 1,

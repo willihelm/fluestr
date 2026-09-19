@@ -24,10 +24,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::alerts::Matcher;
 use crate::config::Config;
 use crate::models;
 use crate::remote;
+use crate::rules::{CompiledRule, Rules};
 use crate::session::{self, SessionConfig, SessionState, StreamUpdate};
 use crate::{AppState, EVENT_CLEARED, EVENT_CONFIG, EVENT_MODEL_PROGRESS};
 
@@ -89,8 +89,9 @@ pub enum Command {
     },
     ListDevices,
     ListLanguages,
-    SetAlertTerms {
-        terms: Vec<String>,
+    /// The rules, already compiled by the view that holds the groups (P19).
+    SetRules {
+        rules: Vec<CompiledRule>,
     },
     SessionSnapshot,
     ClearCommunication,
@@ -127,7 +128,7 @@ pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) -> Resul
         Command::RemoveModel { id } => json(remove_model(app, &id)?),
         Command::ListDevices => json(session::list_devices().map_err(|err| err.to_string())?),
         Command::ListLanguages => json(list_languages(app)?),
-        Command::SetAlertTerms { terms } => json(set_alert_terms(app, terms)?),
+        Command::SetRules { rules } => json(set_rules(app, rules)?),
         Command::SessionSnapshot => json(session_snapshot(app)?),
         Command::ClearCommunication => json(clear_communication(app)?),
         // On a blocking thread: starting a session loads the model, which on
@@ -387,23 +388,34 @@ fn list_languages<R: Runtime>(
     Ok(languages)
 }
 
-// --- Alert terms (P17) ----------------------------------------------------
+// --- Rules (P19) ----------------------------------------------------------
 
-/// Compiles the alert list. Sent by the UI whenever it changes, and once at
+/// Compiles the rules. Sent by the UI whenever they change, and once at
 /// startup with what the configuration file held.
 ///
-/// The list is not read from the configuration file here, for the same reason
+/// They arrive **compiled**, with every group already resolved into the stream
+/// ids of its members: groups are the frontend's, the backend has never had a
+/// notion of one, and a rule is evaluated against a stream id. See
+/// [`crate::rules`].
+///
+/// Not read from the configuration file here, for the same reason
 /// `list_models` takes its selection as an argument: Settings saves through a
-/// debounce, so the file is a second behind the term that was just typed —
-/// and a term that only starts working a second after it was entered is a term
+/// debounce, so the file is a second behind the rule that was just written —
+/// and a rule that only starts working a second after it was entered is a rule
 /// nobody can tell is working.
-fn set_alert_terms<R: Runtime>(app: &AppHandle<R>, terms: Vec<String>) -> Result<(), String> {
-    let matcher = Matcher::new(terms);
-    tracing::info!(terms = matcher.len(), "alert list compiled");
+///
+/// Replacing the whole list rather than patching one rule, like `save_config`
+/// and for its reason: the list is short, a human edits it at human speed, and
+/// a partial update would need the two sides to agree on which half is
+/// authoritative. It also resets the rate limits, which is the right answer —
+/// a rule that was just edited is a new rule.
+fn set_rules<R: Runtime>(app: &AppHandle<R>, rules: Vec<CompiledRule>) -> Result<(), String> {
+    let compiled = Rules::compile(rules);
+    tracing::info!(rules = compiled.len(), "rules compiled");
     *state(app)?
-        .alerts
+        .rules
         .lock()
-        .map_err(|_| "the alert list is poisoned".to_string())? = matcher;
+        .map_err(|_| "the rule list is poisoned".to_string())? = compiled;
     Ok(())
 }
 
@@ -521,12 +533,15 @@ mod tests {
     #[test]
     fn a_call_names_its_command_and_carries_its_arguments() {
         let call: Command = serde_json::from_str(
-            r#"{"command":"set_alert_terms","args":{"terms":["Feuer","Arzt"]}}"#,
+            r#"{"command":"set_rules","args":{"rules":[{"name":"Feuer","words":["Feuer"],"streams":null,"actions":["highlight"],"minIntervalMs":0}]}}"#,
         )
         .expect("a call with arguments");
 
         match call {
-            Command::SetAlertTerms { terms } => assert_eq!(terms, ["Feuer", "Arzt"]),
+            Command::SetRules { rules } => {
+                assert_eq!(rules.len(), 1);
+                assert_eq!(rules[0].words, ["Feuer"]);
+            }
             other => panic!("read as {other:?}"),
         }
     }

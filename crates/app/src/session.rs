@@ -211,14 +211,35 @@ pub struct TranscriptEvent {
     /// the segmenter waits out before it closes a segment, which is why that
     /// timeout is a latency setting and not just a quality one.
     pub latency_ms: u32,
-    /// Where the alert terms occur in `text`, in UTF-16 code units (P17).
+    /// Where to mark the text, in UTF-16 code units (P17, P19).
     ///
-    /// Left empty here: the pipeline does not know what the operator put on
-    /// the alert list, and the list can change between two segments of one
-    /// sentence. It is filled in where the event crosses the bridge — once,
-    /// for every view at the same time. See [`crate::alerts`].
+    /// Left empty here: the pipeline does not know what the operator's rules
+    /// say, and they can change between two segments of one sentence. It is
+    /// filled in where the event crosses the bridge — once, for every view at
+    /// the same time — by whichever rules asked to highlight. See
+    /// [`crate::rules`].
     #[serde(default)]
     pub alerts: Vec<crate::alerts::AlertMatch>,
+    /// What the rules that matched this segment ask for (P19).
+    ///
+    /// Filled in beside `alerts` and for the same reason: the question is
+    /// answered once rather than by each window. What each window then does
+    /// with it is its own — a group window does not flood for a channel it is
+    /// not showing, nor for a flash addressed to another view — and *when* it
+    /// does it is counted per bubble there, where the bubbles are. See
+    /// `ui/src/lib/attention.ts`.
+    #[serde(default)]
+    pub actions: Vec<crate::rules::Action>,
+    /// Which windows the flash is for (P19): the positions of the groups the
+    /// firing rules named, or `None` for every window showing the channel.
+    ///
+    /// Beside `actions` rather than inside it because it qualifies exactly
+    /// one of them. A channel says *where it was said* and is already
+    /// answered by `stream_id`; a group says *which view it is for*, and only
+    /// the view knows which one it is. Read by `ui/src/lib/attention.ts`, and
+    /// only when `actions` holds `flash`.
+    #[serde(default)]
+    pub flash_views: Option<Vec<u16>>,
 }
 
 /// Level and health of one stream.
@@ -1091,6 +1112,8 @@ fn emit(
                 decode_ms,
                 latency_ms,
                 alerts: Vec::new(),
+                actions: Vec::new(),
+                flash_views: None,
             });
         }
         // One segment lost, the session intact — a sidecar that rejected it,
@@ -1473,6 +1496,8 @@ mod tests {
             decode_ms: 412,
             latency_ms: 980,
             alerts: vec![crate::alerts::AlertMatch { start: 8, end: 16 }],
+            actions: vec![crate::rules::Action::Highlight],
+            flash_views: Some(vec![1]),
         })
         .unwrap();
 
@@ -1483,6 +1508,8 @@ mod tests {
         assert_eq!(json["latencyMs"], 980);
         assert_eq!(json["alerts"][0]["start"], 8);
         assert_eq!(json["alerts"][0]["end"], 16);
+        assert_eq!(json["actions"][0], "highlight");
+        assert_eq!(json["flashViews"][0], 1);
     }
 
     #[test]

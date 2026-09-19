@@ -23,6 +23,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn } from "@tauri-apps/api/event";
 import { call, emit, isRemote, on } from "./transport";
 import { flashPage, floodWindow } from "./flash";
+import type { Ask } from "./attention";
 import { ALL_CHANNELS_VIEW, closeGroupTabs, openGroupTab, type GroupView } from "./windows";
 import type {
   DeviceOption,
@@ -46,6 +47,7 @@ import type {
   StoredGroup,
   StoredProfile,
   StoredRemote,
+  StoredRule,
 } from "./generated/config";
 import type {
   DownloadStage,
@@ -57,13 +59,16 @@ import type {
   ModelsView,
 } from "./generated/models";
 import type { Interface, RemoteStatus } from "./generated/remote";
+import type { Action, CompiledRule } from "./generated/rules";
 import type { ResourceUsage } from "./generated/resources";
 
 // Re-exported so the rest of the frontend imports "the backend" from one place
 // rather than reaching into `generated/` by hand — and so that moving a type
 // between generated files is not a change in twenty components.
 export type {
+  Action,
   AlertMatch,
+  CompiledRule,
   DeviceOption,
   DownloadStage,
   Interface,
@@ -88,6 +93,7 @@ export type {
   StoredGroup,
   StoredProfile,
   StoredRemote,
+  StoredRule,
   StreamConfig,
   StreamLevel,
   StreamUpdate,
@@ -148,20 +154,25 @@ export const downloadModel = (id: string) => call<void>("download_model", { id }
 /// continues instead of starting over.
 export const cancelDownload = (id: string) => call<void>("cancel_download", { id });
 export const removeModel = (id: string) => call<void>("remove_model", { id });
-/// Compiles the alert list on the backend, where every transcript is matched
-/// against it. Sent when the list changes and once at startup — not read from
-/// the configuration file, which is a debounce behind the term just typed.
-export const setAlertTerms = (terms: string[]) =>
-  call<void>("set_alert_terms", { terms });
+/// Compiles the rules on the backend, where every transcript is evaluated
+/// against them (P19). Sent when they change and once at startup — not read
+/// from the configuration file, which is a debounce behind the rule just
+/// written.
+///
+/// They go over **compiled**, with every group already resolved into the
+/// stream ids of its members: groups exist only in this frontend, and the
+/// backend names a channel by its stream id. See `rules.ts`.
+export const setRules = (rules: CompiledRule[]) => call<void>("set_rules", { rules });
 
 /// Asks the platform to draw attention to this window, if it is not already
 /// the focused one — that check is the backend's, because the window is.
 ///
-/// `urgent` is an alert term: it keeps asking until the app is looked at. A
-/// group's flash-on-message is a single bounce. Never a sound, in either case:
-/// this is an intercom room.
+/// `ask` is what a rule's attention actions came to (P19): `"urgent"` keeps
+/// asking until the app is looked at, `"once"` is a single bounce, `null` is
+/// no platform request at all. Never a sound, in any case: this is an intercom
+/// room.
 ///
-/// `loud` is that group setting, and it is drawn rather than asked for: the
+/// `loud` is the flash action, and it is drawn rather than asked for: the
 /// whole window in dark orange, here and not on the platform, because no
 /// platform offers "paint this window". It is therefore the same in the app
 /// and in a browser — the page is what the operator is looking at either way —
@@ -170,14 +181,15 @@ export const setAlertTerms = (terms: string[]) =>
 ///
 /// In a browser there is no window and no platform to ask (P16), so the rest
 /// of the request is made with what a tab owns: its own surface and its title
-/// in the tab strip. Same two requests, same rules — see `flash.ts`.
-export const requestAttention = (urgent: boolean, loud: boolean): Promise<void> => {
+/// in the tab strip. Same requests, same rules — see `flash.ts`.
+export const requestAttention = (ask: Ask, loud: boolean): Promise<void> => {
   if (loud) floodWindow();
+  if (ask === null) return Promise.resolve();
   if (isRemote) {
-    flashPage(urgent);
+    flashPage(ask === "urgent");
     return Promise.resolve();
   }
-  return invoke<void>("request_attention", { urgent });
+  return invoke<void>("request_attention", { urgent: ask === "urgent" });
 };
 
 // --- The chat, and the windows onto it (P7) -------------------------------

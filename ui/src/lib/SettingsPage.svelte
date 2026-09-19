@@ -3,8 +3,8 @@
     | "profiles"
     | "audio"
     | "groups"
+    | "rules"
     | "vocabulary"
-    | "alerts"
     | "models"
     | "remote";
 
@@ -59,7 +59,7 @@
   import ProfileSection from "./ProfileSection.svelte";
   import StreamSetup from "./StreamSetup.svelte";
   import VocabularyEditor from "./VocabularyEditor.svelte";
-  import AlertEditor from "./AlertEditor.svelte";
+  import RuleEditor from "./RuleEditor.svelte";
   import GroupMembership from "./GroupMembership.svelte";
   import ModelPicker from "./ModelPicker.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
@@ -79,9 +79,6 @@
     profiles: Profile[];
     activeKey: number | null;
     vocabulary: string;
-    /// The words that must not be missed (P17). Beside the profiles like the
-    /// vocabulary: an emergency means the same thing in every production.
-    alerts: string[];
     /// Which model the machine transcribes with (P11). Beside the profiles
     /// rather than inside one: what a machine can run depends on the machine,
     /// not on the production being carried to it.
@@ -113,7 +110,6 @@
     profiles = $bindable(),
     activeKey = $bindable(),
     vocabulary = $bindable(),
-    alerts = $bindable(),
     models = $bindable(),
     remote = $bindable(),
     deviceChannels,
@@ -187,9 +183,9 @@
     profiles: null,
     audio: problem === null ? null : "warn",
     groups: null,
+    // Never flagged: an empty rule list is the normal state, not a problem.
+    rules: null,
     vocabulary: lengthWarning(vocabulary) === null ? null : "warn",
-    // Never flagged: an empty alert list is the normal state, not a problem.
-    alerts: null,
     // Never flagged: the listener reports its own trouble inside the section,
     // where the address that caused it is. A dot on the rail would be pointing
     // at a setting that is off on most machines and fine on the rest.
@@ -216,15 +212,16 @@
       items: [
         { id: "audio", title: "Audio" },
         { id: "groups", title: "Groups" },
+        // With the profile, because a trigger names channels and groups and
+        // neither exists outside one — unlike the alert list this replaces,
+        // which was shared by every setup and could name nothing.
+        { id: "rules", title: "Rules" },
       ],
     },
     {
       scope: "All profiles",
       note: "Shared by every setup.",
-      items: [
-        { id: "vocabulary", title: "Vocabulary" },
-        { id: "alerts", title: "Alert terms" },
-      ],
+      items: [{ id: "vocabulary", title: "Vocabulary" }],
     },
     {
       scope: "This machine",
@@ -336,20 +333,20 @@
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>
-          <GroupMembership
-            bind:groups={active.groups}
-            bind:allChannelsFlash={active.allChannelsFlash}
+          <GroupMembership bind:groups={active.groups} channels={active.channels} />
+        </div>
+
+        <div class="sheet" hidden={section !== "rules"}>
+          <RuleEditor
+            bind:rules={active.rules}
             channels={active.channels}
+            groups={active.groups}
           />
         </div>
       {/if}
 
       <div class="sheet" hidden={section !== "vocabulary"}>
         <VocabularyEditor bind:vocabulary {locked} />
-      </div>
-
-      <div class="sheet" hidden={section !== "alerts"}>
-        <AlertEditor bind:terms={alerts} />
       </div>
 
       <div class="sheet" hidden={section !== "models"}>
