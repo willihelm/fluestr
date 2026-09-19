@@ -626,6 +626,11 @@
     flex: 1;
     overflow-y: auto;
     padding: 1rem;
+    /* The list scrolls under the phone's home indicator and out from behind
+       the rounded corners; the bubbles themselves stop clear of both. */
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
+    padding-bottom: max(1rem, var(--safe-bottom));
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -731,10 +736,19 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0.5rem 1rem;
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
     border-bottom: 1px solid var(--border);
     /* Never scrolls away with the chat: the box is how the operator got to
        where they are, and it has to stay reachable from there. */
     flex: none;
+    /* The bar grows a second line rather than squeezing the search box down
+       to nothing: the row is six controls wide once a search is running, and
+       a phone has room for about three of them. Which ones end up on the
+       second line follows the order they are written in, which is also the
+       order they are used in — direction, then the query, then what to do
+       with its matches. */
+    flex-wrap: wrap;
   }
 
   .query {
@@ -760,6 +774,71 @@
        under the cursor as the count changes while typing. */
     min-width: 7rem;
     text-align: right;
+  }
+
+  .jump {
+    position: absolute;
+    /* Above the home indicator, not under it. */
+    bottom: calc(1.5rem + var(--safe-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent);
+    color: #12141a;
+    border: none;
+    border-radius: 1rem;
+    padding: 0.35rem 0.9rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  /* --- A window the width of a hand --------------------------------------
+
+     Same breakpoint as everywhere else; see `layout.ts`. The search bar is
+     the part of this view that was drawn for a row of controls across a desk,
+     and what it needs on a phone is for the box to have the first line to
+     itself. */
+  @media (max-width: 45rem) {
+    .search {
+      padding: 0.45rem 0.7rem;
+      padding-left: max(0.7rem, var(--safe-left));
+      padding-right: max(0.7rem, var(--safe-right));
+      row-gap: 0.35rem;
+    }
+
+    /* The whole of the line it is on, after the direction button beside it:
+       a search field shared with a channel picker and two step buttons is
+       four half-width controls and no room to read what was typed. */
+    .query {
+      flex: 1 0 8rem;
+    }
+
+    .channel {
+      flex: 1 1 8rem;
+      min-width: 0;
+    }
+
+    /* The count no longer holds a fixed width: on the desk it is stopping the
+       buttons beside it from shifting, and here it is the thing that decides
+       whether those buttons fit on the line at all. It is read after the
+       typing stops either way. */
+    .count {
+      min-width: 0;
+      text-align: left;
+    }
+
+    .chat {
+      padding: 0.7rem;
+      padding-left: max(0.7rem, var(--safe-left));
+      padding-right: max(0.7rem, var(--safe-right));
+      padding-bottom: max(0.7rem, var(--safe-bottom));
+    }
+
+    /* A bubble is as wide as the phone. The 48 rem cap exists so a line of
+       transcript is not a paragraph the width of a 27" display; at this size
+       there is nothing to cap. */
+    article {
+      max-width: none;
+    }
   }
 
   .step {
@@ -865,17 +944,4 @@
     }
   }
 
-  .jump {
-    position: absolute;
-    bottom: 1.5rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--accent);
-    color: #12141a;
-    border: none;
-    border-radius: 1rem;
-    padding: 0.35rem 0.9rem;
-    cursor: pointer;
-    font-weight: 600;
-  }
 </style>

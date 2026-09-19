@@ -4,8 +4,17 @@
   // They arrive in a single `levels` event, so all the bars on screen are the
   // same age — which is the point of bundling them: eight meters read together
   // should have been measured together.
+  //
+  // Two shapes, one per room. On the desk each stream is a row — a label and a
+  // bar that fills rightwards — laid out in as many columns as the window has
+  // space for. On a phone (P16) that grid collapses to one column, and eight
+  // stacked rows are most of the screen above a chat that is why the page is
+  // open at all. There the meters turn: a strip of narrow columns filling
+  // upwards, scrolled sideways if there are more than fit, in the height of a
+  // single desk row.
 
   import LevelMeter from "./LevelMeter.svelte";
+  import { watchNarrow } from "./layout";
   import type { Channel } from "./streams";
   import type { StreamLevel } from "./bridge";
 
@@ -29,6 +38,13 @@
 
   let { channels, levels, overloaded, visible, muted }: Props = $props();
 
+  /// Matched here rather than in CSS alone, because the orientation is not
+  /// only a matter of styling: `LevelMeter` has to be told which way round it
+  /// is drawing, and a media query cannot set a prop. The CSS below carries
+  /// the same breakpoint for the parts it *can* do on its own.
+  let narrow = $state(false);
+  $effect(() => watchNarrow((next) => (narrow = next)));
+
   const empty = (streamId: number): StreamLevel => ({
     streamId,
     rms: 0,
@@ -37,16 +53,23 @@
   });
 </script>
 
-<div class="meters">
+<div class="meters" class:vertical={narrow}>
   {#each channels as channel, streamId (channel.key)}
     {#if visible === null || visible.has(streamId)}
     {@const level = levels.get(streamId) ?? empty(streamId)}
     <div class="stream" class:muted={muted.has(streamId)} style="--channel: {channel.color}">
       <span class="name">{channel.label}</span>
-      <LevelMeter rms={level.rms} peak={level.peak} dropped={level.dropped} />
+      <LevelMeter
+        rms={level.rms}
+        peak={level.peak}
+        dropped={level.dropped}
+        vertical={narrow}
+      />
       {#if (overloaded.get(streamId) ?? 0) > 0}
-        <span class="error" title="The decode queue was full and the oldest segments were dropped">
-          {overloaded.get(streamId)} not transcribed
+        <span class="error" title="The decode queue was full and the oldest segments were dropped: {overloaded.get(streamId)}">
+          <!-- As with the dropped count: the number stays, the sentence it is
+               the subject of goes to the tooltip when there is no room. -->
+          {overloaded.get(streamId)}<span class="word">&nbsp;not transcribed</span>
         </span>
       {/if}
     </div>
@@ -68,6 +91,11 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    /* A grid cell's contents may shrink below what they would like to be.
+       Without it the "not transcribed" note — which cannot wrap, because it
+       belongs on the bar's line — pushes out of its column and prints over
+       the name of the next channel. */
+    min-width: 0;
     font-size: 0.8rem;
     /* The meter takes its colour from the channel, so a bar can be found
        without reading the label next to it. */
@@ -90,8 +118,69 @@
     white-space: nowrap;
   }
 
+  /* Truncated rather than allowed to overrun the column: the whole sentence
+     is in the tooltip, and a count that has run over the channel beside it
+     costs more than the word it lost. */
   .error {
     color: #ff6b6b;
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* --- The strip (narrow) ------------------------------------------------
+
+     Driven by the class the script sets rather than by the media query alone,
+     so the bars and the `LevelMeter`s inside them can never be in different
+     orientations: one decision, in `layout.ts`, applied to both.
+
+     A row that scrolls sideways rather than one that wraps: a second line of
+     meters is the thing this layout exists to avoid, and a house with twelve
+     channels on a phone is a swipe, not a screenful. */
+  .meters.vertical {
+    display: flex;
+    grid-template-columns: none;
+    gap: 0 0.5rem;
+    padding: 0.4rem 0.75rem;
+    padding-left: max(0.75rem, var(--safe-left));
+    padding-right: max(0.75rem, var(--safe-right));
+    overflow-x: auto;
+    /* A sideways drag here is the strip being scrolled; the page behind it
+       must not go anywhere. */
+    overscroll-behavior-x: contain;
+  }
+
+  .vertical .stream {
+    flex: none;
+    flex-direction: column-reverse;
+    align-items: center;
+    gap: 0.25rem;
+    width: 2.6rem;
+    /* A minimum rather than a height: a stream with a dropped count carries a
+       line the others do not, and the row stretches every column to the
+       tallest so the bars still start and end level. */
+    min-height: 4.2rem;
+  }
+
+  /* `column-reverse`, so the label written first in the markup lands *under*
+     the bar — which is where a channel name goes on every desk, and it keeps
+     the document order the screen reader follows saying the name before the
+     reading it belongs to. */
+  .vertical .name {
+    min-width: 0;
+    max-width: 100%;
+    font-size: 0.65rem;
+    line-height: 1.2;
+    text-align: center;
+  }
+
+  .vertical .error {
+    font-size: 0.65rem;
+    line-height: 1;
+  }
+
+  .vertical .error .word {
+    display: none;
   }
 </style>

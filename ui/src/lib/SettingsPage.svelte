@@ -65,6 +65,7 @@
     type StoredRemote,
   } from "./bridge";
   import { onMount } from "svelte";
+  import { watchNarrow } from "./layout";
 
   interface Props {
     devices: DeviceOption[];
@@ -122,7 +123,28 @@
   const show = (next: Section) => {
     section = next;
     lastSection = next;
+    // On a narrow window the rail is a drawer over the section it opens onto,
+    // so choosing is also the end of the errand it was opened for. On the desk
+    // this says nothing: the rail is a column and is never open or shut.
+    railOpen = false;
   };
+
+  /// Whether the window is too narrow for a rail beside the sections. The
+  /// chat's sidebar asks the same question of the same breakpoint — see
+  /// `layout.ts`, which is where the answer lives so that the two cannot
+  /// disagree at some width in between.
+  let narrow = $state(false);
+  $effect(() =>
+    watchNarrow((next) => {
+      narrow = next;
+      // Grown back to desk width: the rail is a column again, and a drawer
+      // left open would be waiting the next time the window is made small.
+      if (!next) railOpen = false;
+    }),
+  );
+
+  /// Whether that rail is currently drawn over the section.
+  let railOpen = $state(false);
 
   // Mutated in place rather than reassigned: it is an element of the
   // `profiles` array, so writing to its fields is what makes the edit part of
@@ -223,7 +245,20 @@
       ],
     },
   ]);
+
+  /// What the burger is labelled with: where the operator is, so the one line
+  /// the rail is reduced to still says which of eight sections is open. Below
+  /// `rail` because it reads it.
+  let here = $derived(
+    rail.flatMap((group) => group.items).find((item) => item.id === section)?.title ?? "Settings",
+  );
 </script>
+
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === "Escape" && railOpen) railOpen = false;
+  }}
+/>
 
 <div class="page">
   <!-- The one thing that is worth the top of the page whichever section is
@@ -241,8 +276,46 @@
     <p class="failed">The running session was not changed: {liveError}</p>
   {/if}
 
+  <!-- On a narrow window the rail is not a column beside the sections but a
+       drawer over them, and this is the line it is reduced to: the burger that
+       opens it, and the name of the section that is open. The name is the half
+       that matters — a burger alone would mean scrolling a form to work out
+       which of eight it belongs to. -->
+  {#if narrow}
+    <div class="railbar">
+      <button
+        class="burger"
+        onclick={() => (railOpen = !railOpen)}
+        aria-expanded={railOpen}
+        aria-label={railOpen ? "Close the list of settings sections" : "Settings sections"}
+      >
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path
+            d="M2 4h12M2 8h12M2 12h12"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+      <span class="where">{here}</span>
+    </div>
+  {/if}
+
   <div class="body">
-    <nav class="rail" aria-label="Settings sections">
+    {#if narrow && railOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="backdrop" onclick={() => (railOpen = false)}></div>
+    {/if}
+
+    <nav
+      class="rail"
+      class:drawer={narrow}
+      class:open={railOpen}
+      inert={narrow && !railOpen}
+      aria-label="Settings sections"
+    >
       {#each rail as group (group.scope)}
         <div class="scope">
           <h2>{group.scope}</h2>
@@ -362,6 +435,9 @@
     display: flex;
     flex: 1;
     min-height: 0;
+    /* What the rail's drawer is positioned against on a narrow window: the
+       sections, and not the bar above them that says which one is open. */
+    position: relative;
   }
 
   /* A strip in the shape of the two bars above it rather than a card, so it
@@ -496,38 +572,134 @@
     color: var(--text-dim);
   }
 
-  /* A narrow window — the app beside a cue sheet on one screen — puts the rail
-     across the top instead, where it costs a line rather than a third of the
-     width. The headings ride along on the same line as their sections, which
-     is enough to keep the two groups apart. */
-  @media (max-width: 46rem) {
-    .body {
-      flex-direction: column;
-    }
+  /* --- The rail as a drawer (narrow) -------------------------------------
 
-    .rail {
-      width: auto;
-      flex-direction: row;
-      flex-wrap: wrap;
-      gap: 0.3rem 1.2rem;
-      border-right: none;
-      border-bottom: 1px solid var(--border);
-      padding: 0.5rem 0.8rem;
-      overflow-y: visible;
-    }
+     A narrow window — a phone on the LAN remote (P16), or the app beside a
+     cue sheet on half a screen — has no room for a 14 rem column beside a
+     form that is already as narrow as it can usefully be.
 
-    .scope {
-      display: flex;
-      align-items: center;
-      gap: 0.3rem;
-    }
+     This used to wrap the rail into a row across the top. That works at a
+     laptop's half-width and not at a phone's: eight section names and two
+     headings wrap to three or four lines there, which is more of the screen
+     than the column ever took, and it is above the form permanently rather
+     than for the moment it is being used. A drawer costs one line — the
+     burger and the name of the section that is open — and gives the rest
+     back to the section.
 
-    .scope h2 {
-      margin: 0 0.2rem 0 0;
-    }
+     The same shape as the chat's sidebar, deliberately: two sidebars that
+     behave differently on the same phone are two things to learn. */
+  .railbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: none;
+    padding: 0.4rem 0.7rem;
+    padding-left: max(0.7rem, var(--safe-left));
+    padding-right: max(0.7rem, var(--safe-right));
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
 
+  .burger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid transparent;
+    border-radius: 0.3rem;
+    padding: 0.3rem 0.4rem;
+    font: inherit;
+    line-height: 0;
+    cursor: pointer;
+  }
+
+  .burger[aria-expanded="true"] {
+    color: var(--accent);
+    background: var(--bg);
+    border-color: var(--border);
+  }
+
+  /* Where the operator is. The brightest thing on the line, because it is the
+     whole reason the line is there. */
+  .where {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rail.drawer {
+    position: absolute;
+    z-index: 20;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(15rem, 76vw);
+    padding-bottom: max(0.8rem, var(--safe-bottom));
+    padding-left: max(0.6rem, var(--safe-left));
+    box-shadow: 0 0 2rem rgba(0, 0, 0, 0.5);
+    transform: translateX(-100%);
+    transition: transform 160ms ease-out;
+  }
+
+  .rail.drawer.open {
+    transform: translateX(0);
+  }
+
+  /* Closed: inert, so nothing in it is tabbed into or read out from off
+     screen, and hidden once the slide has finished so a horizontal scroll
+     cannot find it beside the window. */
+  .rail.drawer[inert] {
+    visibility: hidden;
+    transition:
+      transform 160ms ease-out,
+      visibility 0s linear 160ms;
+  }
+
+  .backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 15;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rail.drawer,
+    .rail.drawer[inert] {
+      transition: none;
+    }
+  }
+
+  @media (max-width: 45rem) {
+    /* Rows a thumb can hit, and a form that uses the width it was given back
+       by the rail leaving the row. */
     .item {
-      width: auto;
+      padding: 0.5rem 0.5rem;
+      font-size: 0.95rem;
+    }
+
+    .pane {
+      padding: 0.7rem 0.7rem 1.5rem;
+      padding-left: max(0.7rem, var(--safe-left));
+      padding-right: max(0.7rem, var(--safe-right));
+      padding-bottom: max(1.5rem, var(--safe-bottom));
+    }
+
+    .failed {
+      padding: 0.4rem 0.7rem;
+      padding-left: max(0.7rem, var(--safe-left));
+      padding-right: max(0.7rem, var(--safe-right));
+    }
+
+    /* A field is as wide as the phone: the 28 rem cap keeps a label from
+       running the width of a desk display, and there is nothing here to
+       cap. */
+    label {
+      max-width: none;
     }
   }
 </style>

@@ -65,6 +65,12 @@
     gap: 0.5rem;
     font-size: 0.8rem;
     color: var(--text);
+    /* The question is two lines long on a phone, and the two answers must not
+       be pushed off the end of the bar by it: they wrap under it instead.
+       Asked in the status bar rather than in a sheet over the chat, which is
+       what makes the wrap the whole of what this needs. */
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   button {

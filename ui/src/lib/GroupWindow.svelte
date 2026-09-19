@@ -371,6 +371,11 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    /* The viewport a phone actually gives the page — see `app.css`. A group
+       view opened as its own browser tab (P16) is the shape this window is
+       most often in on a phone, so it is the one that most needs the height
+       the address bar is not covering. */
+    height: 100dvh;
     position: relative;
   }
 
@@ -379,10 +384,18 @@
     align-items: center;
     gap: 0.6rem;
     padding: 0.5rem 0.9rem;
+    padding-top: max(0.5rem, var(--safe-top));
+    padding-left: max(0.9rem, var(--safe-left));
+    padding-right: max(0.9rem, var(--safe-right));
     border-bottom: 1px solid var(--border);
     background: var(--surface);
     font-size: 0.85rem;
+    /* The group name, its channel dots and the session state: on a phone in
+       portrait that is more than one line, and the name is the one of the
+       three that must not be the one pushed off. */
+    flex-wrap: wrap;
   }
+
 
   h1 {
     margin: 0;
@@ -399,6 +412,9 @@
   .dots {
     display: flex;
     gap: 0.15rem;
+    /* A twelve-channel group on a phone: the dots take a second line of their
+       own rather than pushing the session state off the end of the bar. */
+    flex-wrap: wrap;
   }
 
   .dot {
@@ -443,6 +459,8 @@
     color: var(--text-dim);
     font-size: 0.85rem;
     padding: 1rem;
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
   }
 
   .dim {

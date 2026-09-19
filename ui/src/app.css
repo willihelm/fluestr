@@ -14,6 +14,24 @@
   font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
   font-size: 15px;
   line-height: 1.5;
+
+  /* What a phone's own furniture covers — the notch, the rounded corners, the
+     home indicator. The page is laid out under all of it (`viewport-fit=cover`
+     in `index.html`) and the bars at its edges pad themselves back out, so a
+     full-width header still reaches the corner while its contents do not sit
+     under the camera. Zero everywhere else, including every desktop browser
+     and the app's own WebView. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+
+  /* The smallest a control may be where the pointer is a finger. 44 px is the
+     figure both platforms landed on, and it is the difference between a row of
+     step buttons in the search bar being usable on a phone and being aimed
+     at. Applied under `(pointer: coarse)` only — on the desk a 44 px search
+     field would be a form, not a strip. */
+  --touch: 2.75rem;
 }
 
 * {
@@ -27,6 +45,40 @@ body {
   /* The chat view scrolls inside its own containers (P7), not the body. */
   overflow: hidden;
   height: 100vh;
+  /* The *dynamic* viewport on a phone, where `100vh` is the tallest the page
+     ever is — the height it has with the browser's address bar scrolled away.
+     With the body unable to scroll, that bar covers the bottom of the chat
+     permanently and nothing the operator can do brings it back. `100vh` stays
+     above as the answer for anything that does not know `dvh`. */
+  height: 100dvh;
+  /* A phone rotated to landscape otherwise inflates the text to fill the new
+     width, which on this page means a header bar in two sizes depending on
+     which way the device is being held. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Where the pointer is a finger, every control is at least a fingertip tall.
+   Written once, here, against the elements rather than a class: the rule is
+   about the input device and not about any one panel, and a component that
+   grew a button after this was written should not have to remember it.
+
+   Height only. A button's width is its label, and stretching an inline "↑" to
+   44 px across would break every row it sits in. */
+@media (pointer: coarse) {
+  button,
+  select,
+  input:not([type="checkbox"]):not([type="radio"]),
+  summary {
+    min-height: var(--touch);
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    /* Not tall — wide enough to hit. The default box is about 13 px square. */
+    width: 1.15rem;
+    height: 1.15rem;
+  }
 }
 
 /* --- Settings panels -----------------------------------------------------

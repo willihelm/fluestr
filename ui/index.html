@@ -2,7 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` so the page reaches under a phone's rounded
+         corners and its home indicator; the bars inside pad themselves back
+         out of the way with the safe-area insets. `user-scalable=no` is
+         deliberately *not* set: an operator reading a transcript across the
+         auditorium may well want to pinch it larger. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- The colour a phone paints its own furniture with, so the browser
+         chrome around a dark control-room page is not a white band. -->
+    <meta name="theme-color" content="#12141a" />
     <title>Intercom2Chat</title>
   </head>
   <body>

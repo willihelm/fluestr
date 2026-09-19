@@ -19,10 +19,18 @@
   //
   // The sidebar's width is draggable and remembered per screen; see
   // `sidebar.ts` for why it is not in the configuration.
+  //
+  // On a narrow window it is not a column at all. A phone in the auditorium
+  // (P16) cannot spare a third of its width for a list that is read once and
+  // then in the way, so the sidebar becomes a drawer over the chat, opened
+  // from the burger in the header and closed again by the choice that was made
+  // in it. Same rows, same markup — what changes is whether it takes space
+  // from the chat or covers it for a moment.
 
   import { untrack } from "svelte";
   import { openGroupWindow } from "./bridge";
   import type { Group } from "./groups";
+  import { watchNarrow } from "./layout";
   import { clampWidth, DEFAULT_WIDTH, loadWidth, maxWidth, MIN_WIDTH, saveWidth } from "./sidebar";
   import type { Channel } from "./streams";
   import { ALL_CHANNELS_VIEW, type GroupView } from "./windows";
@@ -32,9 +40,35 @@
     channels: Channel[];
     /// `null` is the all-channels view.
     selected: number | null;
+    /// Whether the drawer is showing. Only ever true on a narrow window, where
+    /// the header's burger is what binds to it; on the desk the sidebar is
+    /// simply there and this says nothing.
+    open?: boolean;
   }
 
-  let { groups, channels, selected = $bindable() }: Props = $props();
+  let { groups, channels, selected = $bindable(), open = $bindable(false) }: Props = $props();
+
+  /// Whether this window is too narrow for a column beside the chat.
+  let narrow = $state(false);
+  $effect(() =>
+    watchNarrow((next) => {
+      narrow = next;
+      // A window that grew back to desk width while the drawer was open: the
+      // sidebar is a column again, and a drawer state left standing would come
+      // back the next time the window is made narrow, over a chat nobody asked
+      // to have covered.
+      if (!next) open = false;
+    }),
+  );
+
+  /// Selecting a view, which on a phone is also the end of the errand the
+  /// drawer was opened for. Anything else — a second tap to dismiss what is
+  /// now covering the chat one was just brought to — is a step the operator
+  /// has to take during a show for no reason.
+  const pick = (view: number | null) => {
+    selected = view;
+    open = false;
+  };
 
   const ALL_CHANNELS_NAME = "All channels";
 
@@ -136,14 +170,42 @@
   };
 </script>
 
-<nav style="width: {width}px">
+<!-- The dimmed chat behind an open drawer, and the way out of it: a tap
+     anywhere on what is covered puts it away, which is what every drawer on a
+     phone does and what a thumb reaches for first. Only rendered while the
+     drawer is open, so on the desk there is nothing over the chat to click
+     through. A div with a click handler rather than a button, because it is
+     the *backdrop* — the button that does this with a keyboard is the burger
+     it was opened from, and Escape below covers the rest. -->
+{#if narrow && open}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="backdrop" onclick={() => (open = false)}></div>
+{/if}
+
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === "Escape" && open) open = false;
+  }}
+/>
+
+<!-- The width is dragged on the desk and is the drawer's own on a phone: a
+     remembered 96 px column would be a drawer too narrow to read a group name
+     in, and the drag handle it was set with is not even rendered there. -->
+<nav
+  class:drawer={narrow}
+  class:open
+  inert={narrow && !open}
+  aria-label="Views"
+  style={narrow ? "" : `width: ${width}px`}
+>
   <h2>Views</h2>
 
   <!-- A row is a button and carries a second one, so it is a div rather than a
        nested pair: a button inside a button is invalid and only one of the two
        would ever be clicked. -->
   <div class="row">
-    <button class="view" class:active={selected === null} onclick={() => (selected = null)}>
+    <button class="view" class:active={selected === null} onclick={() => pick(null)}>
       <span class="name">{ALL_CHANNELS_NAME}</span>
       <span class="count">{channels.length}</span>
     </button>
@@ -163,7 +225,7 @@
       <button
         class="view"
         class:active={selected === group.key}
-        onclick={() => (selected = group.key)}
+        onclick={() => pick(group.key)}
       >
         <span class="name">{group.name}</span>
         <!-- The member channels' colours, which is how a group is recognised at
@@ -197,6 +259,9 @@
      arrives at this app. Double-click puts it back where it started, which is
      the way out of a drag that went somewhere silly.
 
+     Not rendered at all on a narrow window: the sidebar is a drawer there,
+     with a width of its own and no boundary between two panes to move.
+
      The two warnings below are the window-splitter pattern meeting a rule
      written for static separators: ARIA says a separator that moves *is*
      focusable and does answer keys, and the alternatives are worse — a button
@@ -205,6 +270,7 @@
      the role changed to whatever passes. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+{#if !narrow}
 <div
   class="grip"
   class:dragging
@@ -222,6 +288,7 @@
   tabindex="0"
   ondblclick={() => resize(DEFAULT_WIDTH)}
 ></div>
+{/if}
 
 <style>
   nav {
@@ -384,5 +451,84 @@
     margin: 0.4rem 0.35rem;
     font-size: 0.78rem;
     color: var(--text-dim);
+  }
+
+  /* --- The drawer (narrow) ----------------------------------------------
+
+     Over the chat rather than beside it, and over the chat *only*: the pane
+     it is positioned against is the one holding the transcripts, so the
+     header bars above stay lit and usable — including the burger it was
+     opened from, which is the control an operator who opened it by accident
+     reaches for. A drawer that covered the whole window would take Start and
+     Stop with it, which is the one pair that must never be behind a scrim.
+
+     A transform rather than `display`, so it slides rather than appears and
+     the eye can follow where it came from and where it goes back to. */
+  .drawer {
+    position: absolute;
+    z-index: 20;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    /* Wide enough for a group name and its dots, never more than most of a
+       phone: the chat behind it has to stay visible as the thing being
+       returned to. */
+    width: min(17rem, 78vw);
+    /* The home indicator is at the bottom of the drawer, not of the window's
+       header — so this is where it is padded out of, and the top is left at
+       the nav's own padding because the bars above already cleared the
+       notch. */
+    padding-bottom: max(0.5rem, var(--safe-bottom));
+    padding-left: max(0.5rem, var(--safe-left));
+    box-shadow: 0 0 2rem rgba(0, 0, 0, 0.5);
+    transform: translateX(-100%);
+    transition: transform 160ms ease-out;
+  }
+
+  .drawer.open {
+    transform: translateX(0);
+  }
+
+  /* A closed drawer is `inert`, so nothing in it can be tabbed into or read
+     out while it is off screen. `visibility` finishes the job for the moment
+     between the two: a transform alone leaves it composited beside the window
+     and a horizontal scroll could find it. */
+  .drawer[inert] {
+    visibility: hidden;
+    transition:
+      transform 160ms ease-out,
+      visibility 0s linear 160ms;
+  }
+
+  .backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 15;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  /* The slide is the one thing here that is decoration rather than
+     information: opened and closed are told apart by the drawer being there
+     at all. */
+  @media (prefers-reduced-motion: reduce) {
+    .drawer {
+      transition: none;
+    }
+
+    .drawer[inert] {
+      transition: none;
+    }
+  }
+
+  /* Rows a thumb can hit, in the layout where the pointer is a thumb. The
+     desk keeps its compact list: eight 44 px rows is a sidebar that scrolls
+     on a screen with room for all of them. */
+  .drawer .view {
+    padding: 0.55rem 0.5rem;
+    font-size: 0.95rem;
+  }
+
+  .drawer .detach {
+    padding: 0.55rem 0.6rem;
   }
 </style>

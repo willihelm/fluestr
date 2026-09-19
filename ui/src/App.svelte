@@ -28,6 +28,7 @@
   import { attentionFor } from "./lib/attention";
   import { ALL_CHANNELS_VIEW, type GroupView } from "./lib/windows";
   import { beforeLeaving, whenEditingEnds } from "./lib/editing";
+  import { watchNarrow } from "./lib/layout";
   import {
     clearCommunication as clearOnBackend,
     closeGroupWindows,
@@ -115,6 +116,22 @@
   let liveError = $state<string | null>(null);
   /// The group the chat is focused on; `null` is the all-channels view.
   let selectedGroup = $state<number | null>(null);
+  /// Whether the window is too narrow to show the sidebar beside the chat —
+  /// the LAN remote on a phone (P16), or the app on half a laptop screen. The
+  /// sidebar decides this for itself too; what it is needed for *here* is the
+  /// burger, which is a control in the header and not in the sidebar it opens.
+  let narrow = $state(false);
+  $effect(() => watchNarrow((next) => (narrow = next)));
+  /// Whether that sidebar is currently drawn over the chat. Bound rather than
+  /// read, because both ends close it: the burger, and picking a view in it.
+  let sidebarOpen = $state(false);
+
+  // The drawer belongs to the chat. Leaving for Settings with it open would
+  // leave it standing over a page it is not about, waiting to be found again
+  // on the way back.
+  $effect(() => {
+    if (view !== "chat") sidebarOpen = false;
+  });
 
   let active = $derived(profiles.find((p) => p.key === activeKey) ?? null);
   // Read-only views of the active profile, so everything below reads the way
@@ -707,6 +724,36 @@
 
 <main>
   <header class="bar">
+    <!-- The way to the views on a window with no room for them beside the
+         chat. In the header rather than floating over the transcripts: it is
+         a control about the window, it sits where the other two are, and a
+         button over the chat would cover the newest line — which on this page
+         is the one thing that must never be covered.
+
+         Rendered only where it does something. A burger beside a sidebar that
+         is already open is a button whose two states look identical. -->
+    {#if narrow && view === "chat"}
+      <button
+        class="burger"
+        onclick={() => (sidebarOpen = !sidebarOpen)}
+        aria-expanded={sidebarOpen}
+        aria-label={sidebarOpen ? "Close the list of views" : "Views"}
+        title="Views"
+      >
+        <!-- Drawn rather than an emoji or a "≡", for the reason the group
+             window's pin is drawn: it has to take its weight and its colour
+             from the row it is in at every font size. -->
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path
+            d="M2 4h12M2 8h12M2 12h12"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+    {/if}
+
     <h1>Intercom2Chat</h1>
 
     <nav class="tabs">
@@ -816,7 +863,12 @@
     />
   {:else}
     <div class="chat">
-      <GroupSidebar {groups} {channels} bind:selected={selectedGroup} />
+      <GroupSidebar
+        {groups}
+        {channels}
+        bind:selected={selectedGroup}
+        bind:open={sidebarOpen}
+      />
 
       <div class="stream">
         {#if running}
@@ -855,6 +907,8 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    /* The viewport a phone actually gives the page — see `app.css`. */
+    height: 100dvh;
     position: relative;
   }
 
@@ -863,9 +917,48 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.6rem 1rem;
+    /* Under the notch and out again: the bar's background reaches the edge of
+       the screen, its contents stop where the phone's own furniture starts.
+       `max` and not an addition, so the ordinary 1 rem gutter is what a
+       device with no insets keeps. */
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
     border-bottom: 1px solid var(--border);
     background: var(--surface);
     flex-wrap: wrap;
+  }
+
+  /* The topmost bar is the one that clears the status bar and the camera. */
+  header.bar {
+    padding-top: max(0.6rem, var(--safe-top));
+  }
+
+  .burger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid transparent;
+    border-radius: 0.3rem;
+    padding: 0.3rem 0.4rem;
+    font: inherit;
+    line-height: 0;
+    cursor: pointer;
+  }
+
+  .burger:hover {
+    color: var(--text);
+  }
+
+  /* Lit while the drawer it opened is showing, the way every other two-state
+     control here is: a burger that looks the same open and closed is one
+     nobody can tell they already pressed. */
+  .burger[aria-expanded="true"] {
+    color: var(--accent);
+    background: var(--bg);
+    border-color: var(--border);
   }
 
   h1 {
@@ -906,6 +999,9 @@
     display: flex;
     flex: 1;
     min-height: 0;
+    /* What the sidebar's drawer is positioned against on a narrow window, so
+       it covers the transcripts and nothing above them. */
+    position: relative;
   }
 
   .stream {
@@ -937,6 +1033,8 @@
     color: var(--text-dim);
     font-size: 0.85rem;
     padding: 1rem;
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
   }
 
   .primary {
@@ -970,6 +1068,53 @@
 
   .dim {
     color: var(--text-dim);
+  }
+
+  /* --- A window the width of a hand --------------------------------------
+
+     The same 45 rem as `layout.ts` matches on, written out because a media
+     query cannot read a constant. The header is the bar that has to give: it
+     carries a title, two tabs, a profile name and Start, and on a phone in
+     portrait that is two lines of furniture above a chat.
+
+     What goes is the title, and only the title. The app is named in the tab
+     strip and in the window's own chrome, and every other thing in the bar is
+     either a place to go or the control the whole session turns on. */
+  @media (max-width: 45rem) {
+    h1 {
+      display: none;
+    }
+
+    .bar {
+      gap: 0.5rem;
+      padding: 0.45rem 0.7rem;
+      padding-left: max(0.7rem, var(--safe-left));
+      padding-right: max(0.7rem, var(--safe-right));
+    }
+
+    header.bar {
+      padding-top: max(0.45rem, var(--safe-top));
+    }
+
+    /* The status line is a sentence — the device, the channel count, the
+       sample rate, the model — and on a phone it is the one thing here that
+       may take a second line rather than push the meters off the end of the
+       first. */
+    .status {
+      row-gap: 0.25rem;
+    }
+
+    /* Beneath the sentence rather than at the end of it, and pushed to the
+       right the way it is on the desk: `margin-left: auto` on a wrapped line
+       keeps the resource meter and Clear communication together at the edge
+       instead of stranding them mid-row. */
+    .status .right {
+      gap: 0.5rem;
+    }
+
+    .profile {
+      max-width: 8rem;
+    }
   }
 
   .ok {

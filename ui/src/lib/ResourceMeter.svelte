@@ -95,4 +95,40 @@
   .critical .fill {
     background: #ff6b6b;
   }
+
+  /* --- A window the width of a hand --------------------------------------
+
+     Same breakpoint as everywhere else; see `layout.ts`. Two figures and no
+     bars: the question this answers — "is this machine going to keep up?" —
+     is answered by the numbers, and the bars are what makes them quick to
+     read on a screen that has room for both. On a phone the same strip is
+     competing with the session line for one row, and a bar nobody can size
+     against anything is the half to drop.
+
+     The colour the bar carried is not lost: it moves to the figure, so a
+     machine in trouble still says so on the small screen. */
+  @media (max-width: 45rem) {
+    .bar {
+      display: none;
+    }
+
+    .value {
+      min-width: 0;
+    }
+
+    .usage {
+      gap: 0.25rem;
+    }
+
+    /* The CPU figure, which is the one with a pressure to report. The hidden
+       bar is still in the document and still carries the class, so the figure
+       after it is reached the same way it always was. */
+    .bar.busy + .value {
+      color: #e8c36a;
+    }
+
+    .bar.critical + .value {
+      color: #ff6b6b;
+    }
+  }
 </style>

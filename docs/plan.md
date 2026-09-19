@@ -10,7 +10,10 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-18, after P19's rules landed — triggers
+**Status of this document:** 2026-09-19, after the interface was made to fit a
+phone — drawers for both sidebars, a strip of vertical meters and a page that
+respects a device's safe areas, so the LAN remote (P16) is usable on the
+screen it is most often opened on. Before that, P19's rules landed — triggers
 and actions, which subsume P17's alert terms and flash flags and migrate an
 existing `config.json` into them; its two outbound actions, a MIDI cue and a
 webhook, are what is left of the package. Before that, Unicode normalisation
@@ -563,6 +566,23 @@ in `config.json`: the configuration is the production's setup and reaches every
 view the LAN remote serves, so a width stored there would let a phone in the
 auditorium decide how much of the desk's screen the sidebar takes. It is
 re-clamped to whatever window it is read back into.
+
+On a **narrow window** there is no edge to drag, because the sidebar is not a
+column: below 45 rem it becomes a drawer over the chat, opened from a burger in
+the header and closed by the view that was picked in it. That is the width at
+which a 12 rem column and a chat cannot both be read — a phone on the LAN
+remote (P16), and the app beside a cue sheet on half a laptop screen. The
+Settings rail does the same, and is reduced to one line carrying the burger and
+the name of the section that is open; it used to wrap into a row across the
+top, which at a phone's width was three lines of section names above a form.
+The meters turn with it: eight rows of label-and-bar become a sideways-scrolled
+strip of columns filling upwards, in the height of one row. One breakpoint for
+all three, in `ui/src/lib/layout.ts`, because a window passing through a width
+where the burger is showing and the drawer is still a column is a layout nobody
+drew. The page also lays itself out under a phone's notch and home indicator
+and pads its bars back out of them, sizes itself to the *dynamic* viewport so
+the browser's address bar does not cover the newest line for good, and gives
+every control a fingertip's height where the pointer is a finger.
 
 Every group can be opened in its own window from the sidebar, **and so can the
 all-channels view** — a live view of its channels that receives history,
