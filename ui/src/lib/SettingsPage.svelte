@@ -6,7 +6,8 @@
     | "rules"
     | "vocabulary"
     | "models"
-    | "remote";
+    | "remote"
+    | "view";
 
   /// How urgently a section wants attention, shown as a dot on its rail item.
   ///
@@ -63,8 +64,10 @@
   import GroupMembership from "./GroupMembership.svelte";
   import ModelPicker from "./ModelPicker.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
+  import ViewSettings from "./ViewSettings.svelte";
   import { lengthWarning } from "./vocabulary";
   import { connectedDevice, type ModelChoice, type Profile } from "./profiles";
+  import type { SortDirection } from "./sort";
   import {
     isRemote,
     listLanguages,
@@ -88,6 +91,11 @@
     /// models' reason: which network this machine is on belongs to the
     /// machine, not to the production carried to it.
     remote: StoredRemote;
+    /// Which end of the chat new lines arrive at (P7). With the vocabulary in
+    /// scope rather than with the models: how a house reads its chat outlives
+    /// any one patch, and it is not a property of the machine either — every
+    /// view the remote serves opens the way this says.
+    sort: SortDirection;
     deviceChannels: number;
     locked: boolean;
     saveError: string | null;
@@ -112,6 +120,7 @@
     vocabulary = $bindable(),
     models = $bindable(),
     remote = $bindable(),
+    sort = $bindable(),
     deviceChannels,
     locked,
     saveError,
@@ -191,6 +200,9 @@
     // at a setting that is off on most machines and fine on the rest.
     remote: null,
     models: modelFlag,
+    // Never flagged: a reading direction cannot be wrong, and the window it
+    // applies to is where it is seen.
+    view: null,
   });
 
   // The rail, grouped by what a section belongs to. The headings are the whole
@@ -221,7 +233,17 @@
     {
       scope: "All profiles",
       note: "Shared by every setup.",
-      items: [{ id: "vocabulary", title: "Vocabulary" }],
+      items: [
+        { id: "vocabulary", title: "Vocabulary" },
+        // Here rather than under "This machine": what is under it is stored in
+        // the file like the vocabulary and reaches every view the remote
+        // serves, and a window that wants something else says so itself.
+        //
+        // "View" rather than "Chat", because the chat is only the first thing
+        // a window is: the reading direction is a property of a *view* onto
+        // the session, and so is the next setting of this kind.
+        { id: "view", title: "View" },
+      ],
     },
     {
       scope: "This machine",
@@ -358,6 +380,10 @@
           <RemoteSettings bind:remote />
         </div>
       {/if}
+
+      <div class="sheet" hidden={section !== "view"}>
+        <ViewSettings bind:sort />
+      </div>
     </div>
   </div>
 </div>

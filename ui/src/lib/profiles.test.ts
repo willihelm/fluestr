@@ -339,6 +339,35 @@ describe("the configuration as a whole", () => {
     expect(config.active).toBe(0);
   });
 
+  // The chat's reading direction (P7), stored once for the whole app beside
+  // the vocabulary. A view may override it for itself, and that override is
+  // the screen's own — it never travels through the configuration.
+  it("stores the chat's reading direction", () => {
+    const config = toStoredConfig([aProfile()], 1, "", {}, undefined, "newest-top");
+
+    expect(config.chatSort).toBe("newest-top");
+  });
+
+  it("writes the chat downwards when nothing was chosen", () => {
+    expect(toStoredConfig([aProfile()], 1, "").chatSort).toBe("newest-bottom");
+  });
+
+  // A file written before the chat could be turned over. What its absence
+  // meant is what the chat did then, and reading it as anything else would
+  // turn over every window of every setup that has one.
+  it("reads a file with no direction as the chat it used to be", () => {
+    const restored = fromStoredConfig(
+      anOldFile<StoredConfig>({
+        version: 1,
+        active: 0,
+        vocabulary: null,
+        profiles: [],
+      }),
+    );
+
+    expect(restored.chatSort).toBe("newest-bottom");
+  });
+
   it("comes back on the profile that was in use", () => {
     const restored = fromStoredConfig(
       anOldFile<StoredConfig>({

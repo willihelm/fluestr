@@ -22,6 +22,7 @@
 import { newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
 import { restoreGroup, type Group } from "./groups";
 import { restoreRule, type Rule } from "./rules";
+import { DEFAULT_DIRECTION, type SortDirection } from "./sort";
 import {
   CONFIG_VERSION,
   MAX_WORKERS,
@@ -301,6 +302,11 @@ export const toStoredConfig = (
   /// property of the machine and of the house it is standing in, not of the
   /// production being carried to it.
   remote: StoredRemote = NO_REMOTE,
+  /// Which end of the chat new lines arrive at (P7). Beside the profiles like
+  /// the vocabulary, and for its reason: how a house reads its chat outlives
+  /// any one patch. A view may still override it for itself, and that override
+  /// never comes through here — see `sort.ts`.
+  chatSort: SortDirection = DEFAULT_DIRECTION,
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -325,6 +331,7 @@ export const toStoredConfig = (
   // happen before that — the window closing is the case the last-ditch save
   // exists for — and `null` fails the backend's `u16` outright.
   remote: { ...remote, port: clampPort(remote.port) },
+  chatSort,
   profiles: profiles.map(toStored),
 });
 
@@ -357,6 +364,7 @@ export const fromStoredConfig = (
   vocabulary: string | null;
   models: ModelChoice;
   remote: StoredRemote;
+  chatSort: SortDirection;
 } => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
@@ -378,6 +386,9 @@ export const fromStoredConfig = (
     // as anything but "off" is the one way this feature could start serving a
     // network nobody asked it to.
     remote: stored.remote ?? NO_REMOTE,
+    // A file written before the chat could be turned over has no such field,
+    // and what its absence meant is what the chat did then.
+    chatSort: stored.chatSort ?? DEFAULT_DIRECTION,
   };
 };
 

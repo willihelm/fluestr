@@ -268,6 +268,31 @@ fn default_language() -> String {
     "de".to_string()
 }
 
+/// Which end of the chat new lines arrive at (P7).
+///
+/// Stored rather than only chosen in a window, because it is the one thing
+/// about the chat that an operator wants to be true of every window before
+/// they have opened it: the default a new main window, a detached group window
+/// and a browser on the LAN are all born with. A window may then be turned
+/// over on its own — that override belongs to the view and is kept by it, not
+/// written here.
+///
+/// Named after where the newest line is rather than after a sort order:
+/// "descending" needs the reader to know what is being sorted by, and every
+/// caller is asking the same question about the same thing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "config.ts", rename = "StoredSortDirection")]
+pub enum SortDirection {
+    /// What a chat is, and what this list did before it could be turned over:
+    /// it reads downwards and follows the bottom edge.
+    #[default]
+    NewestBottom,
+    /// The newest line at the top, where the eye already is — what a second
+    /// screen glanced at between other work is usually wanted to be.
+    NewestTop,
+}
+
 /// The whole configuration file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -353,6 +378,21 @@ pub struct Config {
     /// listener must not be read as having asked for one.
     #[serde(default)]
     pub remote: crate::remote::RemoteConfig,
+    /// Which end of the chat new lines arrive at, for every window that has
+    /// not been turned over (P7).
+    ///
+    /// Beside the profiles rather than inside one, and unlike the model for
+    /// the vocabulary's reason: how a house reads its chat outlives any one
+    /// patch, and an operator who has decided which way round it goes has not
+    /// decided it per production. Every view the remote serves gets it too —
+    /// it is the *default*, and a phone that wants the other one turns itself
+    /// over without touching this.
+    ///
+    /// `#[serde(default)]` — newest at the bottom — because a file written
+    /// before this existed has no such field, and what it meant is what the
+    /// chat did then.
+    #[serde(default)]
+    pub chat_sort: SortDirection,
     pub profiles: Vec<Profile>,
 }
 
@@ -382,6 +422,7 @@ impl Default for Config {
             workers: None,
             alerts: Vec::new(),
             remote: crate::remote::RemoteConfig::default(),
+            chat_sort: SortDirection::default(),
             profiles: Vec::new(),
         }
     }
@@ -665,6 +706,7 @@ mod tests {
                 address: "192.168.1.20".into(),
                 port: 8787,
             },
+            chat_sort: SortDirection::NewestTop,
             profiles: vec![
                 Profile {
                     name: "Probebühne".into(),
@@ -820,6 +862,9 @@ mod tests {
         // And its window opens like any other one: a setup that suddenly put
         // windows in front of everything is not what a missing field meant.
         assert!(!config.profiles[0].groups[0].on_top);
+        // And its chat reads the way it read then: a file with nothing to say
+        // about the direction must not come back turned over.
+        assert_eq!(config.chat_sort, SortDirection::NewestBottom);
     }
 
     /// The acceptance criterion P19 is signed off against: a version 1 file
@@ -1043,6 +1088,7 @@ mod tests {
             keys(&json),
             [
                 "active",
+                "chatSort",
                 "model",
                 "modelPath",
                 "profiles",

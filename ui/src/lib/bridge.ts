@@ -48,6 +48,7 @@ import type {
   StoredProfile,
   StoredRemote,
   StoredRule,
+  StoredSortDirection,
 } from "./generated/config";
 import type {
   DownloadStage,
@@ -94,6 +95,7 @@ export type {
   StoredProfile,
   StoredRemote,
   StoredRule,
+  StoredSortDirection,
   StreamConfig,
   StreamLevel,
   StreamUpdate,

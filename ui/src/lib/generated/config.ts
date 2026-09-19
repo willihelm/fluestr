@@ -119,7 +119,23 @@ workers: number | null,
  * before P16 has no such field, and a version that never offered a
  * listener must not be read as having asked for one.
  */
-remote: StoredRemote, profiles: Array<StoredProfile>, };
+remote: StoredRemote, 
+/**
+ * Which end of the chat new lines arrive at, for every window that has
+ * not been turned over (P7).
+ *
+ * Beside the profiles rather than inside one, and unlike the model for
+ * the vocabulary's reason: how a house reads its chat outlives any one
+ * patch, and an operator who has decided which way round it goes has not
+ * decided it per production. Every view the remote serves gets it too —
+ * it is the *default*, and a phone that wants the other one turns itself
+ * over without touching this.
+ *
+ * `#[serde(default)]` — newest at the bottom — because a file written
+ * before this existed has no such field, and what it meant is what the
+ * chat did then.
+ */
+chatSort: StoredSortDirection, profiles: Array<StoredProfile>, };
 
 /**
  * A named view onto some of the channels.
@@ -310,3 +326,19 @@ views: Array<number>, actions: Array<Action>,
  * nothing at all — see [`crate::rules`].
  */
 minIntervalMs: number, };
+
+/**
+ * Which end of the chat new lines arrive at (P7).
+ *
+ * Stored rather than only chosen in a window, because it is the one thing
+ * about the chat that an operator wants to be true of every window before
+ * they have opened it: the default a new main window, a detached group window
+ * and a browser on the LAN are all born with. A window may then be turned
+ * over on its own — that override belongs to the view and is kept by it, not
+ * written here.
+ *
+ * Named after where the newest line is rather than after a sort order:
+ * "descending" needs the reader to know what is being sorted by, and every
+ * caller is asking the same question about the same thing.
+ */
+export type StoredSortDirection = "newest-bottom" | "newest-top";

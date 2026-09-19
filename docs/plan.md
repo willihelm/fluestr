@@ -68,7 +68,7 @@ for now, with the reason recorded in the package.
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
 | P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
 | P6 | Tauri API | **Done** | `search_session` decided against — search is per view, see below |
-| P7 | Chat UI | **Partial** | Configurable chat sort direction (newest at top or bottom) |
+| P7 | Chat UI | **Done** | — |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
 | P9 | Live search & filter | **Done** | Per view, over what the window holds. No time-range filter |
 | P10 | SQLite persistence | **Deferred** | Set aside by the user: this is about live communication, not persistence |
@@ -420,7 +420,7 @@ in the frontend.
 load keep the WebView main thread under ~30 %. The second half is unmeasured —
 it belongs with the P14 load test.
 
-### P7 — Chat UI (Svelte) — **Partial**
+### P7 — Chat UI (Svelte) — **Done**
 
 Two pages. **Settings** holds the input device, the editable channel list
 (device channel, label, language, colour), the global vocabulary, the alert
@@ -448,27 +448,56 @@ scrollbar that lies. What it costs is that a point an hour back takes several
 steps to reach — which is what P9's search and its jump into the chat position
 are for.
 
-**Sort direction has a global default and local overrides.** The Chat section
+**Sort direction has a global default and local overrides.** The View section
 of Settings stores one application-wide default — **Newest at bottom** by
-default, or **Newest at top** — in `config.json`. A newly opened main window,
-group window or LAN browser starts with that direction. A control in the chat
-header may override it for that one view, and offers **Use global default** to
-return to the shared choice. The override lives in the view's local storage,
-like the sidebar width, so an operator can deliberately read one group in the
-opposite direction without changing every other screen.
+default, or **Newest at top** — in `config.json`, beside the vocabulary and
+for its reason: how a house reads its chat outlives any one patch. A main
+window, a group window or a LAN browser opens with that direction, and a change
+to it reaches every view that has not been turned over, while they are open.
+
+The override is a one-press toggle at the head of each chat's own bar, beside
+the search box: turning the chat over is done during a show, on the window in
+front of the operator, and there are two directions rather than a menu of them.
+It is labelled with the direction the view is *in*. There is deliberately no
+third "follow the app" state beside them: a window is read the way it looks,
+and a control that can be pressed without the chat changing reads as broken —
+a view that has been turned is turned back by the same press, in the same
+place. The override lives in that view's local storage, keyed per view, like
+the sidebar width and for its reason — it belongs to the screen reading the
+chat, and a phone in the auditorium must not be able to turn the desk's chat
+upside down. So an operator can deliberately read one group in the opposite
+direction without changing every other screen, and find it that way again
+tomorrow.
 
 The underlying bubble sequence remains chronological in both modes — merging a
 continuing utterance therefore still has one unambiguous last bubble — while
 the renderer chooses which end appears first. In newest-at-bottom mode, older
 pages are added above and new bubbles arrive below; in newest-at-top mode those
-directions are mirrored. The follow edge and the “Jump to newest” button move
-with the newest edge, and an operator reading older communication keeps their
-scroll anchor when a new bubble arrives.
+directions are mirrored. The follow edge moves with the newest edge, and so
+does what “Jump to latest” scrolls to — though not where that button sits,
+because it is absolutely placed over the header bars at the other end of the
+window. An operator reading older communication keeps their scroll anchor when
+a new bubble arrives, and keeps it across the turn itself: the bubble across
+the middle of the viewport is found before the flip and brought back to the
+middle after it.
+
+All of it is written once, in terms of "the newest edge" and "the history
+edge", rather than as two behaviours — the follow, the jump, the end the next
+page is added to, and the scroll correction that holds the reading position
+while it is, which is needed only when the page lands *above* the viewport. The
+DOM window itself does not turn over: it is always the newest 200 bubbles,
+because which lines are rendered is not a question of which way round they are
+shown.
 
 **The Settings page is split by scope, not by topic.** Its scoped sections sit
 in a rail on the left under a heading naming what each belongs to: Audio and
 Groups under the *profile* (listed under the active profile's name), Vocabulary
-and Alerts under *all profiles*, Chat and Models under *this machine*. Scope is the
+and View under *all profiles*, Models and the remote client under *this
+machine*. View sits with the vocabulary rather than with the models because it
+is not a property of the machine: it is stored in the file and every view the
+remote serves opens the way it says. It is named after the view rather than
+after the chat because the chat is only the first thing a window is — how a
+view is read is the same kind of answer as which channels it shows. Scope is the
 thing an operator gets wrong. Profiles sit first in the rail, above the scope
 headings, as a list with one row per setup — name, channel and group count,
 device, Duplicate and Delete — rather than a permanent strip across the top,
@@ -596,12 +625,12 @@ history ✔; Clear all communication requires confirmation ✔, removes every
 displayed transcript in every open window ✔ and leaves configuration intact ✔;
 opening a group in its own window shows the same existing and incoming messages
 limited to that group's channels, without a second capture session ✔.
-The sort direction is still fixed to newest at bottom; the two-direction
-control and mirrored pagination/follow behaviour are outstanding.
 **It is accepted when additionally:** switching direction leaves the same
-bubbles visible in the inverse visual order, preserves the reading position,
-and makes new bubbles and “Jump to newest” use the selected edge in the main
-window, a detached group window and the LAN client independently.
+bubbles visible in the inverse visual order ✔, preserves the reading position
+✔, and makes new bubbles and “Jump to latest” use the selected edge in the main
+window, a detached group window and the LAN client independently ✔ — the
+default is one setting in `config.json` and each of the three may override it
+for itself ✔.
 
 Both of what this owed is now in: a running stream's language (and its label)
 can be changed from the channel list without stopping capture — P6's
@@ -1443,8 +1472,8 @@ second platform. Nothing between them changes.
 still owes is a load test on live audio.*
 
 **Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17, P19. *What is left
-is P7's configurable sort direction, the settings proper — every threshold is
-still a constant in the code — and P19's two outbound actions.*
+is the settings proper — every threshold is still a constant in the code — and
+P19's two outbound actions.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P8, P9, P13. *P10 left it on 2026-09-18; P3b was dropped.*
@@ -1476,21 +1505,18 @@ In this order, with the reason each one comes where it does.
 3. **P15** — develop vocabulary against the measurable baseline from step 1,
    not by feel. The control exists and is global; what is missing is the
    evidence that any particular list is better than another.
-4. **P7's sort direction.** It is view-local but touches the chat's core
-   windowing and scroll anchoring in both directions; build it against a long
-   live chat rather than treating a reversed array as the whole feature.
-5. **The remote, on a real network.** P16 has not had a second machine, a house
+4. **The remote, on a real network.** P16 has not had a second machine, a house
    network and somebody working from it. That comes before authentication —
    the obvious next thing to want, and the wrong thing to build against an
    arrangement nobody has used yet.
-6. **P13, packaging and signing.** With P6, P7, P9 and P19 in, what is left
+5. **P13, packaging and signing.** With P6, P7, P9 and P19 in, what is left
    between this and a machine that is not this one is a notarised build.
-7. **P19's MIDI cue.** The action the app is actually wanted for in a theatre,
+6. **P19's MIDI cue.** The action the app is actually wanted for in a theatre,
    and the one the rules were designed around: the evaluation already fires
    exactly once per event, per rule and under a rate limit, so what is left is
    a virtual port and a message format. The webhook stays behind it until the
    question of who may write one from the LAN remote has an answer.
-8. **P18, the Windows port.** Last, and not because it is hard: it reopens
+7. **P18, the Windows port.** Last, and not because it is hard: it reopens
    capture, the GPU backend and packaging, and each of the three is cheaper to
    redo once the macOS answer it is being ported from is measured rather than
    assumed. The one part worth pulling forward is the hardware question in its

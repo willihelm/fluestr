@@ -22,6 +22,7 @@
     type Profile,
   } from "./lib/profiles";
   import { DEFAULT_VOCABULARY, toConfig as vocabularyConfig } from "./lib/vocabulary";
+  import { DEFAULT_DIRECTION, type SortDirection } from "./lib/sort";
   import { compile as compileRules, sameCompiled, type CompiledRule } from "./lib/rules";
   import { mergeHistory, toBubbles } from "./lib/bubbles";
   import { attentionFor } from "./lib/attention";
@@ -98,6 +99,10 @@
   // `save_config` — there is no separate command to switch it on, because the
   // configuration has one writer.
   let remote = $state<StoredRemote>({ ...NO_REMOTE });
+  // Which end of the chat new lines arrive at (P7). The app's default: this
+  // window's own chat may be turned over from the bar above it, and that is
+  // the view's business and never written here.
+  let chatSort = $state<SortDirection>(DEFAULT_DIRECTION);
   // Whether this view can still reach the app. Always "connected" in the app's
   // own windows; on a remote it is the difference between a live chat and a
   // frozen picture of one, which has to be said rather than looked like
@@ -260,6 +265,7 @@
             vocabulary: null,
             models: {},
             remote: { ...NO_REMOTE },
+            chatSort: DEFAULT_DIRECTION,
           };
 
       if (restored.profiles.length === 0) {
@@ -396,7 +402,7 @@
     // Built here rather than in the timer: this is what reads every field, and
     // reading them is what makes this effect run again when one of them
     // changes.
-    const config = toStoredConfig(profiles, activeKey, vocabulary, models, remote);
+    const config = toStoredConfig(profiles, activeKey, vocabulary, models, remote, chatSort);
     latest = config;
 
     let stopWaiting: (() => void) | null = null;
@@ -452,6 +458,7 @@
     if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
     models = restored.models;
     remote = restored.remote;
+    chatSort = restored.chatSort;
   };
 
   // The compiled rules live on the backend, where every transcript is
@@ -788,6 +795,7 @@
       bind:vocabulary
       bind:models
       bind:remote
+      bind:sort={chatSort}
       {deviceChannels}
       locked={running || busy}
       {saveError}
@@ -818,7 +826,13 @@
                own setting adds is the loud request — the whole window in dark
                orange — and that is the attention request's business, not the
                chat's. -->
-          <ChatList messages={shown} {colors} starts={sessionStarts} streams={searchable} />
+          <ChatList
+            messages={shown}
+            {colors}
+            starts={sessionStarts}
+            streams={searchable}
+            direction={chatSort}
+          />
         {/if}
       </div>
     </div>

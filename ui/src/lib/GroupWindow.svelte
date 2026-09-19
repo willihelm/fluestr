@@ -29,6 +29,7 @@
   import StreamMeters from "./StreamMeters.svelte";
   import { viewStreams, visibleStreams, type Group } from "./groups";
   import { fromStoredConfig } from "./profiles";
+  import { DEFAULT_DIRECTION, type SortDirection } from "./sort";
   import { mergeHistory, toBubbles } from "./bubbles";
   import { attentionFor } from "./attention";
   import { ALL_CHANNELS_VIEW, canPin, setWindowOnTop, setWindowTitle, type GroupView } from "./windows";
@@ -89,6 +90,14 @@
   /// press. The main window stores it, so the next window opens the same way.
   let onTop = $state(false);
   let adopted = false;
+  /// Which end of the chat new lines arrive at (P7), as the app's
+  /// configuration has it.
+  ///
+  /// Followed rather than read once, unlike the pin above: it is the app's
+  /// setting and not this window's, so a change made on the Settings page
+  /// while this window is open reaches it like a renamed group does. What this
+  /// window decides for itself is the override, and that is kept by the chat.
+  let chatSort = $state<SortDirection>(DEFAULT_DIRECTION);
 
   let messages = $state<TranscriptEvent[]>([]);
   let sessionStarts = $state(new Map<number, number>());
@@ -133,7 +142,8 @@
   /// channels. The main window closes these windows when the active profile
   /// changes, and this is the other half of that agreement.
   const apply = (stored: StoredConfig) => {
-    const { profiles, activeKey } = fromStoredConfig(stored);
+    const { profiles, activeKey, chatSort: sort } = fromStoredConfig(stored);
+    chatSort = sort;
     const profile = profiles.find((p) => p.key === activeKey) ?? null;
     channels = profile?.channels ?? [];
     target = showsAll ? null : (profile?.groups[group as number] ?? null);
@@ -346,7 +356,13 @@
     {#if running}
       <StreamMeters {channels} {levels} {overloaded} {visible} {muted} />
     {/if}
-    <ChatList messages={shown} {colors} starts={sessionStarts} streams={searchable} />
+    <ChatList
+      messages={shown}
+      {colors}
+      starts={sessionStarts}
+      streams={searchable}
+      direction={chatSort}
+    />
   {/if}
 </main>
 

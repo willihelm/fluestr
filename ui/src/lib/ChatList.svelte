@@ -4,6 +4,18 @@
   import type { TranscriptEvent } from "./bridge";
   import { toBubbles, type Bubble } from "./bubbles";
   import { findAll, matches, split } from "./search";
+  import {
+    arrange,
+    flip,
+    fromNewest,
+    fromOldest,
+    label as directionLabel,
+    loadOverride,
+    newestEdge,
+    saveOverride,
+    type SortDirection,
+  } from "./sort";
+  import { currentGroup } from "./windows";
 
   /// How many bubbles are in the DOM at once, and how many more each step back
   /// through the history adds.
@@ -37,9 +49,15 @@
     /// picker whose entries appear as people talk is a picker that moves under
     /// the cursor.
     streams: { streamId: number; label: string }[];
+    /// Which end of the chat new lines arrive at, as the app's configuration
+    /// has it (P7) — the default every view is born with and reads until it is
+    /// turned over. Handed down rather than read from storage here: it is part
+    /// of the configuration, and the component that renders the chat is not
+    /// the one that talks to the backend.
+    direction: SortDirection;
   }
 
-  let { messages, colors, starts, streams }: Props = $props();
+  let { messages, colors, starts, streams, direction }: Props = $props();
 
   // --- Search and filter (P9) ---------------------------------------------
   //
@@ -94,9 +112,37 @@
       : [],
   );
 
+  // --- Reading direction (P7) ----------------------------------------------
+  //
+  // The app's default, which this view may override, like the search above it
+  // is this view's own: the desk reads the chat downwards while a second
+  // screen may want the newest line under the eye at the top, and both are
+  // views of the same chat. Turning one over is done here, on the window in
+  // front of the operator; the default is set once, on the Settings page.
+  //
+  // The override is stored per view rather than held in the component, because
+  // `App.svelte` unmounts the chat whenever Settings is shown — and an
+  // operator who flips over to check a level must come back to the chat they
+  // left. See `sort.ts` for why it is not in `config.json`.
+
+  /// Which view this window is, for the storage key. Read once: a window does
+  /// not become another view.
+  const view = currentGroup();
+
+  /// This view's own answer, or `null` while it follows the app's default —
+  /// and the two are different states, because a default that changes moves a
+  /// view that has not been turned and leaves one that has.
+  let override = $state<SortDirection | null>(loadOverride(view));
+  let reading = $derived(override ?? direction);
+  let newestTop = $derived(reading === "newest-top");
+
   let limit = $state(PAGE);
-  let shown = $derived(listed.slice(Math.max(0, listed.length - limit)));
-  let hidden = $derived(listed.length - shown.length);
+  /// The page of the chat that is in the DOM: always the newest `limit`
+  /// bubbles, whichever end they are then read from. Which lines are in the
+  /// window is not a question of which way round they are shown.
+  let page = $derived(listed.slice(Math.max(0, listed.length - limit)));
+  let shown = $derived(arrange(page, reading));
+  let hidden = $derived(listed.length - page.length);
   /// The bubble the ↑/↓ buttons are sitting on, by key, or `null`.
   let focused = $derived(searching ? (listed[hits[focus]]?.key ?? null) : null);
 
@@ -137,8 +183,11 @@
   });
 
   let container: HTMLDivElement | undefined = $state();
-  // Follow behaviour: stay pinned to the bottom, but not while the user is
-  // reading further up. Still to come in P7: a proper "N new messages" button.
+  // Follow behaviour: stay pinned to the end the newest line is at, but not
+  // while the user is reading away from it. Which end that is comes from the
+  // direction; everything below is written in terms of "the newest edge" so
+  // that there is one follow behaviour rather than two. Still to come in P7: a
+  // proper "N new messages" button.
   let following = $state(true);
 
   /// Extends the window backwards, keeping what is on screen where it is.
@@ -153,7 +202,12 @@
     const before = container.scrollHeight;
     limit += PAGE;
     await tick();
-    if (container) container.scrollTop += container.scrollHeight - before;
+    // Only when the history is above the viewport. With the newest line at
+    // the top the page is appended *below* what is on screen, which moves
+    // nothing — and
+    // the correction would then scroll the operator away from the line they
+    // were reading rather than hold them on it.
+    if (container && !newestTop) container.scrollTop += container.scrollHeight - before;
   };
 
   /// Brings the hit at `focus` onto the screen (P9).
@@ -223,17 +277,17 @@
 
   const onScroll = () => {
     if (!container) return;
-    const distance =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    following = distance < 80;
-    // Near the top of the window and there is more behind it: reach for the
-    // next page before the operator hits the end of what is rendered, so the
-    // history reads as one list rather than as pages.
+    following = fromNewest(container, reading) < 80;
+    // Near the history end of the window and there is more behind it: reach
+    // for the next page before the operator hits the end of what is rendered,
+    // so the history reads as one list rather than as pages. Which end that is
+    // mirrors with the direction — the top with the newest line at the
+    // bottom, the bottom with the newest line at the top.
     //
-    // Only while reading back. At the bottom the follow effect trims the
-    // window again, and a short chat sits at `scrollTop` 0 with both
-    // conditions true — growing and trimming each other in a loop.
-    if (!following && container.scrollTop < 400) void showMore();
+    // Only while reading back. At the newest edge the follow effect trims the
+    // window again, and a chat shorter than the viewport is at both edges at
+    // once — growing and trimming each other in a loop.
+    if (!following && fromOldest(container, reading) < 400) void showMore();
   };
 
   $effect(() => {
@@ -242,14 +296,86 @@
     // still grows, and the view has to follow that too.
     messages.length;
     if (following && container) {
-      // Back at the bottom, the pages that were opened to read backwards are
-      // no longer being looked at. Dropping them keeps a session that ran for
-      // hours from carrying every node it ever rendered — and it is invisible,
-      // because everything dropped is above the viewport.
+      // Back at the newest edge, the pages that were opened to read backwards
+      // are no longer being looked at. Dropping them keeps a session that ran
+      // for hours from carrying every node it ever rendered — and it is
+      // invisible, because everything dropped is off the far end of the
+      // viewport.
       limit = PAGE;
-      container.scrollTop = container.scrollHeight;
+      container.scrollTop = newestEdge(container, reading);
     }
   });
+
+  // The direction can also change from outside this view: the app's default is
+  // on the Settings page, and a window that has not been turned over follows
+  // it while it is open. A view that was watching the newest line keeps
+  // watching it, at whichever edge that now is — without this, the chat would
+  // silently flip and leave the operator looking at the oldest bubble of the
+  // page. A view that was reading back is left where it is: the lines around
+  // it are the same lines, and moving somebody who is reading is worse than
+  // letting them see the list turn over.
+  $effect(() => {
+    reading;
+    untrack(() => {
+      if (following && container) container.scrollTop = newestEdge(container, reading);
+    });
+  });
+
+  /// Turns this window round (P7).
+  ///
+  /// The same bubbles in the inverse visual order, and the operator kept where
+  /// they were reading: the line in the middle of the viewport is found before
+  /// the flip and brought back to the middle after it. Without that, turning
+  /// the chat over while reading an hour back would land on whichever lines
+  /// happen to be at that scroll offset from the other end, which is nowhere.
+  ///
+  /// A window that was following the chat simply follows it at the other edge
+  /// — there is no position to keep, and the newest line is the one being
+  /// watched.
+  ///
+  /// The bar offers the two directions and not a third "follow the app"
+  /// state: a window is read the way it looks, and a control that could be
+  /// pressed without the chat changing is a control that reads as broken. A
+  /// view that has been turned therefore keeps its own answer until it is
+  /// turned back by hand — which is one press, in the same place.
+  const turn = async (to: SortDirection) => {
+    const anchor = following ? null : middleKey();
+
+    // Stored for this view. Kept across the trips to Settings that unmount
+    // the chat, and kept across a restart: a second screen that is read upside
+    // down is read upside down every evening.
+    override = to;
+    saveOverride(view, to);
+    await tick();
+    if (!container) return;
+
+    if (anchor === null) {
+      container.scrollTop = newestEdge(container, reading);
+      return;
+    }
+    container
+      .querySelector(`[data-key="${CSS.escape(anchor)}"]`)
+      ?.scrollIntoView({ block: "center" });
+  };
+
+  /// The key of the bubble across the middle of the viewport, or `null` when
+  /// there is none — an empty view, or one whose only bubble is taller than
+  /// the window.
+  ///
+  /// The middle rather than the first line on screen: a bubble is several
+  /// lines tall, and the one an operator is reading is the one their eye is
+  /// on, not the one clipped by the top edge.
+  const middleKey = (): string | null => {
+    if (!container) return null;
+    const box = container.getBoundingClientRect();
+    const middle = box.top + box.height / 2;
+
+    for (const node of container.querySelectorAll<HTMLElement>("[data-key]")) {
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom >= middle && rect.top <= middle) return node.dataset.key ?? null;
+    }
+    return null;
+  };
 
   const latencyTitle = (bubble: Bubble) =>
     bubble.parts === 1
@@ -336,6 +462,28 @@
      the session — things that act on the whole app — and this acts on what is
      below it. -->
 <div class="search">
+  <!-- The reading direction of the list below (P7), at the head of the bar and
+       never anywhere else in it: it is the first thing said about what follows,
+       and the search controls that appear as the operator types must not push
+       it out from under the cursor.
+
+       One press, because turning the chat over is done during a show and there
+       are only two directions — a menu would be three clicks for a control with
+       two states. Labelled with the direction it is *in* rather than the one it
+       would switch to: it is a statement about the chat below it, the way
+       "Only matches" is, and the arrow is what says it can be turned. -->
+  <button
+    class="direction"
+    onclick={() => turn(flip(reading))}
+    aria-pressed={newestTop}
+    title={newestTop
+      ? "Newest at the top — click to read the chat downwards"
+      : "Newest at the bottom — click to bring the newest line to the top"}
+  >
+    <span class="arrow" aria-hidden="true">{newestTop ? "↑" : "↓"}</span>
+    {directionLabel(reading)}
+  </button>
+
   <!-- Enter steps to the next match and Shift+Enter to the previous one, which
        is what a search box does everywhere else; Escape clears it and gives
        the chat back. Without them the only way to walk a search is to take a
@@ -406,11 +554,20 @@
     </p>
   {/if}
 
-  {#if hidden > 0}
-    <button class="earlier" onclick={showMore}>
-      {hidden} earlier {hidden === 1 ? "bubble" : "bubbles"} — show more
-    </button>
-  {/if}
+  <!-- At the history end of the list, which mirrors with the direction: above
+       the oldest bubble reading newest-last, below it reading newest-first.
+       One snippet in two places rather than a CSS `order`, because where it is
+       in the document is also where a keyboard and a screen reader meet it,
+       and "show more" belongs beside the lines it would add. -->
+  {#snippet earlier()}
+    {#if hidden > 0}
+      <button class="earlier" onclick={showMore}>
+        {hidden} earlier {hidden === 1 ? "bubble" : "bubbles"} — show more
+      </button>
+    {/if}
+  {/snippet}
+
+  {#if !newestTop}{@render earlier()}{/if}
 
   <!-- Keyed on the identity of the segment that opened the bubble. On all
        three parts, not on `streamId + seq`: those repeat across sessions, and
@@ -422,6 +579,7 @@
       class:focused={bubble.key === focused}
       data-focused={bubble.key === focused}
       onanimationend={() => arriving.delete(bubble.key)}
+      data-key={bubble.key}
       style="--channel: {colorOf(bubble.streamId)}"
     >
       <header>
@@ -442,14 +600,21 @@
       <p>{#each split(bubble.text, bubble.alerts, findAll(bubble.text, query)) as piece}{#if piece.alert || piece.hit}<mark class:hit={piece.hit} class:alert={piece.alert}>{piece.text}</mark>{:else}{piece.text}{/if}{/each}</p>
     </article>
   {/each}
+
+  {#if newestTop}{@render earlier()}{/if}
 </div>
 
+<!-- Stays at the foot of the window whichever way round the chat is read.
+     What it does follows the direction — it lands on the newest line, at the
+     top or at the bottom — but where it *is* must not, because it is the one
+     control an operator reaches for without looking, and it is absolutely
+     placed over the header bars at the other end of the window. -->
 {#if !following}
   <button
     class="jump"
     onclick={() => {
       following = true;
-      if (container) container.scrollTop = container.scrollHeight;
+      if (container) container.scrollTop = newestEdge(container, reading);
     }}
   >
     Jump to latest
@@ -614,6 +779,37 @@
   .step:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  /* Dim and quiet until it is on, like the group window's pin: a control that
+     looks the same in both of its states is a control nobody trusts. */
+  .direction {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.25rem 0.5rem;
+    font: inherit;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .direction:hover {
+    color: var(--text);
+  }
+
+  .direction[aria-pressed="true"] {
+    color: var(--accent);
+    background: var(--bg);
+  }
+
+  /* Tabular so the label does not shift sideways as the arrow turns over. */
+  .arrow {
+    font-variant-numeric: tabular-nums;
   }
 
   .only {
