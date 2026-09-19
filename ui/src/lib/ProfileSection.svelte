@@ -122,7 +122,9 @@
           {/if}
         </span>
 
-        <button onclick={() => copy(profile)} disabled={locked}>Duplicate</button>
+        <button class="copy" onclick={() => copy(profile)} disabled={locked}>
+          Duplicate
+        </button>
         <button
           class="remove"
           onclick={() => remove(profile)}
@@ -166,14 +168,21 @@
     gap: 0.3rem;
   }
 
+  /* Two lines, not one: the name field on the first with the buttons, what
+     the profile holds on the second. On one line the description sat between
+     them, so a profile with seven groups and a long interface name squeezed
+     its field while a short one stretched — the fields ended up different
+     widths down the list, which is exactly the comparison the list is for.
+     Everything is placed explicitly rather than flowed, so the second line
+     cannot push a button onto a third. */
   .row {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.25rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: 0.4rem;
     padding: 0.35rem 0.5rem;
-    flex-wrap: wrap;
   }
 
   /* The same tint the rail uses for the open section, so "this is the one in
@@ -184,13 +193,14 @@
   }
 
   .pick {
+    grid-area: 1 / 1;
     display: flex;
     align-items: center;
   }
 
   .name {
-    flex: 1;
-    min-width: 9rem;
+    grid-area: 1 / 2;
+    min-width: 0;
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
@@ -203,12 +213,22 @@
   /* What the row holds, so a list of three setups can be told apart without
      selecting each one in turn and reading the Audio section. */
   .about {
+    /* Under the name it describes, running to the end of the row. */
+    grid-area: 2 / 2 / 2 / -1;
     font-size: 0.75rem;
     color: var(--text-dim);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .copy {
+    grid-area: 1 / 3;
+  }
+
+  .remove {
+    grid-area: 1 / 4;
   }
 
   button {

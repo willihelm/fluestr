@@ -722,17 +722,28 @@
       </button>
     </nav>
 
-    {#if running}
-      <button class="primary" onclick={stop}>Stop</button>
-    {:else}
-      <button
-        class="primary"
-        onclick={start}
-        disabled={busy || device === "" || problem !== null}
-      >
-        {busy ? "Starting …" : "Start"}
-      </button>
-    {/if}
+    <div class="right">
+      <!-- Which setup Start would start, beside the button that starts it.
+           The name lives in Settings, three clicks away, and an operator who
+           has two houses in the list can otherwise only tell them apart by
+           what the channel labels say once audio is already running — which
+           is one show too late to find out the wrong profile was loaded. -->
+      {#if active}
+        <span class="profile" title="Active profile">{active.name}</span>
+      {/if}
+
+      {#if running}
+        <button class="primary" onclick={stop}>Stop</button>
+      {:else}
+        <button
+          class="primary"
+          onclick={start}
+          disabled={busy || device === "" || problem !== null}
+        >
+          {busy ? "Starting …" : "Start"}
+        </button>
+      {/if}
+    </div>
   </header>
 
   <!-- A remote page that has lost the socket is a picture of a chat, not a
@@ -937,7 +948,19 @@
     font: inherit;
     font-weight: 600;
     cursor: pointer;
-    margin-left: auto;
+  }
+
+  /* Dim and unemphasised: it is a label on the button beside it, not a control
+     — and a name in the app's accent beside a Start button reads as something
+     to press. Truncated rather than allowed to push Start off a narrow
+     window; the whole name is in the tooltip and in Settings. */
+  .profile {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    max-width: 14rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .primary:disabled {

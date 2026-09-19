@@ -30,28 +30,17 @@
   // Settings: everything about how the session is *configured*, away from the
   // live view.
   //
-  // The page is split by **scope**, not by topic, because scope is the thing
-  // an operator gets wrong. Three questions here have three different answers
-  // to "what does changing this affect":
+  // The page is split in two: **General** — the models, the vocabulary, the
+  // view and the listener, which stay behind when a setup travels — and
+  // **Profile**, the setup itself: which profile is selected, its device and
+  // channel map, its groups and its rules. Two headings and the section names
+  // under them, nothing else: a section that needs explaining explains itself,
+  // inside itself, where the controls it is talking about are.
   //
-  // - the device, the channel map and the groups belong to the *profile* — one
-  //   production's setup, carried between houses;
-  // - the vocabulary is shared by every profile, because the jargon of a house
-  //   outlives any one patch;
-  // - the installed models belong to the *machine*, because what can be run
-  //   depends on the laptop, not on the production being carried to it.
-  //
-  // As one scrolling column all three looked alike, and the only hint of the
-  // difference was a paragraph of prose in the profile card. The rail on the
-  // left says it instead: each section sits under the heading of the thing it
-  // belongs to, once, so no section has to explain its own scope.
-  //
-  // The profiles are a section of their own, above those headings, rather than
-  // a strip that was on screen whichever section was open. Picking a setup is
-  // the rarest thing done here and it was sitting in front of the most
-  // frequent ones, with Delete under the cursor all evening. What has to stay
-  // visible is not the switcher but the *name*, and the rail already carries
-  // it: the sections that belong to a profile are listed under it.
+  // The profiles are a section like the others rather than a strip that was on
+  // screen whichever section was open. Picking a setup is the rarest thing
+  // done here and it was sitting in front of the most frequent ones, with
+  // Delete under the cursor all evening.
   //
   // What is deliberately not here is Start/Stop: it is session-wide and stays
   // in the header, reachable from either page, because an operator who has to
@@ -205,56 +194,32 @@
     view: null,
   });
 
-  // The rail, grouped by what a section belongs to. The headings are the whole
-  // explanation of scope on this page, so they name the thing rather than the
-  // category: "Profile · Oper grosses Haus" is what an operator recognises,
-  // "profile-scoped settings" is not.
-  let rail = $derived<{ scope: string; note: string; items: { id: Section; title: string }[] }[]>([
+  // The rail, in two groups: what belongs to this machine and to every setup
+  // first, then what is carried with the profile that is selected. Names
+  // only — a section that needs explaining explains itself, inside itself.
+  let rail = $derived<{ scope: string; items: { id: Section; title: string }[] }[]>([
     {
-      // No heading of its own: it is what the headings below it are about, and
-      // a scope line over the profile list would have to name the very thing
-      // the list is for choosing.
-      scope: "",
-      note: "",
-      items: [{ id: "profiles", title: "Profiles" }],
-    },
-    {
-      scope: active ? `Profile · ${active.name}` : "Profile",
-      note: "Carried between houses with the profile.",
-      items: [
-        { id: "audio", title: "Audio" },
-        { id: "groups", title: "Groups" },
-        // With the profile, because a trigger names channels and groups and
-        // neither exists outside one — unlike the alert list this replaces,
-        // which was shared by every setup and could name nothing.
-        { id: "rules", title: "Rules" },
-      ],
-    },
-    {
-      scope: "All profiles",
-      note: "Shared by every setup.",
-      items: [
-        { id: "vocabulary", title: "Vocabulary" },
-        // Here rather than under "This machine": what is under it is stored in
-        // the file like the vocabulary and reaches every view the remote
-        // serves, and a window that wants something else says so itself.
-        //
-        // "View" rather than "Chat", because the chat is only the first thing
-        // a window is: the reading direction is a property of a *view* onto
-        // the session, and so is the next setting of this kind.
-        { id: "view", title: "View" },
-      ],
-    },
-    {
-      scope: "This machine",
-      note: "Stays behind when the profile travels.",
+      scope: "General",
       items: [
         { id: "models", title: "Models" },
+        { id: "vocabulary", title: "Vocabulary" },
+        { id: "view", title: "View" },
         // Only in the app. The remote's own Settings page shows everything
         // else, but the listener it is connected through is the host machine's
         // — and a browser switching off the thing serving it is a page pulling
         // the floor out from under itself.
         ...(isRemote ? [] : [{ id: "remote" as Section, title: "Remote client" }]),
+      ],
+    },
+    {
+      scope: "Profile",
+      items: [
+        { id: "profiles", title: "Profiles" },
+        { id: "audio", title: "Audio input" },
+        { id: "groups", title: "Groups" },
+        // With the profile, because a trigger names channels and groups and
+        // neither exists outside one.
+        { id: "rules", title: "Rules" },
       ],
     },
   ]);
@@ -280,10 +245,7 @@
     <nav class="rail" aria-label="Settings sections">
       {#each rail as group (group.scope)}
         <div class="scope">
-          {#if group.scope}
-            <h2>{group.scope}</h2>
-            <p>{group.note}</p>
-          {/if}
+          <h2>{group.scope}</h2>
           {#each group.items as item (item.id)}
             <button
               class="item"
@@ -419,7 +381,7 @@
      Vertical rather than a row of tabs across the top, for two reasons: the
      header already has a row of tabs (Chat / Settings) and a second row under
      it reads as a continuation of the first, and only a vertical list has room
-     for the scope headings that are the whole point of the arrangement. */
+     for the two headings the sections sit under. */
   .rail {
     flex: none;
     width: 14rem;
@@ -433,26 +395,12 @@
   }
 
   .scope h2 {
-    margin: 0;
+    margin: 0 0 0.35rem;
     font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-dim);
-    /* Long profile names are the rule, not the exception, and a rail that
-       grows to fit one would move the sections every time a profile is
-       renamed. */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .scope p {
-    margin: 0.15rem 0 0.4rem;
-    font-size: 0.7rem;
-    line-height: 1.35;
-    color: var(--text-dim);
-    opacity: 0.8;
   }
 
   .item {
@@ -550,8 +498,8 @@
 
   /* A narrow window — the app beside a cue sheet on one screen — puts the rail
      across the top instead, where it costs a line rather than a third of the
-     width. The scope notes go: at that size they are the first thing to spend,
-     and the headings alone still carry the grouping. */
+     width. The headings ride along on the same line as their sections, which
+     is enough to keep the two groups apart. */
   @media (max-width: 46rem) {
     .body {
       flex-direction: column;
@@ -575,12 +523,7 @@
     }
 
     .scope h2 {
-      margin-right: 0.2rem;
-      max-width: 8rem;
-    }
-
-    .scope p {
-      display: none;
+      margin: 0 0.2rem 0 0;
     }
 
     .item {
