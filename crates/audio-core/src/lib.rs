@@ -10,6 +10,7 @@ pub mod capture;
 pub mod device;
 pub mod gain;
 pub mod lang;
+pub mod repetition;
 pub mod resample;
 pub mod ring;
 pub mod segment;
@@ -23,6 +24,7 @@ pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSi
 pub use device::{AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo};
 pub use gain::Gain;
 pub use lang::{LanguageCode, LanguageMode};
+pub use repetition::collapse_repetitions;
 pub use resample::{Resampler, StreamProcessor};
 pub use ring::{RingSink, RingSource, RingStats};
 pub use segment::{is_only_non_speech, Segment, StreamId, Transcript, SAMPLE_RATE};

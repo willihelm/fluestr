@@ -14,12 +14,13 @@
   // every show.
   //
   // Most of it is locked while a session runs, because the channel map is
-  // fixed when capture opens. Three fields are not: the label, the language
-  // and the input trim go into the running session through
-  // `update_stream_config` (P6). They are the three that turn out to be wrong
+  // fixed when capture opens. Four fields are not: the label, the language,
+  // the input trim and the mute go into the running session through
+  // `update_stream_config` (P6). They are the four that turn out to be wrong
   // in the middle of a show — somebody else took the position over, the guest
   // director speaks English, nobody had spoken on that channel during the
-  // sound check — and the three that need no restart. The device channel and
+  // sound check, somebody left their beltpack open in the workshop — and the
+  // four that need no restart. The device channel and
   // the colour stay locked: the first is the channel map, the second would
   // repaint a chat whose old lines were read under the colour they were said
   // in.
@@ -27,13 +28,14 @@
   import {
     newChannel,
     duplicateChannels,
-    mutedChannels,
+    absentChannels,
     applyLanguage,
     usedLanguages,
     type Channel,
   } from "./streams";
   import LanguagePicker from "./LanguagePicker.svelte";
   import GainKnob from "./GainKnob.svelte";
+  import MuteButton from "./MuteButton.svelte";
   import LevelMeter from "./LevelMeter.svelte";
   import type { Language, StreamLevel } from "./bridge";
 
@@ -56,9 +58,9 @@
     /// and flipping to the chat to read the level of the channel being
     /// adjusted means the knob is on the page that is not on screen.
     levels?: Map<number, StreamLevel> | null;
-    /// Pushes a label, a language or a trim into the session that is already
-    /// running, or `null` when none is. Its presence is also what unlocks
-    /// those three fields: there is nothing live to change without it.
+    /// Pushes a label, a language, a trim or a mute into the session that is
+    /// already running, or `null` when none is. Its presence is also what
+    /// unlocks those four fields: there is nothing live to change without it.
     ///
     /// The stream id is the row's position, which is how the backend assigns
     /// it — see `SessionConfig::streams`. Safe here precisely because the rest
@@ -67,7 +69,7 @@
     live:
       | ((
           streamId: number,
-          update: { label?: string; language?: string; gainDb?: number },
+          update: { label?: string; language?: string; gainDb?: number; muted?: boolean },
         ) => void)
       | null;
   }
@@ -83,9 +85,11 @@
   }: Props = $props();
 
   let duplicates = $derived(duplicateChannels(channels));
-  // Not an error either: a row the current device has no channel for starts
-  // muted, so one setup serves the desk and the laptop interface alike.
-  let muted = $derived(new Set(mutedChannels(channels, deviceChannels)));
+  // Not an error either: a row the current device has no channel for is
+  // carried along silently, so one setup serves the desk and the laptop
+  // interface alike. Distinct from a channel the operator muted, which is on
+  // the device and is being listened to.
+  let absent = $derived(new Set(absentChannels(channels, deviceChannels)));
 
   // What the picker above the list still describes. One language and it speaks
   // for the whole setup; several and it only speaks for the next channel —
@@ -134,7 +138,7 @@
 
   <div class="rows">
     <!-- The field names once, over the columns, rather than over every row.
-         Eight channels meant eight copies of "Ch  Label  Lang  Gain  Colour",
+         Eight channels meant eight copies of "Ch  Label  Lang  M  Gain  Colour",
          which is four times as much text as the setup itself and hid the one
          thing
          the section is scanned for: which label sits on which channel. The
@@ -146,6 +150,7 @@
         <span>Ch</span>
         <span>Label</span>
         <span>Lang</span>
+        <span>M</span>
         <span>Gain</span>
         <span>Level</span>
         <span>Colour</span>
@@ -154,7 +159,11 @@
     {/if}
 
     {#each channels as channel, index (channel.key)}
-      <div class="row" class:muted={muted.has(index)} style="--channel: {channel.color}">
+      <div
+        class="row"
+        class:absent={absent.has(index)}
+        style="--channel: {channel.color}"
+      >
         <span class="dot" title="Stream {index}"></span>
 
         <!-- Counted from 1, the way channels are numbered on an interface and
@@ -187,6 +196,20 @@
           label="Language of {channel.label}"
           disabled={locked && live === null}
           onpick={(code) => live?.(index, { language: code })}
+        />
+
+        <!-- Live like the label and the language. Never locked by the
+             session, not even for a channel this device does not have: a
+             setup carried back to the desk should still remember which
+             position was silenced. -->
+        <MuteButton
+          muted={channel.muted}
+          label={channel.label}
+          disabled={locked && live === null}
+          onchange={(next) => {
+            channel.muted = next;
+            live?.(index, { muted: next });
+          }}
         />
 
         <!-- Live like the label and the language, and for a stronger reason
@@ -244,14 +267,14 @@
     </p>
   {/if}
 
-  {#if muted.size > 0}
+  {#if absent.size > 0}
     <!-- Said once, in full, rather than only implied by the greyed rows: an
          operator who sees a channel stay silent for a whole show has to be
          able to find out here why, and the reason is the device, not the
          setup. -->
     <p class="warn">
-      {muted.size} of {channels.length} channels are above the {deviceChannels} the selected
-      device has; they start muted and receive no audio.
+      {absent.size} of {channels.length} channels are above the {deviceChannels} the selected
+      device has; they start silent and receive no audio.
     </p>
   {/if}
 
@@ -282,8 +305,8 @@
        holds a name, and "Portuguese (pt)" truncated to "Portug…" is no better
        than the code it replaced. */
     grid-template-columns:
-      0.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 2.4rem minmax(3rem, 0.7fr)
-      2.6rem 2rem;
+      0.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 1.5rem 2.4rem
+      minmax(3rem, 0.7fr) 2.6rem 2rem;
     align-items: center;
     gap: 0.5rem;
   }
@@ -319,10 +342,11 @@
     min-width: 0;
   }
 
-  /* Dimmed, not hidden or badged: a muted row is still part of the setup,
-     and it has to be editable — pointing it at a channel the device has is
-     the fix. */
-  .row.muted {
+  /* Dimmed, not hidden or badged: a row the device has no channel for is
+     still part of the setup, and it has to be editable — pointing it at a
+     channel the device has is the fix. A row the operator muted is *not*
+     dimmed: that one is working, and its M says so in red. */
+  .row.absent {
     opacity: 0.55;
   }
 

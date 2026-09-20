@@ -144,6 +144,7 @@ export const toStored = (profile: Profile): StoredProfile => {
       language: c.language,
       color: c.color,
       gainDb: clampGain(c.gainDb),
+      muted: c.muted,
     })),
     groups: profile.groups.map((g) => ({
       name: g.name,

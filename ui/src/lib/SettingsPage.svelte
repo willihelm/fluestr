@@ -94,14 +94,14 @@
     /// strip and not `saveError`: "Settings not saved" would be wrong twice
     /// over — the file was written, and what failed was the live session.
     liveError: string | null;
-    /// Pushes a channel's label, language or input trim into the running
-    /// session (P6), or `null` when none is running. Handed down to the
-    /// channel list, which is where those three fields are. See
+    /// Pushes a channel's label, language, input trim or mute into the
+    /// running session (P6), or `null` when none is running. Handed down to
+    /// the channel list, which is where those four fields are. See
     /// `StreamSetup`.
     live:
       | ((
           streamId: number,
-          update: { label?: string; language?: string; gainDb?: number },
+          update: { label?: string; language?: string; gainDb?: number; muted?: boolean },
         ) => void)
       | null;
     /// The levels to show beside the channels, or `null` when there are none

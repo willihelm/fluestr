@@ -5,8 +5,9 @@ import {
   applyLanguage,
   clampGain,
   toConfig,
-  mutedChannels,
+  absentChannels,
   newChannel,
+  restoreChannel,
   usedLanguages,
   validate,
   DEFAULT_LANGUAGE,
@@ -21,6 +22,7 @@ const channel = (device: number, label = `Channel ${device + 1}`, language = "de
   language,
   color: "#888888",
   gainDb: 0,
+  muted: false,
 });
 
 describe("validate", () => {
@@ -67,17 +69,17 @@ describe("validate", () => {
   });
 });
 
-describe("mutedChannels", () => {
+describe("absentChannels", () => {
   it("answers in stream ids, which is what the meters and the events key on", () => {
-    // Positions 1 and 3, not device channels 5 and 8: a muted row keeps its
+    // Positions 1 and 3, not device channels 5 and 8: an absent row keeps its
     // place in the list, so the ids of the rows after it do not move.
     const channels = [channel(0), channel(4), channel(1), channel(7)];
 
-    expect(mutedChannels(channels, 2)).toEqual([1, 3]);
+    expect(absentChannels(channels, 2)).toEqual([1, 3]);
   });
 
   it("mutes nothing when the device covers every channel", () => {
-    expect(mutedChannels([channel(0), channel(7)], 8)).toEqual([]);
+    expect(absentChannels([channel(0), channel(7)], 8)).toEqual([]);
   });
 });
 
@@ -174,5 +176,32 @@ describe("toConfig", () => {
     const channels = [{ ...channel(0, "Regie"), gainDb: 400 }];
 
     expect(toConfig(channels)[0].gainDb).toBe(GAIN_DB_MAX);
+  });
+
+  // A channel muted before the show starts muted: the backend takes the flag
+  // with the rest of the setup, so Start does not quietly open a position
+  // somebody silenced last night.
+  it("carries each channel's mute to the backend", () => {
+    const channels = [channel(0, "Regie"), { ...channel(1, "Licht"), muted: true }];
+
+    expect(toConfig(channels).map((c) => c.muted)).toEqual([false, true]);
+  });
+});
+
+describe("restoreChannel", () => {
+  // The whole reason the field is optional on the way in: a configuration
+  // written before the M existed describes channels that were all open, and
+  // reading one must not produce a setup of `undefined` mutes that then
+  // travels to the backend.
+  it("reads a file written before mute existed as a channel that is not muted", () => {
+    const restored = restoreChannel({
+      channel: 2,
+      label: "Licht",
+      language: "de",
+      color: "#5fd38d",
+      gainDb: 0,
+    });
+
+    expect(restored.muted).toBe(false);
   });
 });

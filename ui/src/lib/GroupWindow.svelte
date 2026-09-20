@@ -131,9 +131,9 @@
   // copy of the setup — the authoritative mapping, and the two would differ the
   // moment the device is swapped under a running session. Only meaningful
   // while the meters are on screen, which is only while it runs.
-  let muted = $derived(
+  let absent = $derived(
     status.state === "running"
-      ? new Set(status.streams.filter((s) => s.muted).map((s) => s.streamId))
+      ? new Set(status.streams.filter((s) => s.absent).map((s) => s.streamId))
       : new Set<number>(),
   );
 
@@ -368,7 +368,7 @@
     </p>
   {:else}
     {#if running}
-      <StreamMeters {channels} {levels} {overloaded} {visible} {muted} {webhooks} />
+      <StreamMeters {channels} {levels} {overloaded} {visible} {absent} {webhooks} />
     {/if}
     <ChatList
       messages={shown}

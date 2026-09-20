@@ -81,6 +81,20 @@ pub struct StoredChannel {
     /// no such field, and zero — unity — is exactly what those channels did.
     #[serde(default)]
     pub gain_db: i32,
+    /// Whether the channel is muted — metered but not transcribed, as the M
+    /// beside its meter sets it.
+    ///
+    /// Stored, though it is pressed during a show rather than during setup: a
+    /// position that is muted is usually muted for a reason that outlives the
+    /// evening — a beltpack in a noisy workshop, a channel patched but not
+    /// used by this production — and an operator who muted it once should not
+    /// have to find it again after every restart. Carried into the session as
+    /// [`crate::session::StreamConfig::muted`].
+    ///
+    /// `#[serde(default)]` for the trim's reason: a file written before mute
+    /// existed describes channels that were all unmuted.
+    #[serde(default)]
+    pub muted: bool,
 }
 
 /// A named view onto some of the channels.
@@ -744,6 +758,7 @@ mod tests {
                         language: "de".into(),
                         color: "#6ea8fe".into(),
                         gain_db: 0,
+                        muted: false,
                     }],
                     groups: vec![],
                     all_channels_flash: false,
@@ -761,6 +776,7 @@ mod tests {
                             language: "de".into(),
                             color: "#6ea8fe".into(),
                             gain_db: 0,
+                            muted: false,
                         },
                         StoredChannel {
                             channel: 3,
@@ -771,6 +787,10 @@ mod tests {
                             // matrix output — and the field a file written
                             // before it existed does not have at all.
                             gain_db: 9,
+                            // Muted for this production: the position is
+                            // patched but nobody sits on it, and it would
+                            // otherwise fill the chat with the room it is in.
+                            muted: true,
                         },
                     ],
                     groups: vec![StoredGroup {
@@ -1139,7 +1159,7 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
-            ["channel", "color", "gainDb", "label", "language"]
+            ["channel", "color", "gainDb", "label", "language", "muted"]
         );
         // The second profile, because it is the one with groups in it.
         assert_eq!(

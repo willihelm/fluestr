@@ -15,6 +15,7 @@
 
   import LevelMeter from "./LevelMeter.svelte";
   import GainKnob from "./GainKnob.svelte";
+  import MuteButton from "./MuteButton.svelte";
   import { watchNarrow } from "./layout";
   import type { Channel } from "./streams";
   import type { StreamLevel, WebhookStatus } from "./bridge";
@@ -31,10 +32,14 @@
     /// The stream ids the selected group shows, or `null` for all of them.
     visible: Set<number> | null;
     /// The stream ids the device has no channel for. They are shown rather
-    /// than hidden: a meter that is simply absent reads as a bug, while a
+    /// than hidden: a meter that is simply missing reads as a bug, while a
     /// silent one reads as a channel nobody is talking on — and neither is
     /// what happened.
-    muted: Set<number>;
+    ///
+    /// Not the same as a muted channel, which is on the device and is being
+    /// metered — that one is `channel.muted`, and it has a lit M beside it
+    /// saying who silenced it.
+    absent: Set<number>;
     /// How the outbound queue is doing (P19), or `null` before the first
     /// answer has arrived.
     ///
@@ -55,9 +60,27 @@
     /// being spoken on. The Settings page keeps its own knob for the setup
     /// being built before anybody is talking.
     gain?: ((streamId: number, db: number) => void) | null;
+    /// Mutes and unmutes a channel, or `null` in the views that do not own the
+    /// setup — the same rule the knob follows, and the same reason: a detached
+    /// group window and the browser peer render this strip and neither writes
+    /// the configuration file.
+    ///
+    /// Here rather than only on the Settings page because this is when it is
+    /// pressed: during a show, on the channel that is filling the chat with
+    /// the room it is standing in.
+    mute?: ((streamId: number, muted: boolean) => void) | null;
   }
 
-  let { channels, levels, overloaded, visible, muted, webhooks, gain = null }: Props = $props();
+  let {
+    channels,
+    levels,
+    overloaded,
+    visible,
+    absent,
+    webhooks,
+    gain = null,
+    mute = null,
+  }: Props = $props();
 
   /// Matched here rather than in CSS alone, because the orientation is not
   /// only a matter of styling: `LevelMeter` has to be told which way round it
@@ -78,8 +101,24 @@
   {#each channels as channel, streamId (channel.key)}
     {#if visible === null || visible.has(streamId)}
     {@const level = levels.get(streamId) ?? empty(streamId)}
-    <div class="stream" class:muted={muted.has(streamId)} style="--channel: {channel.color}">
+    <div
+      class="stream"
+      class:absent={absent.has(streamId)}
+      class:muted={channel.muted}
+      style="--channel: {channel.color}"
+    >
       <span class="name">{channel.label}</span>
+      {#if mute}
+        <!-- Before the knob: mute is pressed in a hurry and trim is set
+             slowly, so the one that is reached for under pressure sits next
+             to the name it belongs to. -->
+        <MuteButton
+          muted={channel.muted}
+          label={channel.label}
+          disabled={absent.has(streamId)}
+          onchange={(next) => mute(streamId, next)}
+        />
+      {/if}
       {#if gain}
         <!-- Before the bar, so the reading stays the widest thing in the row
              and the knob sits with the name of what it trims. -->
@@ -123,10 +162,10 @@
 <style>
   .meters {
     display: grid;
-    /* Wide enough for a name, a knob and a bar that is still worth reading.
-       Below this the bar is what gives way, and a meter narrower than its own
-       label is not a meter. */
-    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    /* Wide enough for a name, an M, a knob and a bar that is still worth
+       reading. Below this the bar is what gives way, and a meter narrower
+       than its own label is not a meter. */
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
     gap: 0.35rem 1rem;
     padding: 0.5rem 1rem;
     border-bottom: 1px solid var(--border);
@@ -148,10 +187,20 @@
     --accent: var(--channel);
   }
 
-  /* Dimmed rather than labelled: a muted stream keeps its meter, which
-     simply stays at rest, and the greying says it receives no audio. */
-  .stream.muted {
+  /* Dimmed rather than labelled: a stream the device has no channel for
+     keeps its meter, which simply stays at rest, and the greying says it
+     receives no audio. */
+  .stream.absent {
     opacity: 0.55;
+  }
+
+  /* A muted stream is *not* dimmed. Its meter is the whole point — it goes on
+     showing that somebody is talking on a channel nothing is being
+     transcribed from — and the lit M is what says why. The name is struck
+     through instead, which is a statement rather than an absence. */
+  .stream.muted .name {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
   }
 
   /* The one cell that is not a channel. It has no meter, so it is only ever

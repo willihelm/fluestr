@@ -6,7 +6,7 @@
   import GroupSidebar from "./lib/GroupSidebar.svelte";
   import ClearCommunication from "./lib/ClearCommunication.svelte";
   import ResourceMeter from "./lib/ResourceMeter.svelte";
-  import { toConfig, validate, mutedChannels } from "./lib/streams";
+  import { toConfig, validate, absentChannels } from "./lib/streams";
   import { forgetChannels, viewStreams, visibleStreams } from "./lib/groups";
   import { forget as forgetInRules } from "./lib/rules";
   import {
@@ -194,8 +194,8 @@
     sessionStarts = new Map(sessionStarts).set(state.sessionId, state.startedAtMs);
   };
 
-  /// Carries a channel's new label, language or input trim into the session
-  /// that is already running (P6).
+  /// Carries a channel's new label, language, input trim or mute into the
+  /// session that is already running (P6).
   ///
   /// The edit itself has already happened in `profiles`, which is what gets
   /// saved; this is the other half — the session, which the file cannot
@@ -209,7 +209,7 @@
   /// get it the same way and at the same time.
   const liveStream = (
     streamId: number,
-    update: { label?: string; language?: string; gainDb?: number },
+    update: { label?: string; language?: string; gainDb?: number; muted?: boolean },
   ) => {
     updateStreamConfig({ streamId, ...update })
       .then(() => (liveError = null))
@@ -235,6 +235,20 @@
     // with; these are the audio it applies to right now.
     if (running) liveStream(streamId, { gainDb });
     else setMonitorGain(streamId, gainDb).catch(() => {});
+  };
+
+  /// Mutes or unmutes a channel from the meter strip.
+  ///
+  /// The same two halves as the trim — the profile, which is what gets saved,
+  /// and the running session — with one difference: there is nothing to tell
+  /// the monitor. Mute stops the transcription and not the metering, and the
+  /// monitor only ever meters, so while no session runs the flag is simply
+  /// recorded and applied by the next Start.
+  const setMute = (streamId: number, muted: boolean) => {
+    const channel = active?.channels[streamId];
+    if (!channel || channel.muted === muted) return;
+    channel.muted = muted;
+    if (running) liveStream(streamId, { muted });
   };
 
   let running = $derived(status.state === "running");
@@ -307,15 +321,26 @@
 
     return () => clearTimeout(timer);
   });
-  // Which streams receive no audio because the device has no such channel.
-  // While a session runs this comes from the backend's own answer rather than
-  // from the UI's copy of the setup — that is the authoritative mapping, and
-  // the two would differ the moment the device is swapped under a running
-  // session.
-  let muted = $derived(
+  // Which streams receive no audio because the device has no such channel —
+  // not the ones the operator muted, which are being listened to and are
+  // marked by their own lit M. While a session runs this comes from the
+  // backend's own answer rather than from the UI's copy of the setup — that
+  // is the authoritative mapping, and the two would differ the moment the
+  // device is swapped under a running session.
+  let absent = $derived(
     status.state === "running"
-      ? new Set(status.streams.filter((s) => s.muted).map((s) => s.streamId))
-      : new Set(mutedChannels(channels, deviceChannels)),
+      ? new Set(status.streams.filter((s) => s.absent).map((s) => s.streamId))
+      : new Set(absentChannels(channels, deviceChannels)),
+  );
+  // How many channels the operator has silenced, for the status bar. From the
+  // session's own answer for `absent`'s reason, and excluding the channels
+  // that are not on the device anyway — counting those would say "2 muted"
+  // about an interface with too few inputs, which points the operator at the
+  // wrong fix.
+  let mutedCount = $derived(
+    status.state === "running"
+      ? status.streams.filter((s) => s.muted && !s.absent).length
+      : 0,
   );
 
   let group = $derived(groups.find((g) => g.key === selectedGroup) ?? null);
@@ -920,10 +945,12 @@
       {#if status.state === "running"}
         <span class="ok">●</span>
         <span>
-          {status.device} · {status.streams.length - muted.size}
-          {status.streams.length - muted.size === 1 ? "channel" : "channels"}{muted.size > 0
-            ? `, ${muted.size} muted`
-            : ""} · {status.sampleRate} Hz ·
+          {status.device} · {status.streams.length - absent.size}
+          {status.streams.length - absent.size === 1
+            ? "channel"
+            : "channels"}{absent.size > 0
+            ? `, ${absent.size} not on the device`
+            : ""}{mutedCount > 0 ? `, ${mutedCount} muted` : ""} · {status.sampleRate} Hz ·
           {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
           {(status.loadMs / 1000).toFixed(1)} s
         </span>
@@ -990,9 +1017,10 @@
             {levels}
             {overloaded}
             {visible}
-            {muted}
+            {absent}
             {webhooks}
             gain={setGain}
+            mute={setMute}
           />
         {/if}
 

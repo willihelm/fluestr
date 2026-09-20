@@ -9,6 +9,7 @@ const channel = (key: number, label = `Channel ${key}`): Channel => ({
   language: "de",
   color: "#6ea8fe",
   gainDb: 0,
+  muted: false,
 });
 
 const group = (key: number, members: number[]): Group => ({

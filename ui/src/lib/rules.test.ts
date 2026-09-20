@@ -16,9 +16,9 @@ import { restoreGroup, type Group } from "./groups";
 import { restoreChannel, type Channel } from "./streams";
 
 const channels: Channel[] = [
-  restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0 }),
-  restoreChannel({ channel: 1, label: "Inspizienz", language: "de", color: "#5fd38d", gainDb: 0 }),
-  restoreChannel({ channel: 2, label: "Licht", language: "de", color: "#f2b35e", gainDb: 0 }),
+  restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false }),
+  restoreChannel({ channel: 1, label: "Inspizienz", language: "de", color: "#5fd38d", gainDb: 0, muted: false }),
+  restoreChannel({ channel: 2, label: "Licht", language: "de", color: "#f2b35e", gainDb: 0, muted: false }),
 ];
 
 /// Two of them, because a view is addressed by its *position* and one group

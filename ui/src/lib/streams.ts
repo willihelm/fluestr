@@ -21,6 +21,13 @@ export interface Channel {
   /// reads the audio. A desk does not hand out eight channels at one level,
   /// and whisper gives up on the quiet one long before a human would.
   gainDb: number;
+  /// Muted by the operator: the channel is still captured and still metered,
+  /// and nothing said on it is transcribed. Pressed on a beltpack left open
+  /// in a noisy room, which is one channel filling the chat for everybody.
+  ///
+  /// Not the same thing as a channel the device does not have — see
+  /// [`absentChannels`]. One is a decision, the other is an interface.
+  muted: boolean;
 }
 
 /// A trim the backend will accept unchanged.
@@ -51,7 +58,8 @@ let nextKey = 0;
 ///
 /// Deliberately not clamped to the device's channel count: a setup may hold
 /// more channels than the interface currently plugged in has, and those start
-/// muted rather than blocking the session — see [`mutedChannels`].
+/// carried along silently rather than blocking the session — see
+/// [`absentChannels`].
 export const newChannel = (
   existing: Channel[],
   /// The profile's default language — what the picker above the channel list
@@ -74,6 +82,8 @@ export const newChannel = (
     // Unity: a new channel is whatever the interface delivers until somebody
     // has heard it and decided otherwise.
     gainDb: 0,
+    // Open, for the same reason: a channel is added in order to be heard.
+    muted: false,
   };
 };
 
@@ -85,13 +95,21 @@ export const newChannel = (
 /// noise in a file an operator may have to read, and a restored setup that
 /// reused stale keys would collide with the ones a later `newChannel` hands
 /// out.
-export const restoreChannel = (stored: Omit<Channel, "key">): Channel => ({
+export const restoreChannel = (
+  // `muted` optional, unlike the rest: a file written before the M existed
+  // does not carry it, and the frontend reads those files as well as the
+  // backend does.
+  stored: Omit<Channel, "key" | "muted"> & { muted?: boolean },
+): Channel => ({
   ...stored,
   key: nextKey++,
   // A hand-edited file may hold a trim the backend would clamp anyway. Doing
   // it on the way in means the knob shows the value that is actually in force
   // rather than the one the file claims.
   gainDb: clampGain(stored.gainDb),
+  // A file written before mute existed has no such field, and every channel
+  // in it was open.
+  muted: stored.muted ?? false,
 });
 
 /// Every channel put onto one language.
@@ -120,6 +138,7 @@ export const toConfig = (channels: Channel[]): StreamConfig[] =>
     label: c.label.trim() === "" ? `Channel ${c.channel + 1}` : c.label.trim(),
     language: c.language.trim().toLowerCase(),
     gainDb: clampGain(c.gainDb),
+    muted: c.muted,
   }));
 
 /// Why the setup cannot be started, or `null` if it can.
@@ -150,11 +169,12 @@ export const validate = (
     }
   }
 
-  // A channel the device does not have is muted, not a refusal to start: a
-  // setup built for the desk has to survive being carried to a laptop with two
-  // inputs. Only a setup where *nothing* is left to listen to is an error,
-  // because then starting would transcribe silence and look like a broken app.
-  if (mutedChannels(channels, deviceChannels).length === channels.length) {
+  // A channel the device does not have is carried along silently, not a
+  // refusal to start: a setup built for the desk has to survive being carried
+  // to a laptop with two inputs. Only a setup where *nothing* is left to
+  // listen to is an error, because then starting would transcribe silence and
+  // look like a broken app.
+  if (absentChannels(channels, deviceChannels).length === channels.length) {
     return deviceChannels === 0
       ? "The selected device has no input channels."
       : `None of the ${channels.length} channels exists on this device; it has ${deviceChannels}.`;
@@ -179,11 +199,15 @@ export const duplicateChannels = (channels: Channel[]): number[] => {
 /// stream ids, which is what the meters and the session state key on.
 ///
 /// These start anyway and are carried along silently: they keep their id,
-/// their colour and their place in the groups and receive no audio. Muting
+/// their colour and their place in the groups and receive no audio. Carrying
 /// rather than dropping them is what keeps the ids stable, and rather than
 /// refusing to start is what lets one saved setup serve both the desk and a
 /// two-input laptop interface.
-export const mutedChannels = (channels: Channel[], deviceChannels: number): number[] =>
+///
+/// Deliberately not called "muted": that word belongs to the M beside the
+/// meter, which an operator presses on a channel that *is* there. A silent
+/// channel has to be traceable to one or the other.
+export const absentChannels = (channels: Channel[], deviceChannels: number): number[] =>
   channels
     .map((c, streamId) => (c.channel < 0 || c.channel >= deviceChannels ? streamId : -1))
     .filter((streamId) => streamId >= 0);

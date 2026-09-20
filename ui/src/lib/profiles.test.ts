@@ -41,9 +41,9 @@ const anOldFile = <T>(written: unknown): T => written as T;
 /// Settings page builds one — with keys, not positions.
 const aProfile = (): Profile => {
   const channels = [
-    restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0 }),
+    restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false }),
     // Trimmed, so the round trip has a value to lose.
-    restoreChannel({ channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9 }),
+    restoreChannel({ channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9, muted: true }),
   ];
 
   const groups = [restoreGroup("Bühne", [channels[1].key])];
@@ -87,8 +87,8 @@ const stored: StoredProfile = {
   deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
   language: "de",
   channels: [
-    { channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0 },
-    { channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9 },
+    { channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false },
+    { channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9, muted: true },
   ],
   groups: [{ name: "Bühne", onTop: false, members: [1] }],
   rules: [

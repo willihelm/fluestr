@@ -309,6 +309,20 @@ fn transcribe(
     params.set_temperature(0.0);
     params.set_temperature_inc(0.0);
 
+    // The price of that decision is whisper's repetition loop: greedy sampling
+    // with nothing to fall back to sometimes cycles on a phrase until the
+    // token budget runs out, which costs seconds of decode for a segment of
+    // pure noise. The loop itself is cut from the text on the app side
+    // (`audio_core::collapse_repetitions`) — this only bounds what it may cost
+    // before then.
+    //
+    // Twenty tokens per second of audio is roughly three times the fastest
+    // German anybody speaks into an intercom, so no real utterance reaches it;
+    // a loop reaches it immediately. The constant on top keeps very short
+    // segments from being capped by rounding alone.
+    let seconds = pcm.len() as f64 / audio_core::SAMPLE_RATE as f64;
+    params.set_max_tokens(20 + (seconds * 20.0) as i32);
+
     // Decoder chatter does not belong on stdout.
     params.set_print_special(false);
     params.set_print_progress(false);

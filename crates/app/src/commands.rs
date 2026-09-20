@@ -710,6 +710,7 @@ mod tests {
                 assert_eq!(update.label.as_deref(), Some("Inspizienz"));
                 assert_eq!(update.language, None, "nothing said is nothing changed");
                 assert_eq!(update.gain_db, None);
+                assert_eq!(update.muted, None);
             }
             other => panic!("read as {other:?}"),
         }
@@ -728,6 +729,26 @@ mod tests {
         match call {
             Command::UpdateStreamConfig { update } => {
                 assert_eq!(update.gain_db, Some(-6));
+                assert_eq!(update.label, None);
+            }
+            other => panic!("read as {other:?}"),
+        }
+    }
+
+    /// And so does the mute, which is the one an operator presses in a hurry:
+    /// a channel filling the chat with a dressing room is silenced with one
+    /// flag, not with a restatement of the setup around it.
+    #[test]
+    fn an_update_may_carry_only_a_mute() {
+        let call: Command = serde_json::from_str(
+            r#"{"command":"update_stream_config","args":{"update":{"streamId":2,"muted":true}}}"#,
+        )
+        .expect("an update carrying only a mute");
+
+        match call {
+            Command::UpdateStreamConfig { update } => {
+                assert_eq!(update.muted, Some(true));
+                assert_eq!(update.gain_db, None);
                 assert_eq!(update.label, None);
             }
             other => panic!("read as {other:?}"),

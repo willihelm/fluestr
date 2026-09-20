@@ -69,6 +69,17 @@ export type RunningStream = { streamId: number, channel: number, label: string,
  * silently: it keeps its id, its colour and its place in the groups, and
  * receives no audio. See [`Session::start`] for why that beats refusing
  * to start.
+ *
+ * Not called "muted", though it sounds like it: mute is something an
+ * operator does to a channel that is working, and this is a channel that
+ * is not there. The two need separate words because an operator reading
+ * a silent channel has to be able to tell "I pressed M" from "this
+ * interface has four inputs".
+ */
+absent: boolean, 
+/**
+ * Muted by the operator: the audio arrives and is metered, and nothing
+ * is transcribed from it. See [`StreamConfig::muted`].
  */
 muted: boolean, 
 /**
@@ -197,7 +208,21 @@ language: string,
  * existed starts at the level the device delivers, which is exactly what
  * it did before.
  */
-gainDb: number, };
+gainDb: number, 
+/**
+ * Whether the operator has muted this channel.
+ *
+ * Mute means *not transcribed*, not *not heard*: the channel keeps its
+ * ring, its trim and its meter, and only the segmenter stops being fed.
+ * That is the thing an operator presses M for — a beltpack left open in a
+ * noisy dressing room filling the chat with nothing — and it is also what
+ * makes the button honest afterwards: the bar beside it still moves, so
+ * the channel is visibly alive and visibly not arriving.
+ *
+ * `default` — unmuted — for a configuration written before mute existed,
+ * which is exactly what every channel in it did.
+ */
+muted: boolean, };
 
 /**
  * Level and health of one stream.
@@ -212,13 +237,14 @@ dropped: number, };
 /**
  * A change to one channel of a session that is already running (P6).
  *
- * Three of the five fields of a [`StreamConfig`] can change without the
- * capture being touched, and they are the three that are wrong during a show:
+ * Four of the five fields of a [`StreamConfig`] can change without the
+ * capture being touched, and they are the four that are wrong during a show:
  * the label — somebody else took the position over — the language — the guest
- * director speaks English — and the trim, which is wrong the first time
- * anybody speaks on a channel nobody spoke on during the sound check. All
- * three were a Stop and a Start until this existed, and Stop is the one thing
- * an operator will not do while the room is talking.
+ * director speaks English — the trim, which is wrong the first time anybody
+ * speaks on a channel nobody spoke on during the sound check — and the mute,
+ * which is wrong the moment a beltpack is left open in a noisy room. All four
+ * were a Stop and a Start until this existed, and Stop is the one thing an
+ * operator will not do while the room is talking.
  *
  * What is *not* here is the device channel. The channel map is fixed when the
  * device opens: it pairs a ring with a channel inside the capture callback,
@@ -239,7 +265,12 @@ streamId: number, label?: string | null, language?: string | null,
  * Input trim in whole decibels. Clamped rather than rejected — see
  * [`audio_core::gain::clamp_db`].
  */
-gainDb?: number | null, };
+gainDb?: number | null, 
+/**
+ * Whether the channel is muted — the M beside the meter, pressed during
+ * a show, which is the only time it is ever pressed.
+ */
+muted?: boolean | null, };
 
 /**
  * A finished transcript on its way to the chat view.

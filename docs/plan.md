@@ -93,7 +93,7 @@ for now, with the reason recorded in the package.
 capture, one ring buffer and segmenter per channel, Silero speech detection,
 the shared worker pool, one colour-coded chat — at a measured ~330 ms on one
 stream from the end of a spoken segment to the text appearing. The channel
-count is not capped: a channel the interface does not have is muted rather
+count is not capped: a channel the interface does not have is carried rather
 than refused, and what decides how many channels keep up is how many decodes
 run at once, which is an operator's to set on the Models page.
 Around it: a Settings page holding the device, the channel map — whose labels
@@ -526,12 +526,13 @@ Channels are numbered from 1, the way they are numbered on an interface; the
 backend stays zero-based and the conversion happens at that one boundary. The
 channel list names its fields once, above the columns.
 
-**A channel the device does not have is muted, not a refusal to start.** A
-setup built for the desk and carried to a laptop with a two-input interface may
-hold more channels than the device offers: those keep their stream id, colour
-and group membership, are marked `muted` in the running state, and receive no
-audio. The session refuses to start only when *every* channel is above what the
-device has, because then it would open a device and transcribe silence. Muted
+**A channel the device does not have is carried along silently, not a refusal
+to start.** A setup built for the desk and carried to a laptop with a two-input
+interface may hold more channels than the device offers: those keep their
+stream id, colour and group membership, are marked `absent` in the running
+state, and receive no audio. Deliberately not called "muted" — that is the M an
+operator presses on a channel that *is* there (P8). The session refuses to start only when *every* channel is above what the
+device has, because then it would open a device and transcribe silence. Carried
 rather than dropped is what keeps the ids stable — the stream id is the row's
 position.
 
@@ -724,6 +725,38 @@ it — and whisper gives up on the quiet one long before a human would.
   without complaining, but the peak meter beside the knob would then have no
   top to read against — and an operator turning a trim up has to be told where
   "too far" is, by the meter, at the moment they pass it.
+
+**A mute per channel**, as an M beside each meter on the strip and again in
+the channel setup. What an operator reaches for is not a trim: it is a beltpack
+left open in a noisy workshop, or a position that is patched but unstaffed
+tonight, filling everybody's chat with a room.
+
+- **Mute means not transcribed, not not heard.** The channel keeps its ring,
+  its trim and its meter; only the segmenter stops being fed. The bar beside a
+  lit M goes on moving, which is what makes the button honest: the channel is
+  visibly alive and visibly not arriving. A dead bar would read as a dead
+  channel, and the operator would go looking for a cable.
+- **The open segment is closed and decoded** at the moment the M goes down.
+  Those words were said before it was pressed and belong in the chat; left in
+  the segmenter they would arrive whenever the channel came back, under a
+  timestamp from before the interval.
+- **Live, like the label, the language and the trim (P6)**, carried in
+  `StreamUpdate` and held as an atomic the pipeline reads once per pump — the
+  transition is what it compares, which is how the flush above happens on the
+  thread that owns the segmenter.
+- **Stored with the channel** (P12), `#[serde(default)]` for the trim's
+  reason. A position muted for this production is muted for a reason that
+  outlives the evening, and finding it again after every restart is the kind
+  of chore that ends in somebody transcribing a workshop for an act.
+- **"Muted" is now one word for one thing.** A channel the device has no input
+  for used to be called muted too; it is `absent` everywhere now — in
+  `RunningStream`, in the strip, in the status bar. An operator looking at a
+  silent channel has to be able to tell "I pressed M" from "this interface has
+  four inputs", and those want different fixes. An absent channel is dimmed, a
+  muted one is not: it is working, and its red M says so.
+- **It does not reach the monitor** (below), which only ever meters and never
+  transcribes. Muting before a session is recorded in the profile and applied
+  by the next Start.
 
 **Meters without a session**, so the trim can be set before a show rather than
 discovered during one. `monitor.rs` opens the device, de-interleaves it and

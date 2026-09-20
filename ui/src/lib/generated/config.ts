@@ -44,7 +44,22 @@ color: string,
  * `#[serde(default)]` because a file written before the trim existed has
  * no such field, and zero — unity — is exactly what those channels did.
  */
-gainDb: number, };
+gainDb: number, 
+/**
+ * Whether the channel is muted — metered but not transcribed, as the M
+ * beside its meter sets it.
+ *
+ * Stored, though it is pressed during a show rather than during setup: a
+ * position that is muted is usually muted for a reason that outlives the
+ * evening — a beltpack in a noisy workshop, a channel patched but not
+ * used by this production — and an operator who muted it once should not
+ * have to find it again after every restart. Carried into the session as
+ * [`crate::session::StreamConfig::muted`].
+ *
+ * `#[serde(default)]` for the trim's reason: a file written before mute
+ * existed describes channels that were all unmuted.
+ */
+muted: boolean, };
 
 /**
  * The whole configuration file.

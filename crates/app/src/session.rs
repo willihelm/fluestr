@@ -9,7 +9,7 @@
 //!
 //! How many channels that may be is the device's question, not this module's:
 //! nothing here caps the count, and a channel the interface does not have is
-//! muted rather than refused. What decides how many of them keep up is how
+//! carried along silently rather than refused. What decides how many of them keep up is how
 //! many decodes run at once, which is [`crate::pool::PoolConfig::workers`] and
 //! an operator's to set.
 //!
@@ -43,6 +43,7 @@ use audio_core::{
     SegmenterConfig, SileroVad, StreamId, StreamProcessor, Vad, SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -113,17 +114,31 @@ pub struct StreamConfig {
     /// it did before.
     #[serde(default)]
     pub gain_db: i32,
+    /// Whether the operator has muted this channel.
+    ///
+    /// Mute means *not transcribed*, not *not heard*: the channel keeps its
+    /// ring, its trim and its meter, and only the segmenter stops being fed.
+    /// That is the thing an operator presses M for — a beltpack left open in a
+    /// noisy dressing room filling the chat with nothing — and it is also what
+    /// makes the button honest afterwards: the bar beside it still moves, so
+    /// the channel is visibly alive and visibly not arriving.
+    ///
+    /// `default` — unmuted — for a configuration written before mute existed,
+    /// which is exactly what every channel in it did.
+    #[serde(default)]
+    pub muted: bool,
 }
 
 /// A change to one channel of a session that is already running (P6).
 ///
-/// Three of the five fields of a [`StreamConfig`] can change without the
-/// capture being touched, and they are the three that are wrong during a show:
+/// Four of the five fields of a [`StreamConfig`] can change without the
+/// capture being touched, and they are the four that are wrong during a show:
 /// the label — somebody else took the position over — the language — the guest
-/// director speaks English — and the trim, which is wrong the first time
-/// anybody speaks on a channel nobody spoke on during the sound check. All
-/// three were a Stop and a Start until this existed, and Stop is the one thing
-/// an operator will not do while the room is talking.
+/// director speaks English — the trim, which is wrong the first time anybody
+/// speaks on a channel nobody spoke on during the sound check — and the mute,
+/// which is wrong the moment a beltpack is left open in a noisy room. All four
+/// were a Stop and a Start until this existed, and Stop is the one thing an
+/// operator will not do while the room is talking.
 ///
 /// What is *not* here is the device channel. The channel map is fixed when the
 /// device opens: it pairs a ring with a channel inside the capture callback,
@@ -154,6 +169,11 @@ pub struct StreamUpdate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub gain_db: Option<i32>,
+    /// Whether the channel is muted — the M beside the meter, pressed during
+    /// a show, which is the only time it is ever pressed.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub muted: Option<bool>,
 }
 
 /// What the UI sends to start a session.
@@ -322,6 +342,15 @@ pub struct RunningStream {
     /// silently: it keeps its id, its colour and its place in the groups, and
     /// receives no audio. See [`Session::start`] for why that beats refusing
     /// to start.
+    ///
+    /// Not called "muted", though it sounds like it: mute is something an
+    /// operator does to a channel that is working, and this is a channel that
+    /// is not there. The two need separate words because an operator reading
+    /// a silent channel has to be able to tell "I pressed M" from "this
+    /// interface has four inputs".
+    pub absent: bool,
+    /// Muted by the operator: the audio arrives and is metered, and nothing
+    /// is transcribed from it. See [`StreamConfig::muted`].
     pub muted: bool,
     /// The trim actually in force, which is the configured one clamped into
     /// range. Echoed back for the same reason the channel is: this is the
@@ -400,6 +429,14 @@ struct Pipeline {
     /// Shared with [`Session::gains`], so the knob reaches the audio without
     /// this thread having to be told. Read once per pump.
     gain: Arc<Gain>,
+    /// Shared with [`Session::mutes`], the same way and for the same reason.
+    mute: Arc<AtomicBool>,
+    /// What `mute` said at the last pump, so the moment it changes can be
+    /// acted on. A mute is not only a thing this thread stops doing: the
+    /// segment that was open when it arrived has to be closed and decoded,
+    /// or half a sentence sits in the segmenter until the channel is unmuted
+    /// and then arrives in the chat minutes late.
+    was_muted: bool,
     /// Audio since the last level event, *after* the trim — the meter beside
     /// the knob has to show what turning it did.
     window: Vec<f32>,
@@ -432,9 +469,19 @@ pub struct Session {
     ///
     /// Shared state rather than a channel, unlike the language: a knob being
     /// dragged sends a change per pointer event, and the processing thread
-    /// only needs the value that is current when it next pumps. A muted stream
-    /// is absent — it has no pipeline for a trim to reach.
+    /// only needs the value that is current when it next pumps. A stream the
+    /// device has no channel for is not in here — it has no pipeline for a
+    /// trim to reach.
     gains: HashMap<u16, Arc<Gain>>,
+    /// Whether each live stream is muted, shared with the pipeline that reads
+    /// it once per pump.
+    ///
+    /// Shared state rather than a channel for the trim's reason, plus one of
+    /// its own: the pipeline has to notice the *transition*, so that the
+    /// sentence somebody was in the middle of when M was pressed is still
+    /// decoded rather than left in the segmenter until the channel comes
+    /// back. That is a comparison the reader makes, not a message it is sent.
+    mutes: HashMap<u16, Arc<AtomicBool>>,
     /// The running state exactly as it was announced.
     ///
     /// Kept so an update can re-announce it — same session id, same zero point,
@@ -449,7 +496,8 @@ pub struct Session {
 /// The label each stream's transcripts are emitted under.
 ///
 /// A map rather than a vector because it is keyed by stream id, and the ids of
-/// a session with muted channels are not a contiguous range of the pipelines.
+/// a session with absent channels are not a contiguous range of the
+/// pipelines.
 type Labels = Arc<std::sync::Mutex<HashMap<u16, String>>>;
 
 impl Session {
@@ -490,13 +538,13 @@ impl Session {
         // actually opened.
         let device_id = info.id.clone();
 
-        // A configured channel the device does not have is muted, not a
-        // refusal to start. A channel map is made for the desk and then
+        // A configured channel the device does not have is carried along
+        // silently, not a refusal to start. A channel map is made for the desk and then
         // carried to a laptop with a two-input interface, and the operator
         // wants the channels that *are* there rather than having to delete the
         // rest and rebuild the setup afterwards.
         //
-        // Muted streams keep their stream id. The id is the position in
+        // Absent streams keep their stream id. The id is the position in
         // `config.streams`, and the chat colours, the group membership and the
         // meters are all built on it, so dropping a row would move every later
         // channel onto the wrong label — the exact failure P1 is careful about
@@ -510,7 +558,7 @@ impl Session {
             .collect();
 
         if live.is_empty() {
-            // Nothing to mute down to: starting would open a device and
+            // Nothing left to listen to: starting would open a device and
             // transcribe silence, which looks like the app being broken.
             bail!(
                 "none of the {} configured channels exists on '{}' — it has {} channels",
@@ -524,7 +572,7 @@ impl Session {
             // Numbered the way the UI shows it — the index is zero-based
             // because the audio API is, but nothing an operator reads has any
             // business exposing that.
-            let muted: Vec<String> = config
+            let absent: Vec<String> = config
                 .streams
                 .iter()
                 .filter(|stream| stream.channel >= info.channels)
@@ -533,8 +581,8 @@ impl Session {
             tracing::warn!(
                 device = %info.name,
                 channels = info.channels,
-                muted = %muted.join(", "),
-                "muted: the device does not have these channels"
+                absent = %absent.join(", "),
+                "carried along silently: the device does not have these channels"
             );
         }
 
@@ -604,9 +652,9 @@ impl Session {
             sources.push(source);
         }
 
-        // Every configured stream, muted ones included: this is the UI's
-        // authoritative answer to which channel ended up where, and a muted
-        // channel missing from it would read as one that simply vanished.
+        // Every configured stream, the absent ones included: this is the UI's
+        // authoritative answer to which channel ended up where, and a channel
+        // missing from it would read as one that simply vanished.
         let running: Vec<RunningStream> = config
             .streams
             .iter()
@@ -615,7 +663,8 @@ impl Session {
                 stream_id: index as u16,
                 channel: stream.channel,
                 label: stream.label.clone(),
-                muted: stream.channel >= info.channels,
+                absent: stream.channel >= info.channels,
+                muted: stream.muted,
                 gain_db: audio_core::gain::clamp_db(stream.gain_db),
             })
             .collect();
@@ -643,11 +692,17 @@ impl Session {
         // paying for eight of them for a device that was going to refuse.
         let mut pipelines = Vec::with_capacity(live.len());
         let mut gains: HashMap<u16, Arc<Gain>> = HashMap::with_capacity(live.len());
+        let mut mutes: HashMap<u16, Arc<AtomicBool>> = HashMap::with_capacity(live.len());
         for (&(stream_id, stream), source) in live.iter().zip(sources) {
             // One per live stream, held on both sides: the pipeline scales
             // with it, `update_stream` writes to it.
             let gain = Arc::new(Gain::new(stream.gain_db));
             gains.insert(stream_id, gain.clone());
+            // Held on both sides like the trim: the pipeline reads it, the M
+            // beside the meter writes it through `update_stream`.
+            let muted = stream.muted;
+            let mute = Arc::new(AtomicBool::new(muted));
+            mutes.insert(stream_id, mute.clone());
             pipelines.push(Pipeline {
                 processor: StreamProcessor::new(source, granted)?,
                 segmenter: Segmenter::new(
@@ -668,6 +723,8 @@ impl Session {
                     },
                 ),
                 gain,
+                mute,
+                was_muted: muted,
                 window: Vec::new(),
             });
         }
@@ -697,7 +754,7 @@ impl Session {
             session_id,
             device = %info.name,
             streams = live.len(),
-            muted = config.streams.len() - live.len(),
+            absent = config.streams.len() - live.len(),
             sample_rate = granted,
             detector = if vad_model.is_some() { "silero" } else { "energy" },
             workers = pool.workers(),
@@ -726,6 +783,7 @@ impl Session {
                 labels,
                 languages,
                 gains,
+                mutes,
                 running: std::sync::Mutex::new(state.clone()),
                 events,
             },
@@ -752,10 +810,11 @@ impl Session {
     /// browser on the LAN — learns the new mapping from the one authority on
     /// it rather than from its own copy of the setup.
     ///
-    /// A muted stream can be updated like any other. It has no pipeline, so
-    /// neither the language nor the trim reaches anything; both are still
-    /// recorded in the state it answers with, because a muted channel is one
-    /// cable away from being live and its setup belongs to it either way.
+    /// A stream the device has no channel for can be updated like any other.
+    /// It has no pipeline, so neither the language nor the trim nor the mute
+    /// reaches anything; all three are still recorded in the state it answers
+    /// with, because such a channel is one cable away from being live and its
+    /// setup belongs to it either way.
     ///
     /// Changes no configuration file. The session is what is being edited
     /// here; storing the change is the Settings page's business, on its own
@@ -794,6 +853,14 @@ impl Session {
             if let Some(gain) = self.gains.get(&update.stream_id) {
                 gain.set_db(gain_db);
             }
+        }
+
+        if let Some(muted) = update.muted {
+            stream.muted = muted;
+            if let Some(mute) = self.mutes.get(&update.stream_id) {
+                mute.store(muted, Ordering::Relaxed);
+            }
+            tracing::info!(stream_id = update.stream_id, muted, "stream mute changed");
         }
 
         if let Some(language) = update.language {
@@ -943,9 +1010,8 @@ fn spawn_processor(
 
                 // Before the pump, so a change made between two wake-ups is
                 // in force for the audio this round is about to segment. A
-                // stream that is not here is a muted one: it has no pipeline,
-                // and its language reaches nothing — which is what being muted
-                // means.
+                // stream that is not here is one the device has no channel
+                // for: it has no pipeline, and its language reaches nothing.
                 for (stream_id, language) in languages.try_iter() {
                     let Some(pipeline) = pipelines
                         .iter_mut()
@@ -974,9 +1040,32 @@ fn spawn_processor(
                     // set at all.
                     pipeline.gain.apply(&mut buffer);
 
+                    // The meter is fed whether or not the channel is muted:
+                    // mute stops the transcription, not the listening, and a
+                    // bar that still moves beside a lit M is how an operator
+                    // sees that the channel is alive and deliberately not
+                    // arriving. A dead bar would read as a dead channel.
                     pipeline.window.extend_from_slice(&buffer);
-                    for segment in pipeline.segmenter.push(&buffer) {
-                        pool.submit(segment, Instant::now());
+
+                    let muted = pipeline.mute.load(Ordering::Relaxed);
+                    if muted != pipeline.was_muted {
+                        pipeline.was_muted = muted;
+                        // Muted mid-sentence: close what is open and decode
+                        // it. Those words were said before the M was pressed
+                        // and belong in the chat; left in the segmenter they
+                        // would arrive whenever the channel comes back, under
+                        // a timestamp from before the interval.
+                        if muted {
+                            if let Some(segment) = pipeline.segmenter.finish() {
+                                pool.submit(segment, Instant::now());
+                            }
+                        }
+                    }
+
+                    if !muted {
+                        for segment in pipeline.segmenter.push(&buffer) {
+                            pool.submit(segment, Instant::now());
+                        }
                     }
                 }
                 if let Some(message) = failed {
@@ -1124,6 +1213,25 @@ fn emit(
             no_speech_probability,
             decode_ms,
         } => {
+            // Before anything judges the text: cut a decoder repetition loop
+            // out of it. A loop is a defect of the decode, not of the speech,
+            // so it is repaired rather than dropped — the words before it are
+            // usually the real thing somebody said.
+            let text = match audio_core::collapse_repetitions(&text) {
+                Cow::Borrowed(_) => text,
+                Cow::Owned(collapsed) => {
+                    tracing::warn!(
+                        stream_id,
+                        seq,
+                        decode_ms,
+                        chars_before = text.chars().count(),
+                        chars_after = collapsed.chars().count(),
+                        "repetition loop collapsed"
+                    );
+                    collapsed
+                }
+            };
+
             // Three ways a segment turns out not to be speech, all logged
             // rather than dropped quietly: the operator has to be able to find
             // out why nothing appeared.
@@ -1490,6 +1598,20 @@ mod tests {
     }
 
     #[test]
+    fn a_repetition_loop_is_collapsed_on_the_way_to_the_chat() {
+        // The decoder cycled; the words it cycled on were real, so the line
+        // belongs in the chat — once.
+        let recorder = aggregate(vec![spoken(
+            0,
+            "Das ist schon jetzt, das ist schon jetzt, das ist schon jetzt, \
+             das ist schon jetzt.",
+        )]);
+        let texts = recorder.transcripts.lock().unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].text, "Das ist schon jetzt.");
+    }
+
+    #[test]
     fn a_clean_run_ends_as_stopped_and_an_exhausted_pool_as_failed() {
         // The UI has to tell "you pressed Stop" from "there is nothing left to
         // transcribe with", and both arrive the same way.
@@ -1613,14 +1735,16 @@ mod tests {
                     stream_id: 0,
                     channel: 2,
                     label: "Regie".into(),
-                    muted: false,
+                    absent: false,
+                    muted: true,
                     gain_db: 6,
                 },
                 RunningStream {
                     stream_id: 1,
                     channel: 9,
                     label: "Licht".into(),
-                    muted: true,
+                    absent: true,
+                    muted: false,
                     gain_db: 0,
                 },
             ],
@@ -1637,10 +1761,15 @@ mod tests {
         assert_eq!(running["sampleRate"], 48_000);
         assert_eq!(running["streams"][0]["streamId"], 0);
         assert_eq!(running["streams"][0]["channel"], 2);
-        // A channel the device does not have travels back as muted rather than
-        // as a failure to start, and the UI renders it from this flag.
-        assert_eq!(running["streams"][0]["muted"], false);
-        assert_eq!(running["streams"][1]["muted"], true);
+        // A channel the device does not have travels back as absent rather
+        // than as a failure to start, and the UI renders it from this flag.
+        assert_eq!(running["streams"][0]["absent"], false);
+        assert_eq!(running["streams"][1]["absent"], true);
+        // And mute is the other flag entirely: the operator pressed M on a
+        // channel the device *does* have. Two words because they are two
+        // things — see [`RunningStream::absent`].
+        assert_eq!(running["streams"][0]["muted"], true);
+        assert_eq!(running["streams"][1]["muted"], false);
         // The trim in force, so a knob rendered from this state shows what the
         // pipeline is doing rather than what the caller last asked for.
         assert_eq!(running["streams"][0]["gainDb"], 6);
