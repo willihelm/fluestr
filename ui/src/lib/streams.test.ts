@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyLanguage,
+  clampGain,
+  toConfig,
   mutedChannels,
   newChannel,
   usedLanguages,
@@ -10,6 +12,7 @@ import {
   DEFAULT_LANGUAGE,
   type Channel,
 } from "./streams";
+import { GAIN_DB_MAX, GAIN_DB_MIN } from "./bridge";
 
 const channel = (device: number, label = `Channel ${device + 1}`, language = "de"): Channel => ({
   key: device,
@@ -17,6 +20,7 @@ const channel = (device: number, label = `Channel ${device + 1}`, language = "de
   label,
   language,
   color: "#888888",
+  gainDb: 0,
 });
 
 describe("validate", () => {
@@ -137,5 +141,38 @@ describe("usedLanguages", () => {
 
   it("is empty for a setup with no channels", () => {
     expect(usedLanguages([])).toEqual([]);
+  });
+});
+
+describe("clampGain", () => {
+  it("keeps a trim inside the range the backend accepts", () => {
+    expect(clampGain(6)).toBe(6);
+    expect(clampGain(GAIN_DB_MAX + 30)).toBe(GAIN_DB_MAX);
+    expect(clampGain(GAIN_DB_MIN - 30)).toBe(GAIN_DB_MIN);
+  });
+
+  it("is whole decibels, because that is what the knob and the file hold", () => {
+    expect(clampGain(3.4)).toBe(3);
+    expect(clampGain(-3.6)).toBe(-4);
+  });
+
+  // A number box that has been cleared arrives as NaN, and a trim of NaN is a
+  // channel scaled to silence rather than one left alone.
+  it("reads a value that is not a number as no trim at all", () => {
+    expect(clampGain(Number.NaN)).toBe(0);
+  });
+});
+
+describe("toConfig", () => {
+  it("carries each channel's trim to the backend", () => {
+    const channels = [channel(0, "Regie"), { ...channel(1, "Licht"), gainDb: 9 }];
+
+    expect(toConfig(channels).map((c) => c.gainDb)).toEqual([0, 9]);
+  });
+
+  it("clamps a trim a hand-edited file put out of range", () => {
+    const channels = [{ ...channel(0, "Regie"), gainDb: 400 }];
+
+    expect(toConfig(channels)[0].gainDb).toBe(GAIN_DB_MAX);
   });
 });

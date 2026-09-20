@@ -14,9 +14,10 @@
   // single desk row.
 
   import LevelMeter from "./LevelMeter.svelte";
+  import GainKnob from "./GainKnob.svelte";
   import { watchNarrow } from "./layout";
   import type { Channel } from "./streams";
-  import type { StreamLevel } from "./bridge";
+  import type { StreamLevel, WebhookStatus } from "./bridge";
 
   interface Props {
     /// *Every* configured channel, never a filtered list: the stream id is the
@@ -34,9 +35,29 @@
     /// silent one reads as a channel nobody is talking on — and neither is
     /// what happened.
     muted: Set<number>;
+    /// How the outbound queue is doing (P19), or `null` before the first
+    /// answer has arrived.
+    ///
+    /// Not per stream, unlike everything else in this strip: a rule's webhook
+    /// is the session's and not a channel's. It sits at the end of the strip
+    /// rather than in a panel of its own because a dead endpoint is a health
+    /// problem, and this is where an operator already looks for one — a cue
+    /// that silently stopped arriving is otherwise discovered by the cue not
+    /// happening.
+    webhooks: WebhookStatus | null;
+    /// Sets a channel's input trim, or `null` where this view does not own the
+    /// setup — a detached group window and the browser peer both render this
+    /// strip, and neither writes the configuration file. The knob is left out
+    /// entirely there rather than shown and ignored.
+    ///
+    /// Here rather than only on the Settings page because this is where a trim
+    /// is actually set: against the meter beside it, while the channel is
+    /// being spoken on. The Settings page keeps its own knob for the setup
+    /// being built before anybody is talking.
+    gain?: ((streamId: number, db: number) => void) | null;
   }
 
-  let { channels, levels, overloaded, visible, muted }: Props = $props();
+  let { channels, levels, overloaded, visible, muted, webhooks, gain = null }: Props = $props();
 
   /// Matched here rather than in CSS alone, because the orientation is not
   /// only a matter of styling: `LevelMeter` has to be told which way round it
@@ -59,6 +80,15 @@
     {@const level = levels.get(streamId) ?? empty(streamId)}
     <div class="stream" class:muted={muted.has(streamId)} style="--channel: {channel.color}">
       <span class="name">{channel.label}</span>
+      {#if gain}
+        <!-- Before the bar, so the reading stays the widest thing in the row
+             and the knob sits with the name of what it trims. -->
+        <GainKnob
+          value={channel.gainDb}
+          label={channel.label}
+          onchange={(db) => gain(streamId, db)}
+        />
+      {/if}
       <LevelMeter
         rms={level.rms}
         peak={level.peak}
@@ -75,12 +105,28 @@
     </div>
     {/if}
   {/each}
+
+  {#if webhooks && webhooks.dropped > 0}
+    <div class="stream outbound">
+      <span
+        class="error"
+        title="Webhook requests given up on — the queue was full, or the endpoint did not answer{webhooks.lastError
+          ? `: ${webhooks.lastError}`
+          : ''}"
+      >
+        {webhooks.dropped}<span class="word">&nbsp;webhooks dropped</span>
+      </span>
+    </div>
+  {/if}
 </div>
 
 <style>
   .meters {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    /* Wide enough for a name, a knob and a bar that is still worth reading.
+       Below this the bar is what gives way, and a meter narrower than its own
+       label is not a meter. */
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
     gap: 0.35rem 1rem;
     padding: 0.5rem 1rem;
     border-bottom: 1px solid var(--border);
@@ -108,11 +154,17 @@
     opacity: 0.55;
   }
 
+  /* The one cell that is not a channel. It has no meter, so it is only ever
+     on screen when there is something wrong to say. */
+  .stream.outbound {
+    justify-content: flex-start;
+  }
+
   .name {
     color: var(--channel);
     font-weight: 600;
-    min-width: 5rem;
-    max-width: 8rem;
+    min-width: 4rem;
+    max-width: 7rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -156,7 +208,7 @@
     flex-direction: column-reverse;
     align-items: center;
     gap: 0.25rem;
-    width: 2.6rem;
+    width: 2.8rem;
     /* A minimum rather than a height: a stream with a dropped count carries a
        line the others do not, and the row stretches every column to the
        tallest so the bars still start and end level. */

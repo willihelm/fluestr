@@ -41,8 +41,9 @@ const anOldFile = <T>(written: unknown): T => written as T;
 /// Settings page builds one — with keys, not positions.
 const aProfile = (): Profile => {
   const channels = [
-    restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe" }),
-    restoreChannel({ channel: 3, label: "Licht", language: "en", color: "#5fd38d" }),
+    restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0 }),
+    // Trimmed, so the round trip has a value to lose.
+    restoreChannel({ channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9 }),
   ];
 
   const groups = [restoreGroup("Bühne", [channels[1].key])];
@@ -63,6 +64,7 @@ const aProfile = (): Profile => {
         channels: [],
         views: [],
         actions: ["highlight", "urgentAttention"],
+        webhook: null,
         minIntervalMs: 0,
       }),
       restoreRule({
@@ -72,6 +74,7 @@ const aProfile = (): Profile => {
         channels: [channels[1].key],
         views: [groups[0].key],
         actions: ["flash"],
+        webhook: null,
         minIntervalMs: 1_000,
       }),
     ],
@@ -84,8 +87,8 @@ const stored: StoredProfile = {
   deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
   language: "de",
   channels: [
-    { channel: 0, label: "Regie", language: "de", color: "#6ea8fe" },
-    { channel: 3, label: "Licht", language: "en", color: "#5fd38d" },
+    { channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0 },
+    { channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9 },
   ],
   groups: [{ name: "Bühne", onTop: false, members: [1] }],
   rules: [
@@ -96,6 +99,7 @@ const stored: StoredProfile = {
       channels: [],
       views: [],
       actions: ["highlight", "urgentAttention"],
+      webhook: null,
       minIntervalMs: 0,
     },
     {
@@ -105,6 +109,7 @@ const stored: StoredProfile = {
       channels: [1],
       views: [0],
       actions: ["flash"],
+      webhook: null,
       minIntervalMs: 1_000,
     },
   ],
@@ -678,6 +683,7 @@ describe("adopting a configuration", () => {
         channels: [],
         views: [profile.groups[0].key],
         actions: ["highlight", "urgentAttention"],
+        webhook: null,
         minIntervalMs: 0,
       },
     ];

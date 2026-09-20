@@ -8,6 +8,7 @@
 pub mod backend;
 pub mod capture;
 pub mod device;
+pub mod gain;
 pub mod lang;
 pub mod resample;
 pub mod ring;
@@ -20,6 +21,7 @@ pub mod vad;
 pub use backend::CpalBackend;
 pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSink};
 pub use device::{AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo};
+pub use gain::Gain;
 pub use lang::{LanguageCode, LanguageMode};
 pub use resample::{Resampler, StreamProcessor};
 pub use ring::{RingSink, RingSource, RingStats};

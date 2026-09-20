@@ -38,9 +38,9 @@
 use crate::pool::{Completed, Outcome, PoolConfig, PoolEvent, Reorder, WorkerPool};
 use anyhow::{bail, Context, Result};
 use audio_core::{
-    ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, ChannelAssignment,
-    ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segmenter, SegmenterConfig,
-    SileroVad, StreamId, StreamProcessor, Vad, SAMPLE_RATE,
+    gain::Gain, ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession,
+    ChannelAssignment, ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segmenter,
+    SegmenterConfig, SileroVad, StreamId, StreamProcessor, Vad, SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -103,23 +103,35 @@ pub struct StreamConfig {
     pub label: String,
     /// Primary language, fixed. Auto mode is P3b.
     pub language: String,
+    /// Input trim in whole decibels, applied before anything reads the audio
+    /// — the speech detector, the segmenter and the meters all see the
+    /// scaled signal. See [`audio_core::gain`] for the range and why it is
+    /// decibels.
+    ///
+    /// `default` — zero, unity — so a configuration written before the trim
+    /// existed starts at the level the device delivers, which is exactly what
+    /// it did before.
+    #[serde(default)]
+    pub gain_db: i32,
 }
 
 /// A change to one channel of a session that is already running (P6).
 ///
-/// Two of the four fields of a [`StreamConfig`] can change without the capture
-/// being touched, and they are the two that are wrong during a show: the label
-/// — somebody else took the position over — and the language — the guest
-/// director speaks English. Both were a Stop and a Start until this existed,
-/// and Stop is the one thing an operator will not do while the room is talking.
+/// Three of the five fields of a [`StreamConfig`] can change without the
+/// capture being touched, and they are the three that are wrong during a show:
+/// the label — somebody else took the position over — the language — the guest
+/// director speaks English — and the trim, which is wrong the first time
+/// anybody speaks on a channel nobody spoke on during the sound check. All
+/// three were a Stop and a Start until this existed, and Stop is the one thing
+/// an operator will not do while the room is talking.
 ///
 /// What is *not* here is the device channel. The channel map is fixed when the
 /// device opens: it pairs a ring with a channel inside the capture callback,
 /// and re-patching it live would mean tearing down the capture — which is Stop
 /// and Start with extra steps. A repatch stays a restart, honestly.
 ///
-/// Both fields are optional, so a caller can change one without having to
-/// restate the other. Nothing given is not an error, it is a change of
+/// Every field is optional, so a caller can change one without having to
+/// restate the others. Nothing given is not an error, it is a change of
 /// nothing.
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -137,6 +149,11 @@ pub struct StreamUpdate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub language: Option<String>,
+    /// Input trim in whole decibels. Clamped rather than rejected — see
+    /// [`audio_core::gain::clamp_db`].
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub gain_db: Option<i32>,
 }
 
 /// What the UI sends to start a session.
@@ -306,6 +323,11 @@ pub struct RunningStream {
     /// receives no audio. See [`Session::start`] for why that beats refusing
     /// to start.
     pub muted: bool,
+    /// The trim actually in force, which is the configured one clamped into
+    /// range. Echoed back for the same reason the channel is: this is the
+    /// authority on what the session is doing, and a knob that shows a value
+    /// the pipeline is not using is a knob that lies.
+    pub gain_db: i32,
 }
 
 /// Wall clock now, in milliseconds since the Unix epoch.
@@ -375,7 +397,11 @@ pub trait EventSink: Send + Sync + 'static {
 struct Pipeline {
     processor: StreamProcessor,
     segmenter: Segmenter,
-    /// Audio since the last level event.
+    /// Shared with [`Session::gains`], so the knob reaches the audio without
+    /// this thread having to be told. Read once per pump.
+    gain: Arc<Gain>,
+    /// Audio since the last level event, *after* the trim — the meter beside
+    /// the knob has to show what turning it did.
     window: Vec<f32>,
 }
 
@@ -402,6 +428,13 @@ pub struct Session {
     /// no business being locked on the pump path, and a change is a handful of
     /// bytes a few times an evening.
     languages: mpsc::Sender<(u16, String)>,
+    /// The trim of every live stream, shared with the pipelines that apply it.
+    ///
+    /// Shared state rather than a channel, unlike the language: a knob being
+    /// dragged sends a change per pointer event, and the processing thread
+    /// only needs the value that is current when it next pumps. A muted stream
+    /// is absent — it has no pipeline for a trim to reach.
+    gains: HashMap<u16, Arc<Gain>>,
     /// The running state exactly as it was announced.
     ///
     /// Kept so an update can re-announce it — same session id, same zero point,
@@ -583,6 +616,7 @@ impl Session {
                 channel: stream.channel,
                 label: stream.label.clone(),
                 muted: stream.channel >= info.channels,
+                gain_db: audio_core::gain::clamp_db(stream.gain_db),
             })
             .collect();
 
@@ -608,7 +642,12 @@ impl Session {
         // means a whisper.cpp VAD context per stream, and there is no point
         // paying for eight of them for a device that was going to refuse.
         let mut pipelines = Vec::with_capacity(live.len());
+        let mut gains: HashMap<u16, Arc<Gain>> = HashMap::with_capacity(live.len());
         for (&(stream_id, stream), source) in live.iter().zip(sources) {
+            // One per live stream, held on both sides: the pipeline scales
+            // with it, `update_stream` writes to it.
+            let gain = Arc::new(Gain::new(stream.gain_db));
+            gains.insert(stream_id, gain.clone());
             pipelines.push(Pipeline {
                 processor: StreamProcessor::new(source, granted)?,
                 segmenter: Segmenter::new(
@@ -628,6 +667,7 @@ impl Session {
                         ..Default::default()
                     },
                 ),
+                gain,
                 window: Vec::new(),
             });
         }
@@ -685,6 +725,7 @@ impl Session {
                 sample_rate: granted,
                 labels,
                 languages,
+                gains,
                 running: std::sync::Mutex::new(state.clone()),
                 events,
             },
@@ -692,13 +733,19 @@ impl Session {
         ))
     }
 
-    /// Renames a running stream, or puts it onto another language (P6).
+    /// Renames a running stream, puts it onto another language, or trims its
+    /// input (P6).
     ///
-    /// Both take effect on the next segment: the label where the transcript is
-    /// built, the language where the segmenter hands one to the queue. Neither
-    /// rewrites what is already in the chat — a line was said under the label
-    /// it was said under, and a chat that renamed its own history would be
-    /// lying about a show that has already happened.
+    /// The label and the language take effect on the next segment: the label
+    /// where the transcript is built, the language where the segmenter hands
+    /// one to the queue. Neither rewrites what is already in the chat — a line
+    /// was said under the label it was said under, and a chat that renamed its
+    /// own history would be lying about a show that has already happened.
+    ///
+    /// The trim takes effect on the next pump, which is the next few
+    /// milliseconds of audio: it is set while listening to the meter it
+    /// changes, so anything slower would be a knob that cannot be found by
+    /// ear.
     ///
     /// Answers with the running state as it now stands, and announces it, so
     /// every view — the Settings page that asked, a detached group window, a
@@ -706,8 +753,9 @@ impl Session {
     /// it rather than from its own copy of the setup.
     ///
     /// A muted stream can be updated like any other. It has no pipeline, so
-    /// the language reaches nothing; the label still belongs to it, because a
-    /// muted channel keeps its id, its colour and its place in the groups.
+    /// neither the language nor the trim reaches anything; both are still
+    /// recorded in the state it answers with, because a muted channel is one
+    /// cable away from being live and its setup belongs to it either way.
     ///
     /// Changes no configuration file. The session is what is being edited
     /// here; storing the change is the Settings page's business, on its own
@@ -735,6 +783,17 @@ impl Session {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("the stream labels are poisoned"))?
                 .insert(update.stream_id, label);
+        }
+
+        if let Some(gain_db) = update.gain_db {
+            let gain_db = audio_core::gain::clamp_db(gain_db);
+            // The state carries the clamped value, so a caller that asked for
+            // more than the range allows is answered with what it actually
+            // got rather than with its own request handed back.
+            stream.gain_db = gain_db;
+            if let Some(gain) = self.gains.get(&update.stream_id) {
+                gain.set_db(gain_db);
+            }
         }
 
         if let Some(language) = update.language {
@@ -907,6 +966,13 @@ fn spawn_processor(
                         failed = Some(err.to_string());
                         break;
                     }
+
+                    // Before both of the things that read this buffer: the
+                    // speech detector decides on the trimmed signal — which is
+                    // the point of trimming a channel nobody was being heard
+                    // on — and the meter shows it, which is how the knob is
+                    // set at all.
+                    pipeline.gain.apply(&mut buffer);
 
                     pipeline.window.extend_from_slice(&buffer);
                     for segment in pipeline.segmenter.push(&buffer) {
@@ -1548,12 +1614,14 @@ mod tests {
                     channel: 2,
                     label: "Regie".into(),
                     muted: false,
+                    gain_db: 6,
                 },
                 RunningStream {
                     stream_id: 1,
                     channel: 9,
                     label: "Licht".into(),
                     muted: true,
+                    gain_db: 0,
                 },
             ],
             started_at_ms: 1_758_100_000_000,
@@ -1573,6 +1641,9 @@ mod tests {
         // as a failure to start, and the UI renders it from this flag.
         assert_eq!(running["streams"][0]["muted"], false);
         assert_eq!(running["streams"][1]["muted"], true);
+        // The trim in force, so a knob rendered from this state shows what the
+        // pipeline is doing rather than what the caller last asked for.
+        assert_eq!(running["streams"][0]["gainDb"], 6);
 
         let failed = serde_json::to_value(SessionState::Failed {
             message: "no model".into(),

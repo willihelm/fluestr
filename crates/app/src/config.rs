@@ -70,6 +70,17 @@ pub struct StoredChannel {
     /// CSS colour. Preselected from the palette when the channel is created,
     /// then an explicit user-editable value.
     pub color: String,
+    /// Input trim in whole decibels, as the knob on the meter strip sets it.
+    ///
+    /// Stored with the channel and not with the device: it compensates for how
+    /// hot *this* intercom position is patched, which is a property of the
+    /// production's patch list and therefore of the profile. Carried into the
+    /// session as [`crate::session::StreamConfig::gain_db`].
+    ///
+    /// `#[serde(default)]` because a file written before the trim existed has
+    /// no such field, and zero — unity — is exactly what those channels did.
+    #[serde(default)]
+    pub gain_db: i32,
 }
 
 /// A named view onto some of the channels.
@@ -169,6 +180,17 @@ pub struct StoredRule {
     #[serde(default)]
     pub views: Vec<usize>,
     pub actions: Vec<crate::rules::Action>,
+    /// The request [`crate::rules::Action::Webhook`] makes (P19), or `None`
+    /// for a rule that makes none.
+    ///
+    /// Stored with the rule like everything else on it, and — unlike the rest
+    /// of the rule — **written only on the machine**: the rule editor served
+    /// to the LAN remote has no URL box, because an arbitrary destination
+    /// writable from an unauthenticated browser form is a different
+    /// proposition from the read-mostly remote P16 was decided for. See
+    /// `ui/src/lib/RuleEditor.svelte`.
+    #[serde(default)]
+    pub webhook: Option<crate::webhook::Webhook>,
     /// At most one firing per this many milliseconds. Zero — the default — is
     /// unthrottled.
     ///
@@ -512,6 +534,7 @@ impl Config {
                     channels: Vec::new(),
                     views: Vec::new(),
                     actions: vec![rules::Action::Highlight, rules::Action::UrgentAttention],
+                    webhook: None,
                     min_interval_ms: 0,
                 });
             }
@@ -531,6 +554,7 @@ impl Config {
                     channels: group.members.clone(),
                     views: vec![position],
                     actions: vec![rules::Action::Flash],
+                    webhook: None,
                     min_interval_ms: 0,
                 });
             }
@@ -545,6 +569,7 @@ impl Config {
                     channels: Vec::new(),
                     views: Vec::new(),
                     actions: vec![rules::Action::Flash],
+                    webhook: None,
                     min_interval_ms: 0,
                 });
             }
@@ -718,6 +743,7 @@ mod tests {
                         label: "Regie".into(),
                         language: "de".into(),
                         color: "#6ea8fe".into(),
+                        gain_db: 0,
                     }],
                     groups: vec![],
                     all_channels_flash: false,
@@ -734,12 +760,17 @@ mod tests {
                             label: "Regie".into(),
                             language: "de".into(),
                             color: "#6ea8fe".into(),
+                            gain_db: 0,
                         },
                         StoredChannel {
                             channel: 3,
                             label: "Licht".into(),
                             language: "en".into(),
                             color: "#5fd38d".into(),
+                            // The trim this profile needs on the follow-spot's
+                            // matrix output — and the field a file written
+                            // before it existed does not have at all.
+                            gain_db: 9,
                         },
                     ],
                     groups: vec![StoredGroup {
@@ -757,6 +788,7 @@ mod tests {
                             channels: vec![],
                             views: vec![],
                             actions: vec![rules::Action::Highlight, rules::Action::UrgentAttention],
+                            webhook: None,
                             min_interval_ms: 0,
                         },
                         StoredRule {
@@ -766,6 +798,7 @@ mod tests {
                             channels: vec![1],
                             views: vec![0],
                             actions: vec![rules::Action::Flash],
+                            webhook: None,
                             min_interval_ms: 1_000,
                         },
                     ],
@@ -949,6 +982,7 @@ mod tests {
             channels: vec![9],
             views: vec![],
             actions: vec![rules::Action::Flash],
+            webhook: None,
             min_interval_ms: 0,
         });
         save(&path, &config).expect("saving");
@@ -1105,7 +1139,7 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
-            ["channel", "color", "label", "language"]
+            ["channel", "color", "gainDb", "label", "language"]
         );
         // The second profile, because it is the one with groups in it.
         assert_eq!(
@@ -1121,6 +1155,7 @@ mod tests {
                 "minIntervalMs",
                 "name",
                 "views",
+                "webhook",
                 "words"
             ]
         );

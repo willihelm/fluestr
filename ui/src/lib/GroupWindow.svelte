@@ -43,13 +43,16 @@
     onOverload,
     onSessionState,
     onTranscript,
+    onWebhookStatus,
     requestAttention,
     requestGroupOnTop,
     sessionSnapshot,
+    webhookStatus,
     type SessionState,
     type StoredConfig,
     type StreamLevel,
     type TranscriptEvent,
+    type WebhookStatus,
   } from "./bridge";
 
   interface Props {
@@ -103,6 +106,11 @@
   let sessionStarts = $state(new Map<number, number>());
   let levels = $state(new Map<number, StreamLevel>());
   let overloaded = $state(new Map<number, number>());
+  // The outbound queue's health (P19). Session-wide rather than this view's —
+  // a webhook is not a window's — but shown here for the same reason it is
+  // shown in the main window: a detached window may be the only one an
+  // operator is looking at, and a dead endpoint has to be visible from it.
+  let webhooks = $state<WebhookStatus | null>(null);
   let status = $state<SessionState | { state: "idle" }>({ state: "idle" });
 
   let running = $derived(status.state === "running");
@@ -200,6 +208,9 @@
       onOverload((event) => {
         overloaded = new Map(overloaded).set(event.streamId, event.dropped);
       }),
+      onWebhookStatus((next) => {
+        webhooks = next;
+      }),
       onSessionState((event) => {
         status = event;
         if (event.state === "running") {
@@ -236,6 +247,9 @@
         ...sessionStarts,
       ]);
       if (status.state === "idle" && snapshot.state) status = snapshot.state;
+      // Cumulative, like the chat and unlike the meters: a window opened after
+      // a cue failed has to see that it did.
+      webhooks = await webhookStatus();
     };
 
     first().catch((e) => (failure = String(e)));
@@ -354,7 +368,7 @@
     </p>
   {:else}
     {#if running}
-      <StreamMeters {channels} {levels} {overloaded} {visible} {muted} />
+      <StreamMeters {channels} {levels} {overloaded} {visible} {muted} {webhooks} />
     {/if}
     <ChatList
       messages={shown}

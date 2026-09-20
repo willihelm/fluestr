@@ -21,14 +21,17 @@ pub mod commands;
 pub mod config;
 pub mod history;
 pub mod models;
+pub mod monitor;
 pub mod pool;
 pub mod remote;
 pub mod resources;
 pub mod rules;
 pub mod session;
+pub mod webhook;
 pub mod worker;
 
 use history::History;
+use monitor::Monitor;
 use remote::Hub;
 use rules::Rules;
 use serde::Serialize;
@@ -67,6 +70,11 @@ pub const EVENT_CONFIG: &str = "config-changed";
 /// caused it: whether the listener actually came up is not something the
 /// configuration knows, and the client count moves on its own afterwards.
 pub const EVENT_REMOTE_STATUS: &str = "remote-status";
+/// How the outbound queue is doing (P19): what has gone out, and what has been
+/// given up on. Sent on every outcome rather than sampled, because the first
+/// drop is the interesting one — a dead endpoint is otherwise the one failure
+/// this app can have that nobody notices until a cue does not happen.
+pub const EVENT_WEBHOOK_STATUS: &str = "webhook-status";
 
 /// What a detached group window's label starts with, followed by the group's
 /// position in the active profile.
@@ -116,6 +124,11 @@ pub(crate) fn broadcast<R: Runtime, S: Serialize + Clone>(
 struct TauriEvents<R: Runtime> {
     app: AppHandle<R>,
     rules: Arc<Mutex<Rules>>,
+    /// Where a rule's outbound action goes (P19). Not an event: it leaves the
+    /// building rather than reaching a view, and it must leave exactly once —
+    /// which is the whole reason the rules are evaluated here and not in each
+    /// window.
+    webhooks: Arc<webhook::Sender>,
     /// What a view opened later is caught up from — see [`history`]. Written
     /// here because this is the one place every view's copy comes from, so it
     /// is also the only place that can record what they were all sent.
@@ -130,10 +143,23 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
         // at all.
         match self.rules.lock() {
             Ok(mut rules) if !rules.is_empty() => {
-                let outcome = rules.evaluate(event.stream_id, &event.text, Instant::now());
+                let outcome = rules.evaluate(
+                    rules::Segment {
+                        stream: event.stream_id,
+                        label: &event.label,
+                        text: &event.text,
+                    },
+                    Instant::now(),
+                );
                 event.alerts = outcome.alerts;
                 event.actions = outcome.actions;
                 event.flash_views = outcome.flash_views;
+                // Queued, never awaited: an unreachable host is the normal
+                // case in a venue with no route out, and a request made here
+                // would stall every transcript for the length of its timeout.
+                for request in outcome.webhooks {
+                    self.webhooks.send(request);
+                }
             }
             Ok(_) => {}
             Err(err) => tracing::error!(error = %err, "the rule list is unreadable"),
@@ -173,6 +199,15 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
 #[derive(Default)]
 pub struct AppState {
     pub(crate) session: Mutex<Option<Session>>,
+    /// The device opened only to be measured, when no session is running
+    /// (P8).
+    ///
+    /// Beside the session rather than inside it because it is what fills the
+    /// gap *around* one: an operator setting a channel's trim before a show
+    /// has no session and needs the meters most. One device is opened by one
+    /// thing at a time — [`start_session`] stops this first, and the UI starts
+    /// it again once the session has ended.
+    pub(crate) monitor: Mutex<Option<Monitor>>,
     /// Where the configuration file lives, resolved once at setup.
     ///
     /// Resolved there rather than per command because it depends on the app's
@@ -200,6 +235,13 @@ pub struct AppState {
     /// Behind a `Mutex` rather than an `RwLock` because evaluating one is a
     /// write: a rate-limited rule remembers when it last fired.
     pub(crate) rules: Arc<Mutex<Rules>>,
+    /// The outbound queue a rule's webhook action goes onto (P19).
+    ///
+    /// Shared with every session's event sink through the `Arc`, like the
+    /// rules themselves, and for the same reason: it outlives any one session,
+    /// and its counters are what makes a dead endpoint visible across all of
+    /// them. Drained by one task started in [`run`].
+    pub(crate) webhooks: Arc<webhook::Sender>,
     /// The transcripts already emitted, and the session state around them.
     ///
     /// Shared with every session's event sink through the `Arc`, like the
@@ -439,6 +481,24 @@ fn close_group_windows<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 ///
 /// Lives here rather than in [`commands`] because it is the one command that
 /// builds the event sink, which is this module's own type.
+/// The sink both the session and the monitor report through.
+///
+/// One builder rather than one per caller: every view is caught up from the
+/// history this writes and from the rules it evaluates, and a second sink
+/// assembled somewhere else is how one of those quietly stops happening for
+/// half the events.
+pub(crate) fn events<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<dyn EventSink>, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "the application state is not ready".to_string())?;
+    Ok(Arc::new(TauriEvents {
+        app: app.clone(),
+        rules: Arc::clone(&state.rules),
+        webhooks: Arc::clone(&state.webhooks),
+        history: Arc::clone(&state.history),
+    }))
+}
+
 pub(crate) fn start_session<R: Runtime>(
     app: &AppHandle<R>,
     config: SessionConfig,
@@ -466,6 +526,16 @@ pub(crate) fn start_session<R: Runtime>(
         return Err("a session is already running".into());
     }
 
+    // The meters of the Settings page have the device open. It is released
+    // here rather than by the caller: the session is what has to have it, and
+    // a Start that fails because the app itself was holding the interface
+    // would be the app blaming the operator for its own housekeeping.
+    if let Ok(mut monitor) = state.monitor.lock() {
+        if let Some(monitor) = monitor.take() {
+            monitor.stop();
+        }
+    }
+
     // Which model, decided before anything is opened. A session that starts,
     // captures audio and only then discovers it has nothing to transcribe with
     // is the silent malfunction P11 exists to remove — and the message has to
@@ -483,11 +553,7 @@ pub(crate) fn start_session<R: Runtime>(
         }
     };
 
-    let events: Arc<dyn EventSink> = Arc::new(TauriEvents {
-        app: app.clone(),
-        rules: Arc::clone(&state.rules),
-        history: Arc::clone(&state.history),
-    });
+    let events = events(app)?;
     match Session::start(config, events.clone(), models, state.workers()) {
         Ok((session, running)) => {
             *slot = Some(session);
@@ -567,6 +633,16 @@ pub fn run() {
                         remote::apply(&handle, &wanted);
                     }
                 }
+            }
+
+            // The one task that drains the outbound queue (P19). Started for
+            // as long as the app is open rather than per session, like the
+            // resource sampler below: its counters span the sessions of an
+            // evening, and a cue that failed during the last one is still the
+            // thing an operator needs to see.
+            let handle = app.handle().clone();
+            if let Some(state) = handle.try_state::<AppState>() {
+                webhook::Sender::start(std::sync::Arc::clone(&state.webhooks), handle.clone());
             }
 
             // The resource indicator runs for as long as the window does, not

@@ -38,3 +38,15 @@ export const MAX_WORKERS = 8;
  * `remote::DEFAULT_PORT`.
  */
 export const REMOTE_DEFAULT_PORT = 8787;
+
+/**
+ * The quietest an input trim goes, in decibels. Mirrors
+ * `audio_core::gain::MIN_DB`, which clamps again on the way into a session —
+ * the knob is not the only caller.
+ */
+export const GAIN_DB_MIN = -20;
+
+/**
+ * The loudest, in decibels. Mirrors `audio_core::gain::MAX_DB`.
+ */
+export const GAIN_DB_MAX = 20;

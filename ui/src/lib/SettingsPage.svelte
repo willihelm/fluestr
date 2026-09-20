@@ -63,6 +63,7 @@
     type DeviceOption,
     type Language,
     type StoredRemote,
+    type StreamLevel,
   } from "./bridge";
   import { onMount } from "svelte";
   import { watchNarrow } from "./layout";
@@ -93,10 +94,26 @@
     /// strip and not `saveError`: "Settings not saved" would be wrong twice
     /// over — the file was written, and what failed was the live session.
     liveError: string | null;
-    /// Pushes a channel's label or language into the running session (P6), or
-    /// `null` when none is running. Handed down to the channel list, which is
-    /// where those two fields are. See `StreamSetup`.
-    live: ((streamId: number, update: { label?: string; language?: string }) => void) | null;
+    /// Pushes a channel's label, language or input trim into the running
+    /// session (P6), or `null` when none is running. Handed down to the
+    /// channel list, which is where those three fields are. See
+    /// `StreamSetup`.
+    live:
+      | ((
+          streamId: number,
+          update: { label?: string; language?: string; gainDb?: number },
+        ) => void)
+      | null;
+    /// The levels to show beside the channels, or `null` when there are none
+    /// — no session, and the input is not being metered either. Handed down to
+    /// the channel list for the same reason `live` is: that is where the trim
+    /// is, and a trim is set against a meter.
+    levels?: Map<number, StreamLevel> | null;
+    /// Why the input could not be metered while no session runs (P8), or
+    /// `null`. Its own line rather than `liveError`: nothing was refused and
+    /// no session was touched — the bars are simply not going to move, and an
+    /// operator waiting for them has to be told why.
+    meterError?: string | null;
     /// Why the session would refuse to start, or `null` — the same string the
     /// status bar shows. Every one of them is about the device or the channel
     /// map, which is what marks the Audio section rather than the page.
@@ -116,6 +133,8 @@
     saveError,
     liveError,
     live,
+    levels = null,
+    meterError = null,
     problem,
   }: Props = $props();
 
@@ -386,7 +405,12 @@
             {deviceChannels}
             {locked}
             {live}
+            {levels}
           />
+
+          {#if meterError}
+            <p class="failed">The input could not be metered: {meterError}</p>
+          {/if}
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>

@@ -70,7 +70,14 @@ export type RunningStream = { streamId: number, channel: number, label: string,
  * receives no audio. See [`Session::start`] for why that beats refusing
  * to start.
  */
-muted: boolean, };
+muted: boolean, 
+/**
+ * The trim actually in force, which is the configured one clamped into
+ * range. Echoed back for the same reason the channel is: this is the
+ * authority on what the session is doing, and a knob that shows a value
+ * the pipeline is not using is a knob that lies.
+ */
+gainDb: number, };
 
 /**
  * What the UI sends to start a session.
@@ -179,7 +186,18 @@ label: string,
 /**
  * Primary language, fixed. Auto mode is P3b.
  */
-language: string, };
+language: string, 
+/**
+ * Input trim in whole decibels, applied before anything reads the audio
+ * — the speech detector, the segmenter and the meters all see the
+ * scaled signal. See [`audio_core::gain`] for the range and why it is
+ * decibels.
+ *
+ * `default` — zero, unity — so a configuration written before the trim
+ * existed starts at the level the device delivers, which is exactly what
+ * it did before.
+ */
+gainDb: number, };
 
 /**
  * Level and health of one stream.
@@ -194,19 +212,21 @@ dropped: number, };
 /**
  * A change to one channel of a session that is already running (P6).
  *
- * Two of the four fields of a [`StreamConfig`] can change without the capture
- * being touched, and they are the two that are wrong during a show: the label
- * — somebody else took the position over — and the language — the guest
- * director speaks English. Both were a Stop and a Start until this existed,
- * and Stop is the one thing an operator will not do while the room is talking.
+ * Three of the five fields of a [`StreamConfig`] can change without the
+ * capture being touched, and they are the three that are wrong during a show:
+ * the label — somebody else took the position over — the language — the guest
+ * director speaks English — and the trim, which is wrong the first time
+ * anybody speaks on a channel nobody spoke on during the sound check. All
+ * three were a Stop and a Start until this existed, and Stop is the one thing
+ * an operator will not do while the room is talking.
  *
  * What is *not* here is the device channel. The channel map is fixed when the
  * device opens: it pairs a ring with a channel inside the capture callback,
  * and re-patching it live would mean tearing down the capture — which is Stop
  * and Start with extra steps. A repatch stays a restart, honestly.
  *
- * Both fields are optional, so a caller can change one without having to
- * restate the other. Nothing given is not an error, it is a change of
+ * Every field is optional, so a caller can change one without having to
+ * restate the others. Nothing given is not an error, it is a change of
  * nothing.
  */
 export type StreamUpdate = { 
@@ -214,7 +234,12 @@ export type StreamUpdate = {
  * Which stream — the id the backend assigned at start and every event
  * carries, not the position in whatever list the caller is looking at.
  */
-streamId: number, label?: string | null, language?: string | null, };
+streamId: number, label?: string | null, language?: string | null, 
+/**
+ * Input trim in whole decibels. Clamped rather than rejected — see
+ * [`audio_core::gain::clamp_db`].
+ */
+gainDb?: number | null, };
 
 /**
  * A finished transcript on its way to the chat view.

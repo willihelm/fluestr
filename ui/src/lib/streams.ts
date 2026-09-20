@@ -8,7 +8,7 @@
 // carries, and it only means anything while a session runs.
 
 import { paletteColor } from "./palette";
-import type { StreamConfig } from "./bridge";
+import { GAIN_DB_MAX, GAIN_DB_MIN, type StreamConfig } from "./bridge";
 
 export interface Channel {
   key: number;
@@ -17,7 +17,22 @@ export interface Channel {
   label: string;
   language: string;
   color: string;
+  /// Input trim in whole decibels, applied by the backend before anything
+  /// reads the audio. A desk does not hand out eight channels at one level,
+  /// and whisper gives up on the quiet one long before a human would.
+  gainDb: number;
 }
+
+/// A trim the backend will accept unchanged.
+///
+/// The range is the backend's, imported rather than restated. Applied here as
+/// well as there for the reason every other bound in this frontend is: so the
+/// knob stops where the pipeline stops, instead of showing a value that is
+/// silently something else once it arrives.
+export const clampGain = (db: number): number => {
+  if (!Number.isFinite(db)) return 0;
+  return Math.min(GAIN_DB_MAX, Math.max(GAIN_DB_MIN, Math.round(db)));
+};
 
 /// The language a setup starts on when nothing has chosen one — a new profile,
 /// or one read from a file written before profiles had a default.
@@ -56,6 +71,9 @@ export const newChannel = (
     label: `Channel ${channel + 1}`,
     language,
     color: paletteColor(existing.length),
+    // Unity: a new channel is whatever the interface delivers until somebody
+    // has heard it and decided otherwise.
+    gainDb: 0,
   };
 };
 
@@ -70,6 +88,10 @@ export const newChannel = (
 export const restoreChannel = (stored: Omit<Channel, "key">): Channel => ({
   ...stored,
   key: nextKey++,
+  // A hand-edited file may hold a trim the backend would clamp anyway. Doing
+  // it on the way in means the knob shows the value that is actually in force
+  // rather than the one the file claims.
+  gainDb: clampGain(stored.gainDb),
 });
 
 /// Every channel put onto one language.
@@ -97,6 +119,7 @@ export const toConfig = (channels: Channel[]): StreamConfig[] =>
     channel: c.channel,
     label: c.label.trim() === "" ? `Channel ${c.channel + 1}` : c.label.trim(),
     language: c.language.trim().toLowerCase(),
+    gainDb: clampGain(c.gainDb),
   }));
 
 /// Why the setup cannot be started, or `null` if it can.

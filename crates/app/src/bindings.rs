@@ -15,8 +15,8 @@
 
 /// The generated constants, as TypeScript.
 ///
-/// Hand-formatted rather than derived from anything: there are five of them,
-/// each needs a sentence the Rust doc comment does not say the same way, and a
+/// Hand-formatted rather than derived from anything: there is a handful of
+/// them, each needs a sentence the Rust doc comment does not say the same way, and a
 /// macro to save fifteen lines would be harder to read than the lines.
 fn constants() -> String {
     format!(
@@ -60,12 +60,26 @@ export const MAX_WORKERS = {max_workers};
  * `remote::DEFAULT_PORT`.
  */
 export const REMOTE_DEFAULT_PORT = {remote_port};
+
+/**
+ * The quietest an input trim goes, in decibels. Mirrors
+ * `audio_core::gain::MIN_DB`, which clamps again on the way into a session —
+ * the knob is not the only caller.
+ */
+export const GAIN_DB_MIN = {gain_min};
+
+/**
+ * The loudest, in decibels. Mirrors `audio_core::gain::MAX_DB`.
+ */
+export const GAIN_DB_MAX = {gain_max};
 "#,
         version = crate::config::VERSION,
         custom = crate::models::CUSTOM,
         default_workers = crate::pool::DEFAULT_WORKERS,
         max_workers = crate::pool::MAX_WORKERS,
         remote_port = crate::remote::DEFAULT_PORT,
+        gain_min = audio_core::gain::MIN_DB,
+        gain_max = audio_core::gain::MAX_DB,
     )
 }
 

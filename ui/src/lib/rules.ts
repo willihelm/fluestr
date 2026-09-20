@@ -34,8 +34,9 @@ import { cleanTerms } from "./alerts";
 import type { Group } from "./groups";
 import type { Channel } from "./streams";
 import type { Action, CompiledRule } from "./generated/rules";
+import type { Header, Method, Webhook } from "./generated/webhook";
 
-export type { Action, CompiledRule };
+export type { Action, CompiledRule, Header, Method, Webhook };
 
 /// Every action, in the order the editor offers them: what the rule does to
 /// the text first, then what it does to the window, loudest last.
@@ -62,7 +63,42 @@ export const ACTIONS: { id: Action; title: string; hint: string }[] = [
     title: "Ask urgently",
     hint: "Keeps asking until the app is looked at. What an alert term did.",
   },
+  {
+    id: "webhook",
+    title: "Call a webhook",
+    hint:
+      "One HTTP request, once per matching bubble, from this machine. " +
+      "Set up on the machine — a browser on the network cannot write a destination.",
+  },
 ];
+
+/// The methods offered, in the order a cue endpoint uses them.
+export const METHODS: Method[] = ["post", "get", "put", "patch", "delete"];
+
+/// What a `{{…}}` in a URL, a header value or a body may name, for the hint
+/// under the body box. The same five the highlight already works over, which
+/// is what keeps "what can I put in here" a question with one answer.
+export const PLACEHOLDERS: { name: string; means: string }[] = [
+  { name: "{{text}}", means: "what was said" },
+  { name: "{{channel}}", means: "the channel it was said on" },
+  { name: "{{rule}}", means: "this rule's name" },
+  { name: "{{matched}}", means: "the words that matched" },
+  { name: "{{timestamp}}", means: "when it fired, ISO 8601 in UTC" },
+];
+
+/// What a webhook action starts as.
+///
+/// **The body starts empty**, which is to say with the transcript *out* of it:
+/// `{{text}}` is the exposure, a rule name and a channel are usually all a
+/// trigger needs to say, and putting what was said into an outbound request
+/// has to be a thing the operator does on purpose. The default must not be the
+/// one that quietly ships a production's crew talk off the premises.
+export const newWebhook = (): Webhook => ({
+  url: "",
+  method: "post",
+  headers: [],
+  body: "",
+});
 
 export interface Rule {
   /// Stable for the lifetime of the window, like a channel's or a group's: it
@@ -89,6 +125,17 @@ export interface Rule {
   /// could be addressed at all.
   views: number[];
   actions: Action[];
+  /// **What the `webhook` action calls**, or `null` for a rule that calls
+  /// nothing. Beside the actions rather than inside them, like `views`: it
+  /// qualifies exactly one of them.
+  ///
+  /// Written on the machine only. The editor served over the LAN offers no URL
+  /// box (P16, P19) — an arbitrary destination writable from an
+  /// unauthenticated browser form is a different proposition from the
+  /// read-mostly remote that decision was made for. A remote may still see
+  /// that a rule calls out, switch it off and edit its trigger; the request
+  /// itself round-trips untouched.
+  webhook: Webhook | null;
   /// At most one firing per this many milliseconds; zero is unthrottled.
   minIntervalMs: number;
 }
@@ -108,6 +155,7 @@ export const newRule = (existing: Rule[]): Rule => ({
   // that does not: a new rule with no trigger yet must not start by flooding
   // the window on every message said.
   actions: ["highlight"],
+  webhook: null,
   minIntervalMs: 0,
 });
 
@@ -121,6 +169,7 @@ export const restoreRule = (stored: {
   channels: number[];
   views: number[];
   actions: Action[];
+  webhook: Webhook | null;
   minIntervalMs: number;
 }): Rule => ({ key: nextKey++, ...stored });
 
@@ -178,7 +227,8 @@ export const forget = (rules: Rule[], channels: Channel[], groups: Group[]): Rul
 ///     mark, and a rule that claimed to highlight and never did would look
 ///     like a broken matcher rather than a rule missing its words. *Flash* is
 ///     dropped on the same terms from a rule addressed only to windows that
-///     are gone — for the reason an empty stream list is never sent.
+///     are gone, and *webhook* from a rule with no destination typed yet —
+///     for the reason an empty stream list is never sent.
 export const compile = (rules: Rule[], channels: Channel[], groups: Group[]): CompiledRule[] => {
   // The stream id is the channel's position in the profile, exactly as the
   // backend assigns it — see `SessionConfig::streams`.
@@ -210,8 +260,14 @@ export const compile = (rules: Rule[], channels: Channel[], groups: Group[]): Co
     }
 
     const reachable = !isAddressed(rule) || views !== null;
+    // A destination half-typed is not a destination. The box ticked with an
+    // empty URL is a rule being written, exactly as an empty action list is.
+    const webhook = callsOut(rule) ? rule.webhook : null;
     const actions = rule.actions.filter(
-      (a) => (a !== "highlight" || words.length > 0) && (a !== "flash" || reachable),
+      (a) =>
+        (a !== "highlight" || words.length > 0) &&
+        (a !== "flash" || reachable) &&
+        (a !== "webhook" || webhook !== null),
     );
     if (actions.length === 0) continue;
 
@@ -232,6 +288,7 @@ export const compile = (rules: Rule[], channels: Channel[], groups: Group[]): Co
       streams,
       views: actions.includes("flash") ? views : null,
       actions,
+      webhook,
       minIntervalMs: Math.max(0, Math.trunc(rule.minIntervalMs) || 0),
     });
   }
@@ -281,6 +338,34 @@ export const triggerOf = (rule: Rule, channels: Channel[]): string => {
 
   const said = words.length === 0 ? "Anything said" : words.join(", ");
   return places.length === 0 ? `${said}, on any channel` : `${said}, on ${places.join(", ")}`;
+};
+
+/// Whether this rule actually calls out: the action is ticked *and* a
+/// destination has been typed. Ticking the box is not yet a webhook.
+export const callsOut = (rule: Rule): boolean =>
+  rule.actions.includes("webhook") && (rule.webhook?.url.trim() ?? "") !== "";
+
+/// Where it calls, in a sentence — or `null` when it does not call out, and
+/// the question does not arise.
+///
+/// The host of the URL rather than the whole of it: what an operator wants off
+/// the collapsed card is *which box this reaches*, and a Companion press URL
+/// with a page, a row and a column in it is longer than the rest of the card.
+/// A URL with no host — one still missing its `http://`, or too malformed to
+/// parse at all — is shown as it was typed, because that is the state it needs
+/// to be seen in.
+export const destinationOf = (rule: Rule): string | null => {
+  if (!callsOut(rule)) return null;
+  const hook = rule.webhook!;
+  const url = hook.url.trim();
+  const method = hook.method.toUpperCase();
+  let host = "";
+  try {
+    host = new URL(url).host;
+  } catch {
+    host = "";
+  }
+  return `Calls ${method} ${host || url}`;
 };
 
 /// Which windows the flash reaches, in a sentence — or `null` when the rule

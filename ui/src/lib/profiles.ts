@@ -19,7 +19,7 @@
 // re-pointing every group below it; the position is what still means something
 // after a restart, when every key is a number this window has never issued.
 
-import { newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
+import { clampGain, newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
 import { restoreGroup, type Group } from "./groups";
 import { restoreRule, type Rule } from "./rules";
 import { DEFAULT_DIRECTION, type SortDirection } from "./sort";
@@ -143,6 +143,7 @@ export const toStored = (profile: Profile): StoredProfile => {
       label: c.label,
       language: c.language,
       color: c.color,
+      gainDb: clampGain(c.gainDb),
     })),
     groups: profile.groups.map((g) => ({
       name: g.name,
@@ -172,6 +173,12 @@ export const toStored = (profile: Profile): StoredProfile => {
         return index === undefined ? [] : [index];
       }),
       actions: rule.actions,
+      // What the `webhook` action calls, stored with the rule and untouched
+      // here: it holds no keys and no positions, so there is nothing to
+      // translate. A rule edited on the LAN remote carries its destination
+      // back out exactly as it came in — the remote has no box to change it
+      // with (P19).
+      webhook: rule.webhook,
       minIntervalMs: rule.minIntervalMs,
     })),
   };
@@ -224,6 +231,7 @@ export const fromStored = (stored: StoredProfile): Profile => {
           .filter((p) => p >= 0 && p < groups.length)
           .map((p) => groups[p].key),
         actions: rule.actions ?? [],
+        webhook: rule.webhook ?? null,
         minIntervalMs: rule.minIntervalMs ?? 0,
       }),
     ),

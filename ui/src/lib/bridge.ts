@@ -60,6 +60,7 @@ import type {
   ModelsView,
 } from "./generated/models";
 import type { Interface, RemoteStatus } from "./generated/remote";
+import type { WebhookStatus } from "./generated/webhook";
 import type { Action, CompiledRule } from "./generated/rules";
 import type { ResourceUsage } from "./generated/resources";
 
@@ -110,6 +111,8 @@ export {
   CONFIG_VERSION,
   CUSTOM_MODEL,
   DEFAULT_WORKERS,
+  GAIN_DB_MAX,
+  GAIN_DB_MIN,
   MAX_WORKERS,
   REMOTE_DEFAULT_PORT,
 } from "./generated/constants";
@@ -296,6 +299,24 @@ export const stopSession = () => call<void>("stop_session");
 export const updateStreamConfig = (update: StreamUpdate) =>
   call<SessionState>("update_stream_config", { update });
 
+/// Opens the input device just to meter it, while no session is running (P8).
+///
+/// Takes the same channel list Start would: the meters are keyed on the
+/// stream id, which is the position in that list, and a second shape of it
+/// would be a second thing that can disagree about which channel is which.
+///
+/// Idempotent — asked for what is already being metered, it does nothing — so
+/// the Settings page can ask on every edit without the bars stuttering.
+/// Refused while a session runs, because a session's own meters are these
+/// meters.
+export const startMonitor = (config: SessionConfig) =>
+  call<void>("start_monitor", { config });
+export const stopMonitor = () => call<void>("stop_monitor");
+/// Trims a metered channel, as the knob is turned before a show. Does nothing
+/// when nothing is being metered — the profile is where the value is kept.
+export const setMonitorGain = (streamId: number, gainDb: number) =>
+  call<void>("set_monitor_gain", { streamId, gainDb });
+
 export const onTranscript = (fn: (e: TranscriptEvent) => void): Promise<UnlistenFn> =>
   on<TranscriptEvent>("transcript", (payload) => fn(payload));
 
@@ -340,6 +361,25 @@ export const remoteStatus = () => call<RemoteStatus>("remote_status");
 /// The listener came up, went down, or gained or lost a browser.
 export const onRemoteStatus = (fn: (status: RemoteStatus) => void): Promise<UnlistenFn> =>
   on<RemoteStatus>("remote-status", (payload) => fn(payload));
+
+// --- The outbound action's health (P8, P19) -------------------------------
+
+/// How the outbound queue is doing: what has gone out, and what has been given
+/// up on. Asked for once as a view opens, the way the chat snapshot is — the
+/// counters are cumulative, and a window opened after a cue failed has to see
+/// that it did.
+export const webhookStatus = () => call<WebhookStatus>("webhook_status");
+
+/// A request went out, or was given up on.
+///
+/// Sent on every outcome rather than sampled once a second, because the first
+/// drop is the interesting one: a dead endpoint silently swallowing every cue
+/// is the one failure this feature can have that nobody notices until the cue
+/// does not happen.
+export const onWebhookStatus = (fn: (status: WebhookStatus) => void): Promise<UnlistenFn> =>
+  on<WebhookStatus>("webhook-status", (payload) => fn(payload));
+
+export type { WebhookStatus };
 
 export { isRemote } from "./transport";
 export { onConnection, connectionState, onReconnected, type Connection } from "./transport";

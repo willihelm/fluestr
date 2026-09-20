@@ -22,6 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::config::Config;
@@ -99,15 +100,37 @@ pub enum Command {
         config: SessionConfig,
     },
     StopSession,
-    /// Renames a running channel, or puts it onto another language, without
-    /// stopping capture (P6).
+    /// Renames a running channel, puts it onto another language, or trims its
+    /// input, without stopping capture (P6).
     UpdateStreamConfig {
         update: StreamUpdate,
+    },
+    /// Opens the device just to meter it, while no session is running (P8).
+    ///
+    /// Idempotent: asked for what is already being metered, it does nothing,
+    /// which is what lets the Settings page ask on every edit without the
+    /// bars stuttering.
+    StartMonitor {
+        config: SessionConfig,
+    },
+    StopMonitor,
+    /// Trims one metered channel, as the knob is turned before a show.
+    ///
+    /// Separate from `update_stream_config` because it answers a different
+    /// question — that one changes a *session*, and its answer is the session
+    /// state, of which there is none here.
+    SetMonitorGain {
+        stream_id: u16,
+        gain_db: i32,
     },
     /// The addresses the LAN remote could be served on (P16).
     ListInterfaces,
     /// Whether it is being served, and to how many browsers.
     RemoteStatus,
+    /// How the outbound queue is doing (P19). Asked for once by every view as
+    /// it opens, the way the chat snapshot is: the counters are cumulative and
+    /// a window opened after a cue failed has to see that it did.
+    WebhookStatus,
 }
 
 /// Runs one command and answers with its result as JSON.
@@ -145,8 +168,23 @@ pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) -> Resul
         }
         Command::StopSession => json(stop_session(app)?),
         Command::UpdateStreamConfig { update } => json(update_stream_config(app, update)?),
+        // On a blocking thread, like Start: opening an audio device is a
+        // driver call that can take a moment, and the async runtime is also
+        // what serves the LAN remote.
+        Command::StartMonitor { config } => {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || start_monitor(&app, config))
+                .await
+                .map_err(|err| format!("the meters could not be started: {err}"))??;
+            json(())
+        }
+        Command::StopMonitor => json(stop_monitor(app)?),
+        Command::SetMonitorGain { stream_id, gain_db } => {
+            json(set_monitor_gain(app, stream_id, gain_db)?)
+        }
         Command::ListInterfaces => json(remote::interfaces()),
         Command::RemoteStatus => json(remote_status(app)?),
+        Command::WebhookStatus => json(state(app)?.webhooks.status()),
     }
 }
 
@@ -474,6 +512,86 @@ fn stop_session<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
+/// Opens the device for metering, unless it is already open on the same one.
+///
+/// Refused while a session runs, rather than quietly taking the device from
+/// it: the session's meters are the same meters, so there is nothing to gain
+/// and a running show to lose.
+fn start_monitor<R: Runtime>(app: &AppHandle<R>, config: SessionConfig) -> Result<(), String> {
+    let state = state(app)?;
+
+    if state
+        .session
+        .lock()
+        .map_err(|_| "session state poisoned")?
+        .as_ref()
+        .is_some_and(|session| !session.is_finished())
+    {
+        return Err("a session is running; its meters are already live".into());
+    }
+
+    let mut slot = state.monitor.lock().map_err(|_| "monitor state poisoned")?;
+
+    if slot.as_ref().is_some_and(|monitor| monitor.covers(&config)) {
+        return Ok(());
+    }
+
+    // Closed before the next is opened: some interfaces hand out one input
+    // stream at a time, and an app that asks for a second while holding the
+    // first is an app that cannot change its own channel map.
+    if let Some(previous) = slot.take() {
+        previous.stop();
+    }
+
+    let events: Arc<dyn session::EventSink> = crate::events(app)?;
+    match crate::monitor::Monitor::start(&config, events) {
+        Ok(monitor) => {
+            *slot = Some(monitor);
+            Ok(())
+        }
+        Err(err) => {
+            // Logged with its chain of causes, and reported flat — but not as
+            // a failed session, because none was started. The Settings page
+            // shows it beside the meters it asked for.
+            tracing::warn!(error = ?err, "the input could not be metered");
+            Err(err.to_string())
+        }
+    }
+}
+
+fn stop_monitor<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let monitor = state(app)?
+        .monitor
+        .lock()
+        .map_err(|_| "monitor state poisoned")?
+        .take();
+    if let Some(monitor) = monitor {
+        monitor.stop();
+    }
+    Ok(())
+}
+
+/// Trims a metered channel. Silently does nothing when nothing is being
+/// metered: the knob's real record is the stored configuration, which the
+/// Settings page has already written, and a knob that throws because the
+/// device happens to be closed would be a knob that cannot be turned while
+/// the interface is unplugged.
+fn set_monitor_gain<R: Runtime>(
+    app: &AppHandle<R>,
+    stream_id: u16,
+    gain_db: i32,
+) -> Result<(), String> {
+    if let Some(monitor) = state(app)?
+        .monitor
+        .lock()
+        .map_err(|_| "monitor state poisoned")?
+        .as_ref()
+    {
+        monitor.set_gain(stream_id, audio_core::gain::clamp_db(gain_db));
+    }
+    Ok(())
+}
+
 /// Changes one channel of the session that is running.
 ///
 /// A command rather than a restart, because the two things it can change —
@@ -574,7 +692,7 @@ mod tests {
         }
     }
 
-    /// The half of an update that is not being changed may be left out (P6).
+    /// The part of an update that is not being changed may be left out (P6).
     ///
     /// Both transports send this, and the browser one sends hand-written JSON
     /// over a socket: a shape that insisted on `"language": null` to rename a
@@ -591,9 +709,67 @@ mod tests {
                 assert_eq!(update.stream_id, 2);
                 assert_eq!(update.label.as_deref(), Some("Inspizienz"));
                 assert_eq!(update.language, None, "nothing said is nothing changed");
+                assert_eq!(update.gain_db, None);
             }
             other => panic!("read as {other:?}"),
         }
+    }
+
+    /// The trim travels the same way, and on its own: the knob is dragged
+    /// while a show runs, and every pointer event would otherwise restate a
+    /// label and a language it is not touching.
+    #[test]
+    fn an_update_may_carry_only_a_trim() {
+        let call: Command = serde_json::from_str(
+            r#"{"command":"update_stream_config","args":{"update":{"streamId":2,"gainDb":-6}}}"#,
+        )
+        .expect("an update carrying only a trim");
+
+        match call {
+            Command::UpdateStreamConfig { update } => {
+                assert_eq!(update.gain_db, Some(-6));
+                assert_eq!(update.label, None);
+            }
+            other => panic!("read as {other:?}"),
+        }
+    }
+
+    /// The metering calls, in the shape the browser peer writes by hand.
+    ///
+    /// `start_monitor` deliberately takes the same argument as `start_session`
+    /// — one channel list, one meaning of "stream 2" — and the trim call is
+    /// two flat fields rather than the session's nested update, because there
+    /// is no session here to update.
+    #[test]
+    fn the_metering_calls_read_as_they_are_written() {
+        let start: Command = serde_json::from_str(
+            r#"{"command":"start_monitor","args":{"config":{"deviceId":"uid:1","streams":[{"channel":2,"label":"Regie","language":"de","gainDb":6}]}}}"#,
+        )
+        .expect("a start_monitor call");
+
+        match start {
+            Command::StartMonitor { config } => {
+                assert_eq!(config.device_id, "uid:1");
+                assert_eq!(config.streams[0].channel, 2);
+                assert_eq!(config.streams[0].gain_db, 6);
+            }
+            other => panic!("read as {other:?}"),
+        }
+
+        let gain: Command = serde_json::from_str(
+            r#"{"command":"set_monitor_gain","args":{"streamId":1,"gainDb":-3}}"#,
+        )
+        .expect("a set_monitor_gain call");
+
+        match gain {
+            Command::SetMonitorGain { stream_id, gain_db } => {
+                assert_eq!(stream_id, 1);
+                assert_eq!(gain_db, -3);
+            }
+            other => panic!("read as {other:?}"),
+        }
+
+        assert!(serde_json::from_str::<Command>(r#"{"command":"stop_monitor"}"#).is_ok());
     }
 
     /// A command nobody defined is a rejected call, not a silently ignored

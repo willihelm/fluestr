@@ -1,6 +1,10 @@
 <script lang="ts">
   // The channel setup: one row per intercom channel, with the device channel
-  // it is patched to, its label, its language and its colour. Vocabulary is
+  // it is patched to, its label, its language, its input trim, its level while
+  // a session runs, and its colour. The meter is here and not only on the
+  // strip above the chat because the trim is here: a knob is set against a
+  // bar, and one on the page that is not on screen is no help at all.
+  // Vocabulary is
   // not here — it is one global list for every channel, edited beside this on
   // the Settings page (P15).
   //
@@ -10,13 +14,15 @@
   // every show.
   //
   // Most of it is locked while a session runs, because the channel map is
-  // fixed when capture opens. Two fields are not: the label and the language
-  // go into the running session through `update_stream_config` (P6). They are
-  // the two that turn out to be wrong in the middle of a show — somebody else
-  // took the position over, the guest director speaks English — and the two
-  // that need no restart. The device channel and the colour stay locked: the
-  // first is the channel map, the second would repaint a chat whose old lines
-  // were read under the colour they were said in.
+  // fixed when capture opens. Three fields are not: the label, the language
+  // and the input trim go into the running session through
+  // `update_stream_config` (P6). They are the three that turn out to be wrong
+  // in the middle of a show — somebody else took the position over, the guest
+  // director speaks English, nobody had spoken on that channel during the
+  // sound check — and the three that need no restart. The device channel and
+  // the colour stay locked: the first is the channel map, the second would
+  // repaint a chat whose old lines were read under the colour they were said
+  // in.
 
   import {
     newChannel,
@@ -27,7 +33,9 @@
     type Channel,
   } from "./streams";
   import LanguagePicker from "./LanguagePicker.svelte";
-  import type { Language } from "./bridge";
+  import GainKnob from "./GainKnob.svelte";
+  import LevelMeter from "./LevelMeter.svelte";
+  import type { Language, StreamLevel } from "./bridge";
 
   interface Props {
     channels: Channel[];
@@ -40,15 +48,28 @@
     /// after it failed. Fetched once by the page above and handed down.
     languages: Language[] | null;
     locked: boolean;
-    /// Pushes a label or a language into the session that is already running,
-    /// or `null` when none is. Its presence is also what unlocks those two
-    /// fields: there is nothing live to change without it.
+    /// Every running stream's level, keyed by stream id — or `null` when no
+    /// session is running and there is nothing to show.
+    ///
+    /// Here as well as on the meter strip, because this is where the trim is
+    /// set before a show: a knob with no bar beside it is set by guesswork,
+    /// and flipping to the chat to read the level of the channel being
+    /// adjusted means the knob is on the page that is not on screen.
+    levels?: Map<number, StreamLevel> | null;
+    /// Pushes a label, a language or a trim into the session that is already
+    /// running, or `null` when none is. Its presence is also what unlocks
+    /// those three fields: there is nothing live to change without it.
     ///
     /// The stream id is the row's position, which is how the backend assigns
     /// it — see `SessionConfig::streams`. Safe here precisely because the rest
     /// of the list is locked: no row can be added, removed or reordered under
     /// a running session, so a position means the same thing on both sides.
-    live: ((streamId: number, update: { label?: string; language?: string }) => void) | null;
+    live:
+      | ((
+          streamId: number,
+          update: { label?: string; language?: string; gainDb?: number },
+        ) => void)
+      | null;
   }
 
   let {
@@ -58,6 +79,7 @@
     languages,
     locked,
     live,
+    levels = null,
   }: Props = $props();
 
   let duplicates = $derived(duplicateChannels(channels));
@@ -112,8 +134,9 @@
 
   <div class="rows">
     <!-- The field names once, over the columns, rather than over every row.
-         Eight channels meant eight copies of "Ch  Label  Lang  Colour", which
-         is four times as much text as the setup itself and hid the one thing
+         Eight channels meant eight copies of "Ch  Label  Lang  Gain  Colour",
+         which is four times as much text as the setup itself and hid the one
+         thing
          the section is scanned for: which label sits on which channel. The
          inputs keep the names as `aria-label`, so nothing is lost to a screen
          reader. -->
@@ -123,6 +146,8 @@
         <span>Ch</span>
         <span>Label</span>
         <span>Lang</span>
+        <span>Gain</span>
+        <span>Level</span>
         <span>Colour</span>
         <span></span>
       </div>
@@ -163,6 +188,34 @@
           disabled={locked && live === null}
           onpick={(code) => live?.(index, { language: code })}
         />
+
+        <!-- Live like the label and the language, and for a stronger reason
+             than either: a channel nobody spoke on during the sound check is
+             found by somebody speaking on it during the show, and the fix has
+             to be possible then. -->
+        <GainKnob
+          value={channel.gainDb}
+          label={channel.label}
+          disabled={locked && live === null}
+          onchange={(db) => {
+            channel.gainDb = db;
+            live?.(index, { gainDb: db });
+          }}
+        />
+
+        <!-- Wrapped, because `LevelMeter` draws a bar and, when samples have
+             been lost, a count beside it — two elements, which in a grid row
+             would land in two columns. -->
+        <div class="level">
+          {#if levels}
+            {@const level = levels.get(index)}
+            <LevelMeter
+              rms={level?.rms ?? 0}
+              peak={level?.peak ?? 0}
+              dropped={level?.dropped ?? 0}
+            />
+          {/if}
+        </div>
 
         <input type="color" aria-label="Colour" bind:value={channel.color} disabled={locked} />
 
@@ -228,7 +281,9 @@
     /* The language column is wider than it was as a bare code field: it now
        holds a name, and "Portuguese (pt)" truncated to "Portug…" is no better
        than the code it replaced. */
-    grid-template-columns: 0.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 2.6rem 2rem;
+    grid-template-columns:
+      0.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 2.4rem minmax(3rem, 0.7fr)
+      2.6rem 2rem;
     align-items: center;
     gap: 0.5rem;
   }
@@ -236,6 +291,17 @@
   .head {
     font-size: 0.7rem;
     color: var(--text-dim);
+  }
+
+  /* The bar takes the channel's own colour, as it does on the meter strip:
+     the same reading in two places should not be two different colours. */
+  .level {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+    font-size: 0.75rem;
+    --accent: var(--channel);
   }
 
   .dot {

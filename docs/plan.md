@@ -13,10 +13,14 @@ repeating numbers, so there is one place to correct when a measurement changes.
 **Status of this document:** 2026-09-19, after the interface was made to fit a
 phone — drawers for both sidebars, a strip of vertical meters and a page that
 respects a device's safe areas, so the LAN remote (P16) is usable on the
-screen it is most often opened on. Before that, P19's rules landed — triggers
-and actions, which subsume P17's alert terms and flash flags and migrate an
-existing `config.json` into them; its two outbound actions, a MIDI cue and a
-webhook, are what is left of the package. Before that, Unicode normalisation
+screen it is most often opened on. The same day, P19's two outbound actions
+became one: the MIDI cue was folded into the webhook, because the desk is
+reached through Bitfocus Companion and Companion speaks HTTP — so the action
+is a free-text request rather than a preset, written host-only, which is
+the answer to the question P19 had parked — and it was built the same day,
+which closes P19. Before that, P19's rules landed —
+triggers and actions, which subsume P17's alert terms and flash flags and
+migrate an existing `config.json` into them. Before that, Unicode normalisation
 closed P17 and P18 was written up — the Windows port, which moved out of
 *Deliberately out of scope* and into a package of its own. P10 (SQLite
 persistence) was set aside the same day; see the package for what that costs. P3b (language stabiliser) was dropped with the auto mode it
@@ -83,7 +87,7 @@ for now, with the reason recorded in the package.
 | P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. No authentication — by decision |
 | P17 | Alert terms & visual attention | **Done** | Subsumed by P19: the terms and the flash flags are rules now, and an existing file is migrated into them |
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
-| P19 | Rules: triggers and actions | **Partial** | The two outbound actions: a MIDI cue, and a webhook with the decision its offline constraint needs |
+| P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -681,6 +685,62 @@ is the figure that decides how many channels a given laptop can be given.
   have started dropping.
 - **It runs whether or not a session does**, sampled once a second rather than
   at the meters' 20 Hz — walking the process table is real work.
+
+**An input trim per channel**, as a knob beside each meter on the strip above
+the chat and again in the channel setup — which is why that setup grew a meter
+of its own: a knob is set against a bar, and a bar on the page that is not on
+screen is no help at all. A desk does not hand out eight channels at one level — the stage
+manager's beltpack is hot, the follow-spot's matrix output is twenty dB below
+it — and whisper gives up on the quiet one long before a human would.
+
+- **Whole decibels, −20 to +20.** What a trim knob is marked in, what an
+  operator would write their setup down in, and a range past which the only
+  thing left to amplify is the interface's own hiss. The bounds are exported to
+  the frontend as constants (`GAIN_DB_MIN`, `GAIN_DB_MAX`) rather than restated
+  there; the backend clamps again on the way in, because the knob is not the
+  only caller.
+- **Applied on the processing thread, not in the capture callback.** The
+  callback de-interleaves and nothing else. It is applied *before* the speech
+  detector and before the level window, which is what makes the knob usable at
+  all: it is turned while watching the bar it feeds, and a meter showing the
+  untrimmed signal would be a knob with no visible effect.
+- **Live, like the label and the language (P6).** It is wrong the first time
+  anybody speaks on a channel nobody spoke on during the sound check, and that
+  is during the show. Carried in `StreamUpdate` and held as an atomic rather
+  than sent down the language channel — a knob being dragged produces a change
+  per pointer event, and the pipeline only needs the one that is current when
+  it next pumps.
+- **Stored with the channel** (P12), because it compensates for how *this*
+  intercom position is patched, which belongs to the production's patch list
+  and therefore to the profile. `#[serde(default)]`, so a file written before
+  it existed reads as unity.
+- **Clamped to full scale on the way out.** Whisper would take a sample of 4.0
+  without complaining, but the peak meter beside the knob would then have no
+  top to read against — and an operator turning a trim up has to be told where
+  "too far" is, by the meter, at the moment they pass it.
+
+**Meters without a session**, so the trim can be set before a show rather than
+discovered during one. `monitor.rs` opens the device, de-interleaves it and
+measures it — no model, no sidecar, no segmenter, no transcripts — and emits
+the same `levels` event a session does, on the same name: the meters do not
+care where a reading came from, and a second kind of level event would mean
+every view learning to read both.
+
+- **One device, one holder.** `start_session` stops the monitor before opening
+  its own capture, and it refuses to start while a session runs, whose meters
+  are these meters. The Settings page starts it again when the session ends.
+- **Idempotent, and asked for on every edit.** `start_monitor` takes the same
+  channel list Start does, and does nothing when it is already metering that
+  device and channel map — so typing a label does not reopen the interface
+  under a bar somebody is watching. The frontend debounces the channel map on
+  top of that, because that column is a number box and "12" passes through 1.
+- **The trim reaches it** through `set_monitor_gain`, which is deliberately not
+  `update_stream_config`: that one changes a session and answers with the
+  session state, of which there is none here.
+- **A disconnected device ends the metering quietly.** It is not a failed
+  session — there is no session — and saying one just failed would be a lie
+  about something nobody started. The device list on the same page is what
+  says the interface is gone.
 
 **Outstanding:** peak hold, silence indicator, clipping warning, worker queue
 depth, and the rest of a global status bar — active workers, queue length and
@@ -1290,7 +1350,7 @@ that only real hardware can confirm — and it should be answered on the target
 interface early, because the answer decides whether the opt-in ASIO route is a
 corner case or the normal one.
 
-### P19 — Rules: triggers and actions — **Partial**
+### P19 — Rules: triggers and actions — **Done**
 
 **What it is.** One list of **rules**, each a *trigger* and one or more
 *actions*, in place of the two hard-wired reactions the app had. A rule is
@@ -1307,7 +1367,8 @@ on the stage manager's channel"*, *"anything at all on channel 3"*, and *"when
 the inspector says Go, fire the cue"*. None of the three is a variation on the
 old two; all three are the same shape once triggers and actions are separate.
 
-**Done: the model, the evaluation, the editor and the migration.**
+**Done: the model, the evaluation, the editor, the migration and the
+webhook.**
 
 **Triggers** are a conjunction of two questions: *these words* (or any text)
 said on *these channels* (or any channel). The words go through P17's matcher
@@ -1343,14 +1404,59 @@ to every window.
    one without: there would be nothing to mark.
 3. *Ask the platform for attention*, urgently or once — the old two requests,
    now two actions that can be asked for separately.
-4. *Fire a MIDI cue.* **Open.** The action the app is actually wanted for in a
-   theatre: a note or MSC message on a virtual port, which the desk already
-   listens to. Local, offline, and exactly the kind of thing an intercom phrase
-   should be able to start. It is one arm of `rules::Action` and one match in
-   `Rules::evaluate`, because the evaluation was put where an action can fire
-   exactly once — see below.
-5. *Call a webhook.* **Open**, and still waiting on the decision recorded
-   below.
+4. *Call a webhook.* The last one. One HTTP request, written out on the rule:
+   a URL, a method, headers and a body, all free text and all templated. It is
+   one arm of `rules::Action`, and the request beside it on the rule —
+   `CompiledRule::webhook`, the way `views` sits beside the flash — because an
+   arm carrying a URL would put that URL into the action list that travels
+   back out with every transcript, to every window and every browser. The
+   firing is one branch in `Rules::evaluate`, because the evaluation was put
+   where an action can fire exactly once — see below.
+
+**Why one free-text request and not a list of integrations.** This action
+replaces the MIDI cue that stood here until 2026-09-19, and it replaces it by
+going around it. The thing a theatre actually points this at is Bitfocus
+Companion, which is itself a fan-out point: a Companion button reaches every
+device Companion has a module for — MIDI among them — so the cue still
+arrives at the desk, by a route this app does not have to own. Speaking MIDI
+directly would have reached what speaks MIDI; speaking HTTP to Companion
+reaches that and everything else, for less code.
+
+But Companion is one destination and not the shape of the feature. Binding the
+action to it would mean the next thing somebody wants to call — a media
+server, node-red, a light desk's own gateway, something bought after this was
+written — needs a release. So there is no preset and no endpoint catalogue:
+the editor has a URL box, a method, a header list and a body box, and what is
+sent is what was typed. Companion appears as a *hint* under the URL field,
+two examples to copy —
+
+```
+POST http://<companion-host>:8000/api/location/1/0/2/press
+POST http://<companion-host>:8000/api/custom-variable/last_call/value
+     body: {{text}}
+```
+
+— the first being the cue trigger, the second putting the transcript itself on
+a button face, which is the thing a MIDI note could never have carried.
+
+**The body is a template**, over the same values the highlight already has:
+`{{text}}`, `{{channel}}`, `{{rule}}`, `{{matched}}`, `{{timestamp}}`. That is
+what lets one mechanism serve both examples above without knowing which is
+which. The URL and every header value are templated too, and each of the three
+is escaped for the place it is: percent-encoding in the URL, so a transcript
+cannot rewrite the request it was put into; control characters stripped from a
+header value, because a newline there is header injection and a transcript is
+text this app did not write; and JSON escaping in a body whose `Content-Type`
+says JSON, because `{"said": "{{text}}"}` is what an operator writes for
+node-red and a quotation mark in what was said would otherwise arrive
+unparseable. A placeholder nobody defined is left as it was typed: a body
+arriving with `{{txt}}` still in it says what the mistake was, where an empty
+string would say only that nothing was said.
+
+**No new dependency.** `reqwest` has been in `crates/app` since P11's model
+downloads, with rustls and `system-proxy` already on — so an HTTPS
+destination, including one behind a house proxy, works with what is in the
+tree.
 
 **Where a rule runs.** The two kinds of action have opposite homes, and the
 split was designed before the first rule was stored:
@@ -1359,10 +1465,9 @@ split was designed before the first rule was stored:
   window is showing *and* on which views the rule named. Several windows may
   each answer for one transcript, and that is correct — but only the ones the
   rule is for.
-- A *MIDI cue or a webhook* is about the **session**. It must fire exactly
-  once per matching bubble — not once per open window, not twice because the
-  LAN viewer is also connected, and not zero times because every window was
-  closed.
+- A *webhook* is about the **session**. It must fire exactly once per matching
+  bubble — not once per open window, not twice because the LAN viewer is also
+  connected, and not zero times because every window was closed.
 
 So the rules are evaluated in `crates/app/src/rules.rs`, from
 `TauriEvents::transcript`, which is the one place every view's copy of an event
@@ -1430,25 +1535,63 @@ says the rule back in words ("Feuer, on Bühne"), which is what makes a list of
 six of them scannable. Editable while a session runs, like the alert list it
 replaces: a rule written mid-show takes effect on the next segment.
 
-**What is left.** The two outbound actions. MIDI needs a virtual port and a
-message format and has none of the webhook's problem, which is why it comes
-first.
+**Built on 2026-09-19**, in place of the MIDI cue that stood here until that
+day rather than beside it. `crates/app/src/webhook.rs` is the whole of the
+outbound side: the request, the template, the queue and the counters.
 
-**The constraint webhooks still run into.** *Offline is a hard requirement* and
-the remote deliberately never leaves the local network (P16). A webhook is an
-outbound HTTP call from the machine holding crew communication, so it is not a
-setting like the others: it must be per rule, explicit about its destination,
-off unless written, and it must not be reachable through the LAN remote's
-configuration path without a decision about who may write one. That decision is
-still to be made, and the rule editor being reachable from the remote today is
-exactly why it has to be made before the action exists.
+**The constraint, and the decision taken on 2026-09-19.** *Offline is a hard
+requirement* and the remote deliberately never leaves the local network (P16).
+A webhook is an outbound HTTP call from the machine holding crew
+communication — and, by the user's decision, one that may name any host on the
+LAN *or* the internet. That is a deliberate widening of "no cloud handling of
+crew communication", not an oversight, and it is what makes the rest of this
+paragraph necessary rather than cautious.
+
+The question P19 parked was *who may write such a destination*. The rule editor
+is reachable from the LAN remote, and the remote has no authentication by
+decision. An arbitrary URL writable from there means anyone on the house
+network can point crew speech at an off-site endpoint from a browser form,
+which is a different proposition from the read-mostly remote that decision was
+made for. So: **a webhook action is written host-only.** The remote may see a
+rule that has one, switch it off and edit its trigger; it may not create or
+change the request. The URL box does not exist on the remote. This costs
+nothing an operator wanted — the machine is where a destination is set up
+anyway — and it leaves P16's authentication where it was, an obvious next
+thing to want rather than a prerequisite.
+
+**The body defaults to the minimum.** `{{text}}` is the exposure; a rule name
+and a channel are usually all a trigger needs to say. So a new action starts
+with the transcript *out* of the body, and putting it in is a thing the
+operator does on purpose. The default should not be the one that quietly ships
+what was said in a production off the premises.
+
+**It must not block the transcript.** Rules are evaluated in
+`TauriEvents::transcript`, so a synchronous request to an unreachable host
+would stall transcription for the length of its timeout — and an unreachable
+host is the *normal* case in a venue with no route out. The send therefore
+leaves on a task of its own, over a bounded queue, with a short timeout, **at
+most one retry, and then a drop that increments a counter.** A cue that arrives
+forty seconds late is worse than one that never arrives; this is a show, not a
+message bus. The drop count belongs beside P8's stream health, so that a dead
+endpoint is visible rather than silent. P19's per-rule rate limit already keeps
+a channel trigger on a busy talkback from becoming a flood of requests.
 
 **Accepted when:** a rule saying "Go on the inspector's channel" flashes one
-window and fires one MIDI cue, once, with two group windows and a browser
+window and sends one HTTP request, once, with two group windows and a browser
 viewer open; a rule with a channel trigger and no word fires on every bubble
-from that channel; deleting a channel leaves no rule pointing at nothing; and
-an existing `config.json` from P17 comes back as the equivalent rules.
-✔ for everything but the MIDI cue, which is action 4.
+from that channel; deleting a channel leaves no rule pointing at nothing; an
+existing `config.json` from P17 comes back as the equivalent rules; a webhook
+whose host does not answer costs the transcript nothing and shows up as a drop;
+and the URL box is absent from the rule editor served to the remote. ✔
+
+**What the webhook is not.** The host-only rule is a rule about the *editor*,
+which is what the threat it was written against is — an operator, or anyone
+else on the house network, typing a destination into the form the app serves.
+It is not enforced on the wire: a browser that sends a crafted `save_config`
+frame can still put a URL on a rule, because the remote has no authentication
+and the configuration round-trips through it whole. That is the same gap P16
+already has and the same one its authentication closes; nothing here widens
+it, and nothing here waits for it.
 
 ---
 
@@ -1482,7 +1625,7 @@ P0 Scaffolding
 
 P19 hangs off P17 because it generalises it rather than adding to it: the
 matcher, the per-bubble counting and the two reactions all become one case of a
-rule, and its outbound actions need P12's file to write them down in.
+rule, and its outbound action needs P12's file to write it down in.
 
 P18 hangs below everything because it reopens three packages rather than
 following them: P1's capture, P4's GPU backend and P13's packaging, each for a
@@ -1492,8 +1635,7 @@ second platform. Nothing between them changes.
 still owes is a load test on live audio.*
 
 **Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17, P19. *What is left
-is the settings proper — every threshold is still a constant in the code — and
-P19's two outbound actions.*
+is the settings proper — every threshold is still a constant in the code.*
 
 **Milestone C (language quality & production readiness):** + P14 fixtures, P15,
 P8, P9, P13. *P10 left it on 2026-09-18; P3b was dropped.*
@@ -1531,11 +1673,11 @@ In this order, with the reason each one comes where it does.
    arrangement nobody has used yet.
 5. **P13, packaging and signing.** With P6, P7, P9 and P19 in, what is left
    between this and a machine that is not this one is a notarised build.
-6. **P19's MIDI cue.** The action the app is actually wanted for in a theatre,
-   and the one the rules were designed around: the evaluation already fires
-   exactly once per event, per rule and under a rate limit, so what is left is
-   a virtual port and a message format. The webhook stays behind it until the
-   question of who may write one from the LAN remote has an answer.
+6. **The webhook against a real Companion.** Built and tested against its own
+   unit tests on 2026-09-19; what it has not had is a desk. The two things
+   only a house can answer are whether a Companion press URL fires from the
+   body the editor produces, and whether three seconds and one retry are the
+   right numbers on a network with a show on it.
 7. **P18, the Windows port.** Last, and not because it is hard: it reopens
    capture, the GPU backend and packaging, and each of the three is cheaper to
    redo once the macOS answer it is being ported from is measured rather than
@@ -1603,6 +1745,19 @@ In this order, with the reason each one comes where it does.
     never widened to every channel. Verify that the browser highlights the same
     characters, floods the same way, and flashes its own surface and tab title
     (P19, P17, P16).
+    1. Add the webhook action to the `cue` rule, pointed at a Companion button
+       (`POST http://<companion>:8000/api/location/1/0/2/press`), and speak the
+       word with two group windows and a browser open → the button presses
+       **once**. Put `{{text}}` in the body of a second rule pointed at
+       `/api/custom-variable/last_call/value` → what was said appears on the
+       button face, umlauts intact.
+    2. Point a third rule at a host that does not exist and speak → the
+       transcript arrives on time, and a few seconds later the meter strip
+       says one webhook was dropped, with the reason in its tooltip.
+    3. Open the same Settings page from the browser → the rule shows that it
+       calls a webhook and offers no URL, method, header or body box. Untick
+       the action there and speak → the button does not press. Tick it again
+       on the machine and the destination is still the one that was typed.
 14. On Windows, with a DAW holding the same interface: start a session on eight
     channels and let the DAW run through it — the transcripts appear and the
     DAW is undisturbed. Then switch the capture route to ASIO on a driver that

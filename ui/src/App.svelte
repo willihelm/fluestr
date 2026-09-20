@@ -45,6 +45,7 @@
     onOverload,
     onResources,
     onSessionState,
+    onWebhookStatus,
     onTranscript,
     requestAttention,
     saveConfig,
@@ -53,6 +54,10 @@
     startSession,
     stopSession,
     updateStreamConfig,
+    startMonitor,
+    stopMonitor,
+    setMonitorGain,
+    webhookStatus,
     type DeviceOption,
     type ResourceUsage,
     type SessionState,
@@ -61,6 +66,7 @@
     type StoredRemote,
     type StreamLevel,
     type TranscriptEvent,
+    type WebhookStatus,
   } from "./lib/bridge";
 
   // Two pages: the live chat, and the Settings page that holds everything
@@ -79,6 +85,14 @@
   /// write itself is atomic, so a save landing at an awkward moment costs
   /// nothing.
   const SAVE_DEBOUNCE_MS = 400;
+
+  /// How long after the last change to the channel map the input device is
+  /// opened for metering (P8).
+  ///
+  /// Shorter than the save: this costs nothing but a device open, and the
+  /// operator is waiting to see a bar move. Long enough that typing a
+  /// two-digit channel number is one open and not two.
+  const METER_DEBOUNCE_MS = 250;
 
   let view = $state<View>("chat");
 
@@ -166,6 +180,11 @@
   // only logged: an operator who spoke and saw no text needs to be able to
   // tell "the app fell behind" from "the channel was not listening".
   let overloaded = $state(new Map<number, number>());
+  // What the rules' outbound action has managed to deliver (P19). `null` until
+  // the first answer. Cumulative across the sessions of an evening and not
+  // cleared with the chat: a cue that failed an hour ago is still the reason
+  // the desk did not get it, and the counter is the only trace of it.
+  let webhooks = $state<WebhookStatus | null>(null);
 
   /// Remembers a session's zero point. Called from both places a running state
   /// arrives — the answer to `start_session` and the `session-state` event —
@@ -175,8 +194,8 @@
     sessionStarts = new Map(sessionStarts).set(state.sessionId, state.startedAtMs);
   };
 
-  /// Carries a channel's new label or language into the session that is
-  /// already running (P6).
+  /// Carries a channel's new label, language or input trim into the session
+  /// that is already running (P6).
   ///
   /// The edit itself has already happened in `profiles`, which is what gets
   /// saved; this is the other half — the session, which the file cannot
@@ -188,10 +207,34 @@
   /// to every view, and this window adopts it through `onSessionState` like
   /// any other — including the group windows and a browser on the LAN, which
   /// get it the same way and at the same time.
-  const liveStream = (streamId: number, update: { label?: string; language?: string }) => {
+  const liveStream = (
+    streamId: number,
+    update: { label?: string; language?: string; gainDb?: number },
+  ) => {
     updateStreamConfig({ streamId, ...update })
       .then(() => (liveError = null))
       .catch((e) => (liveError = String(e)));
+  };
+
+  /// Sets a channel's input trim from the meter strip.
+  ///
+  /// Both halves, like the Settings page's own knob does inline: the profile,
+  /// which is what gets saved, and — while a session runs — the pipeline. The
+  /// strip is where a trim is actually found, because finding it means
+  /// watching the bar it moves; the Settings page is where it is written down
+  /// beforehand.
+  ///
+  /// Writing into the profile rather than into `channels`: that is a derived
+  /// view of it, and the save follows the profile.
+  const setGain = (streamId: number, gainDb: number) => {
+    const channel = active?.channels[streamId];
+    if (!channel || channel.gainDb === gainDb) return;
+    channel.gainDb = gainDb;
+    // Whichever of the two has the device open. Neither is the record of the
+    // value — the profile above is, and it is what the next session starts
+    // with; these are the audio it applies to right now.
+    if (running) liveStream(streamId, { gainDb });
+    else setMonitorGain(streamId, gainDb).catch(() => {});
   };
 
   let running = $derived(status.state === "running");
@@ -208,6 +251,62 @@
   // assigns it — see `SessionConfig::streams`.
   let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
   let problem = $derived(validate(channels, device, deviceChannels, connected));
+
+  /// Whether the input is being metered with no session running (P8).
+  ///
+  /// The meters are how a trim is set, and a trim is set *before* a show. So
+  /// the Settings page opens the device on its own: no model, no sidecar, no
+  /// transcripts — a few ring buffers and a thread that adds up squares. See
+  /// `crates/app/src/monitor.rs`.
+  let metering = $state(false);
+  let meterError = $state<string | null>(null);
+
+  /// What the meters would be opened on, or `null` when they should not be.
+  ///
+  /// A string of exactly the two things `start_monitor` cares about — the
+  /// device and the channel map — so that editing a label, a colour or a
+  /// language does not reopen the interface underneath a bar somebody is
+  /// watching.
+  let meterKey = $derived(
+    view === "settings" && !running && !busy && connected && channels.length > 0
+      ? `${deviceId || device}\u0000${channels.map((c) => c.channel).join(",")}`
+      : null,
+  );
+
+  $effect(() => {
+    if (meterKey === null) {
+      metering = false;
+      meterError = null;
+      levels = new Map();
+      stopMonitor().catch(() => {});
+      return;
+    }
+
+    // Debounced, because the channel column is a number box: typing "12" goes
+    // through channel 1 on the way, and opening the device for it would mean
+    // one reopen per keystroke.
+    const timer = setTimeout(() => {
+      // Read here rather than above on purpose: a timer callback is outside
+      // the effect's tracking, so the labels and colours this reads do not
+      // make it run again. `meterKey` alone decides that, which is the point
+      // of having it.
+      startMonitor({
+        deviceId: deviceId || device,
+        streams: toConfig(channels),
+        vocabulary: null,
+      })
+        .then(() => {
+          metering = true;
+          meterError = null;
+        })
+        .catch((e) => {
+          metering = false;
+          meterError = String(e);
+        });
+    }, METER_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  });
   // Which streams receive no audio because the device has no such channel.
   // While a session runs this comes from the backend's own answer rather than
   // from the UI's copy of the setup — that is the authoritative mapping, and
@@ -336,6 +435,10 @@
       ...sessionStarts,
     ]);
     if (status.state === "idle" && snapshot.state) status = snapshot.state;
+    // The outbound counters are caught up the same way and for the same
+    // reason: they are cumulative, and a window opened after a cue failed has
+    // to see that it did. Its own call, because it is not part of the chat.
+    webhooks = await webhookStatus();
   };
 
   // A group window is a view onto a group of the profile that is running, and
@@ -560,6 +663,10 @@
       }),
       onResources((event) => {
         usage = event;
+      }),
+      // Every outcome, not a sample: the first drop is the interesting one.
+      onWebhookStatus((status) => {
+        webhooks = status;
       }),
       // Emptied here or in a group window — the backend holds the copy they
       // are all caught up from, so the deletion happens there and every window
@@ -859,6 +966,8 @@
       {saveError}
       {liveError}
       live={running ? liveStream : null}
+      levels={running || metering ? levels : null}
+      {meterError}
       {problem}
     />
   {:else}
@@ -876,7 +985,15 @@
                three-channel group are five things to read past. The filtering
                happens by stream id inside the component, because the stream id
                *is* the position in `channels`. -->
-          <StreamMeters {channels} {levels} {overloaded} {visible} {muted} />
+          <StreamMeters
+            {channels}
+            {levels}
+            {overloaded}
+            {visible}
+            {muted}
+            {webhooks}
+            gain={setGain}
+          />
         {/if}
 
         {#if visible !== null && visible.size === 0}

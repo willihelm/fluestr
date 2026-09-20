@@ -28,17 +28,33 @@
   // the channel map: rules are matched against finished text, so one written
   // in the middle of a show takes effect on the next segment — which is
   // exactly when somebody thinks of writing one.
+  //
+  // **The webhook is written on the machine and nowhere else.** Every other
+  // field on this card is editable from the LAN remote, because the remote is
+  // a peer (P16). A destination is not: the remote has no authentication by
+  // decision, and an arbitrary URL writable from a browser form means anyone
+  // on the house network can point crew speech at an off-site endpoint. So the
+  // URL, the method, the headers and the body exist only in the app's own
+  // window; the remote sees *that* a rule calls out, can switch it off, and
+  // can edit its trigger. Everything below that branches on `isRemote` is that
+  // one decision — see P19 in `docs/plan.md`.
 
   import {
     ACTIONS,
     audienceOf,
+    callsOut,
+    destinationOf,
+    METHODS,
     newRule,
+    newWebhook,
     parseWords,
+    PLACEHOLDERS,
     triggerOf,
     wordsText,
     type Action,
     type Rule,
   } from "./rules";
+  import { isRemote } from "./transport";
   import type { Group } from "./groups";
   import type { Channel } from "./streams";
 
@@ -78,11 +94,52 @@
     rule.minIntervalMs = Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 1000) : 0;
   };
 
-  /// Whether this rule can ask for the action at all. Highlighting needs words
-  /// to highlight; the box is disabled rather than hidden, because "why can I
-  /// not tick this" is answered by a label that is still there.
-  const offered = (rule: Rule, action: Action): boolean =>
-    action !== "highlight" || parseWords(wordsText(rule.words)).length > 0;
+  /// Whether this rule can ask for the action at all. The box is disabled
+  /// rather than hidden, because "why can I not tick this" is answered by a
+  /// label that is still there.
+  ///
+  /// Two reasons it cannot. Highlighting needs words to highlight. And a
+  /// webhook cannot be *started* from the remote — but one that already exists
+  /// can always be un-ticked there, because switching a cue off in a hurry is
+  /// the one thing a browser at the other end of the house is for.
+  const offered = (rule: Rule, action: Action): boolean => {
+    if (action === "highlight") return parseWords(wordsText(rule.words)).length > 0;
+    if (action === "webhook" && isRemote) return rule.webhook !== null;
+    return true;
+  };
+
+  /// Ticking an action, with the one that carries a payload handled here.
+  ///
+  /// Ticking *call a webhook* on the machine opens an empty request to fill
+  /// in. Un-ticking leaves it in place rather than deleting it: the rule is
+  /// being switched off, not rewritten, and an operator who un-ticks the box
+  /// during a show wants the destination back afterwards. Nothing is sent
+  /// while the box is clear — see `compile`.
+  const tickAction = (rule: Rule, action: Action) => {
+    rule.actions = toggle(rule.actions, action);
+    if (action === "webhook" && rule.actions.includes(action) && rule.webhook === null) {
+      rule.webhook = newWebhook();
+    }
+  };
+
+  /// Whether to show the request. Only on the machine, and only when the rule
+  /// asks for one: a URL box on a rule that does not call out is a question
+  /// about nothing.
+  const writesTheRequest = (rule: Rule): boolean =>
+    !isRemote && rule.actions.includes("webhook") && rule.webhook !== null;
+
+  const addHeader = (rule: Rule) => {
+    if (!rule.webhook) return;
+    rule.webhook = { ...rule.webhook, headers: [...rule.webhook.headers, { name: "", value: "" }] };
+  };
+
+  const removeHeader = (rule: Rule, index: number) => {
+    if (!rule.webhook) return;
+    rule.webhook = {
+      ...rule.webhook,
+      headers: rule.webhook.headers.filter((_, i) => i !== index),
+    };
+  };
 
   /// Whether to ask which windows the flash is for. Only when it flashes:
   /// a row of group chips on a rule that does not flash is a question about
@@ -105,7 +162,8 @@
     fill in both for the rule that could not be written before: this word, on that channel.
     <strong>A channel is an input, a group is a window:</strong> channels say where it has to
     be said, groups say which window flashes. Every new message is marked in the chat whatever
-    these say.
+    these say. A rule can also <strong>call a webhook</strong> — one HTTP request per matching
+    bubble, written here on the machine and sent from it.
   </p>
 
   {#if rules.length === 0}
@@ -137,6 +195,14 @@
           <p class="reads">{triggerOf(rule, channels)}</p>
           {#if audienceOf(rule, groups)}
             <p class="reads">{audienceOf(rule, groups)}</p>
+          {/if}
+          <!-- The third sentence, and the only one about something outside
+               this machine. On the collapsed card it is the host and nothing
+               else: which box this reaches is the question, and a Companion
+               press URL with a page, a row and a column in it is longer than
+               the rest of the card. -->
+          {#if destinationOf(rule)}
+            <p class="reads out">{destinationOf(rule)}</p>
           {/if}
 
           <div class="field">
@@ -190,7 +256,7 @@
                     type="checkbox"
                     checked={rule.actions.includes(action.id)}
                     disabled={!offered(rule, action.id)}
-                    onchange={() => (rule.actions = toggle(rule.actions, action.id))}
+                    onchange={() => tickAction(rule, action.id)}
                   />
                   <span>{action.title}</span>
                 </label>
@@ -222,6 +288,111 @@
                 </span>
               </div>
             </div>
+          {/if}
+
+          <!-- The request, on the machine only. Four boxes and no preset: the
+               next thing somebody wants to call is a media server, a light
+               desk's own gateway, or something bought after this was written,
+               and a catalogue of endpoints would make each of those a
+               release. The Companion lines under the URL are a hint to copy,
+               not a mode to pick. -->
+          {#if writesTheRequest(rule) && rule.webhook}
+            <div class="request">
+              <div class="field">
+                <span class="legend">Call</span>
+                <select bind:value={rule.webhook.method} aria-label="HTTP method">
+                  {#each METHODS as method (method)}
+                    <option value={method}>{method.toUpperCase()}</option>
+                  {/each}
+                </select>
+                <input
+                  type="url"
+                  class="url"
+                  bind:value={rule.webhook.url}
+                  placeholder="http://companion:8000/api/location/1/0/2/press"
+                  aria-label="Webhook URL"
+                />
+              </div>
+
+              <p class="hint example">
+                Bitfocus Companion, which most houses already have, is a fan-out point: a
+                button there reaches every device Companion has a module for — MIDI among
+                them. Two to copy:
+              </p>
+              <pre class="example">POST http://&lt;companion-host&gt;:8000/api/location/1/0/2/press
+POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
+     body: &#123;&#123;text&#125;&#125;</pre>
+
+              <div class="field headers">
+                <span class="legend">Headers</span>
+                <div class="rows">
+                  {#each rule.webhook.headers as header, i (i)}
+                    <div class="header-row">
+                      <input
+                        type="text"
+                        bind:value={header.name}
+                        placeholder="Content-Type"
+                        aria-label="Header name"
+                      />
+                      <input
+                        type="text"
+                        bind:value={header.value}
+                        placeholder="application/json"
+                        aria-label="Header value"
+                      />
+                      <button
+                        class="remove"
+                        onclick={() => removeHeader(rule, i)}
+                        title="Delete this header"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  {/each}
+                  <button class="small" onclick={() => addHeader(rule)}>Add header</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <span class="legend">Body</span>
+                <textarea
+                  bind:value={rule.webhook.body}
+                  rows="2"
+                  placeholder="Empty — what was said stays here unless you put it in"
+                  aria-label="Request body"
+                ></textarea>
+              </div>
+
+              <p class="hint">
+                The URL, every header value and the body are templates.
+                {#each PLACEHOLDERS as placeholder, i (placeholder.name)}<code
+                  >{placeholder.name}</code
+                >&nbsp;is {placeholder.means}{i < PLACEHOLDERS.length - 1 ? ", " : "."}{/each}
+                A value put in the URL is percent-encoded, and one put in a body is escaped as
+                JSON when a <code>Content-Type</code> header says JSON. <strong>The body starts
+                empty on purpose:</strong> putting <code>&#123;&#123;text&#125;&#125;</code> in
+                it sends what was said in this production to that address, so it is a thing to
+                do deliberately.
+              </p>
+
+              <p class="hint">
+                One request per matching bubble, from this machine, with a three-second timeout
+                and one retry — then it is dropped and counted beside the meters. Use the limit
+                below on a rule with a channel trigger: it is what keeps a busy talkback from
+                becoming a stream of requests.
+              </p>
+            </div>
+          {:else if isRemote && callsOut(rule)}
+            <!-- The remote sees that the rule calls out and can switch it off.
+                 It has no box to change the destination with, and that is the
+                 whole of P19's decision — the remote has no authentication,
+                 and an arbitrary URL writable from a browser form on the house
+                 network is a different proposition from the read-mostly
+                 remote that decision was made for. -->
+            <p class="hint out">
+              This rule calls a webhook. The request is set up on the machine running the
+              session — untick the action above to stop it from here.
+            </p>
           {/if}
 
           <label class="limit">
@@ -287,6 +458,7 @@
      switched back on — but it must not look like one that is firing. */
   .off .reads,
   .off .field,
+  .off .request,
   .off .limit {
     opacity: 0.5;
   }
@@ -323,7 +495,8 @@
     color: var(--text-dim);
   }
 
-  .field input[type="text"] {
+  .field input[type="text"],
+  .field input[type="url"] {
     flex: 1;
   }
 
@@ -371,6 +544,105 @@
     flex: none;
   }
 
+  /* The one line about something outside this machine, and the note the
+     remote gets in place of the boxes. Dimmer than an error and not an
+     accent: it is a fact about the rule, not a warning. */
+  .reads.out,
+  .hint.out {
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  .request {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.45rem 0.5rem;
+    border: 1px dashed var(--border);
+    border-radius: 0.3rem;
+  }
+
+  .request .url {
+    flex: 1;
+  }
+
+  .request .hint {
+    margin: 0;
+  }
+
+  /* The two lines to copy. Monospaced because they are a URL and a body, and
+     scrollable rather than wrapped: a broken URL is harder to read than one
+     that runs off the edge. */
+  pre.example {
+    margin: 0;
+    padding: 0.35rem 0.5rem;
+    background: var(--bg);
+    border-radius: 0.3rem;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    overflow-x: auto;
+  }
+
+  .headers {
+    align-items: flex-start;
+  }
+
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .header-row {
+    display: flex;
+    gap: 0.3rem;
+  }
+
+  .header-row input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .request textarea {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.25rem 0.4rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    resize: vertical;
+    min-width: 0;
+  }
+
+  .request select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.25rem 0.3rem;
+    font: inherit;
+    font-size: 0.8rem;
+  }
+
+  .request code {
+    font-size: 0.72rem;
+    color: var(--text);
+  }
+
+  .small {
+    align-self: flex-start;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    font-weight: 400;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+  }
+
   .limit {
     display: flex;
     align-items: center;
@@ -400,6 +672,7 @@
   }
 
   input[type="text"],
+  input[type="url"],
   input[type="number"] {
     background: var(--bg);
     color: var(--text);
