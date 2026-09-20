@@ -224,7 +224,13 @@ measurements.md §7.
 `EnergyVad` kept as the fallback for a machine without the VAD model.
 Segmentation rules per stream: start on speech onset with ~300 ms pre-roll, end
 after ~500 ms of silence, force-flush at `max_segment_len` (6 s) **cut at the
-quietest frame of the recent past**, discard anything under ~300 ms.
+quietest frame of the recent past that the detector also called silence**,
+discard anything under ~300 ms. A forced cut **overlaps**: `forced_overlap`
+(500 ms) of audio before the boundary is handed to the next segment as well, so
+a word the cut runs through is whole on the later side. The overlap comes out
+of the ceiling rather than adding to it, and the duplicated words it produces
+are accepted on purpose — a word twice is readable, a word bisected is not.
+Both sides of a forced cut get a 5 ms fade, so the step to zero is not a click.
 
 Three things about the detector are worth knowing before changing it:
 
