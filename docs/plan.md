@@ -471,13 +471,17 @@ channels produced no visible lag on screen, which is not the same as a number.
 Two pages. **Settings** holds the input device, the editable channel list
 (device channel, label, language, colour), the global vocabulary, the alert
 terms, the groups with their membership, the profiles and the model manager.
-**Chat** holds a group sidebar, a meter per stream in the selected view —
-fed by the session while one runs and by the monitor before it starts, so the
-lines can be checked without pressing Start — and the lines themselves, each with its channel's colour down the left
-edge and its label, timestamp, language badges and measured latency, with a
-"jump to latest" button. Start/Stop is in the header and belongs to neither
-page: an operator who has to find the right page before they can stop capture
-has already lost.
+**Chat** holds a group sidebar, a meter per stream in the selected view — fed
+by the session while one runs and by the monitor before it starts, so the lines
+can be checked without pressing Start — and the lines themselves, each with its
+channel's colour down the left edge and its label, timestamp, language badges
+and measured latency, with a "jump to latest" button. **⌘1** and **⌘2** switch
+between the two pages, **⌘,** opens Settings as it does in every other Mac
+application, and **⌘T** starts capture or stops it while it runs — one key for
+both, because it is pressed in the dark at the top of a show and again at the
+end of it. ⌘T is refused in exactly the cases the Start button is disabled in.
+Start/Stop is in the header and belongs to neither page: an operator who has
+to find the right page before they can stop capture has already lost.
 
 **A bubble is an utterance, not a segment.** Consecutive segments of the same
 channel are merged up to a silence of 1.5 s, with ceilings on length and
@@ -705,8 +709,10 @@ page at a time, because P9's search grows the window to whatever it jumps to.
 
 ### P8 — Levels & stream health — **Partial**
 
-Today: a level meter per running stream (RMS and peak, computed in Rust, all
-arriving in one event so the bars on screen are the same age), the per-stream
+Today: a level meter per configured stream (RMS and peak, computed in Rust,
+all arriving in one event so the bars on screen are the same age), on screen
+whether a session runs or the monitor does — the strip does not come and go
+across the handover between them, the per-stream
 overrun count from P2, and the per-stream count of segments the decode queue
 gave up on (P5). The two counts are deliberately separate: one is audio lost on
 the way *into* the pipeline, the other audio captured cleanly and then not kept

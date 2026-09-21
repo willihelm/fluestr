@@ -100,6 +100,50 @@
 
   let view = $state<View>("chat");
 
+  /// The window's keyboard shortcuts.
+  ///
+  /// Three of them, all on the modifier key, and all for things an operator
+  /// does with one hand while the other is on a fader: switch between the two
+  /// pages, and start or stop capture.
+  ///
+  /// - **⌘1** — Chat, and **⌘2** — Settings, the pair every tabbed Mac
+  ///   application has, in the order the tabs are in.
+  /// - **⌘,** — Settings as well, because that is where a Mac user's hand
+  ///   goes for a setup page. It opens and never toggles: a second press that
+  ///   threw the operator back into the chat would be a different action
+  ///   wearing the same key.
+  /// - **⌘T** — Start, or Stop while a session runs. One key for both,
+  ///   because it is pressed in the dark at the top of a show and again at
+  ///   the end of it, and hunting for the second of two keys is the part that
+  ///   goes wrong. It is refused in exactly the cases the button is disabled
+  ///   in — mid-start, no device, a setup that does not validate — rather
+  ///   than starting something that cannot run.
+  ///
+  /// Ctrl as well as ⌘ throughout, for the browser peer (P16), which may not
+  /// be on a Mac. ⌘T is the browser's own "new tab" there and will not reach
+  /// the page; the Start button is, and stays, the way that always works.
+  const shortcut = (event: KeyboardEvent) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+
+    switch (event.key) {
+      case "1":
+        view = "chat";
+        break;
+      case "2":
+      case ",":
+        view = "settings";
+        break;
+      case "t":
+      case "T":
+        if (running) stop();
+        else if (!busy && device !== "" && problem === null) start();
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+  };
+
   let devices = $state<DeviceOption[]>([]);
   // The stored setups (P12) and the one being used. Device, channel map and
   // groups all live inside the active profile; the vocabulary sits beside them
@@ -277,7 +321,8 @@
   let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
   let problem = $derived(validate(channels, device, deviceChannels, connected));
 
-  /// Whether the input is being metered with no session running (P8).
+  /// Why the input could not be metered with no session running (P8), or
+  /// `null` while it can be.
   ///
   /// The meters are how a trim is set, and a trim is set *before* a show. So
   /// the window opens the device on its own: no model, no sidecar, no
@@ -287,7 +332,10 @@
   /// In every view and not only in Settings: "is anything coming in on this
   /// line?" is the first question of a get-in, and the answer should not be
   /// three clicks away behind a page about configuration.
-  let metering = $state(false);
+  ///
+  /// Only the failure is kept, and not a "metering now" flag: the strip is on
+  /// screen either way, and what the operator needs said is the one case
+  /// where the bars are never going to move.
   let meterError = $state<string | null>(null);
 
   /// What the meters would be opened on, or `null` when they should not be.
@@ -304,7 +352,6 @@
 
   $effect(() => {
     if (meterKey === null) {
-      metering = false;
       meterError = null;
       levels = new Map();
       stopMonitor().catch(() => {});
@@ -330,14 +377,8 @@
         // channel is which.
         tuning: clampTuning(tuning),
       })
-        .then(() => {
-          metering = true;
-          meterError = null;
-        })
-        .catch((e) => {
-          metering = false;
-          meterError = String(e);
-        });
+        .then(() => (meterError = null))
+        .catch((e) => (meterError = String(e)));
     }, METER_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
@@ -945,6 +986,8 @@
   };
 </script>
 
+<svelte:window onkeydown={shortcut} />
+
 <main>
   <header class="bar">
     <!-- The way to the views on a window with no room for them beside the
@@ -980,13 +1023,19 @@
     <h1>Intercom2Chat</h1>
 
     <nav class="tabs">
-      <button class="tab" class:active={view === "chat"} onclick={() => (view = "chat")}>
+      <button
+        class="tab"
+        class:active={view === "chat"}
+        onclick={() => (view = "chat")}
+        title="Chat (⌘1)"
+      >
         Chat
       </button>
       <button
         class="tab"
         class:active={view === "settings"}
         onclick={() => (view = "settings")}
+        title="Settings (⌘2, ⌘,)"
       >
         Settings
       </button>
@@ -1006,12 +1055,13 @@
         <!-- Red, unlike Start: it is the one button in the header that
              ends what is running, and during a show it is pressed by
              somebody looking for it rather than reading it. -->
-        <button class="primary danger" onclick={stop}>Stop</button>
+        <button class="primary danger" onclick={stop} title="Stop (⌘T)">Stop</button>
       {:else}
         <button
           class="primary"
           onclick={start}
           disabled={busy || device === "" || problem !== null}
+          title="Start (⌘T)"
         >
           {busy ? "Starting …" : "Start"}
         </button>
@@ -1080,7 +1130,7 @@
       {saveError}
       {liveError}
       live={running ? liveStream : null}
-      levels={running || metering ? levels : null}
+      {levels}
       {meterError}
       {problem}
     />
@@ -1094,7 +1144,7 @@
       />
 
       <div class="stream">
-        {#if running || metering}
+        {#if channels.length > 0}
           <!-- The meters follow the same view — eight bars for a
                three-channel group are five things to read past. The filtering
                happens by stream id inside the component, because the stream id
@@ -1103,7 +1153,16 @@
                Shown before Start as well, off the monitor (P8): the bars are
                how an operator sees that the interface is plugged in and that
                somebody is talking on the line, and that is checked before the
-               session, not after it. -->
+               session, not after it.
+
+               Mounted whenever the profile has channels, and not only while
+               something is feeding it, because the two sources hand over
+               through a gap: Start takes the device off the monitor before
+               its own capture is up, and Stop gives it back a debounce
+               later. Tied to either source the strip would vanish and come
+               back on every Start and every Stop — and the chat below it
+               would jump by the height of it, twice a show. Bars with
+               nothing arriving read as a quiet line, which is what it is. -->
           <StreamMeters
             {channels}
             {levels}

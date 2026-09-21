@@ -113,7 +113,6 @@
   let webhooks = $state<WebhookStatus | null>(null);
   let status = $state<SessionState | { state: "idle" }>({ state: "idle" });
 
-  let running = $derived(status.state === "running");
   let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
   // The stream ids this window shows. Every one of them for the all-channels
   // view; an empty set for a group with no members — which is a group to fill
@@ -366,9 +365,11 @@
         : "This group has no channels yet. Add some on the Settings page."}
     </p>
   {:else}
-    {#if running}
-      <StreamMeters {channels} {levels} {overloaded} {visible} {absent} {webhooks} />
-    {/if}
+    <!-- Always, not only while a session runs: the levels arrive from the
+         monitor before Start as well (P8), and a strip that came and went
+         with the session would move the chat under it on every Start and
+         every Stop. Bars with nothing arriving read as a quiet line. -->
+    <StreamMeters {channels} {levels} {overloaded} {visible} {absent} {webhooks} />
     <ChatList
       messages={shown}
       {colors}

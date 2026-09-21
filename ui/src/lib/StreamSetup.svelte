@@ -50,8 +50,10 @@
     /// after it failed. Fetched once by the page above and handed down.
     languages: Language[] | null;
     locked: boolean;
-    /// Every running stream's level, keyed by stream id — or `null` when no
-    /// session is running and there is nothing to show.
+    /// Every metered stream's level, keyed by stream id — from the session
+    /// while one runs and from the monitor before it starts (P8). Empty means
+    /// nothing is arriving, which the bars show by standing still; `null` is
+    /// for a view that never meters and leaves the column out entirely.
     ///
     /// Here as well as on the meter strip, because this is where the trim is
     /// set before a show: a knob with no bar beside it is set by guesswork,

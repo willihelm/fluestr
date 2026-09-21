@@ -117,10 +117,13 @@
           update: { label?: string; language?: string; gainDb?: number; muted?: boolean },
         ) => void)
       | null;
-    /// The levels to show beside the channels, or `null` when there are none
-    /// — no session, and the input is not being metered either. Handed down to
-    /// the channel list for the same reason `live` is: that is where the trim
-    /// is, and a trim is set against a meter.
+    /// The levels to show beside the channels. Empty while nothing is
+    /// arriving — between a session and the monitor, or on a device that is
+    /// not plugged in — rather than `null`: a bar that disappears and comes
+    /// back moves the whole row, and a still bar already says what a silent
+    /// line looks like. `null` is for a view that never meters at all.
+    /// Handed down to the channel list for the same reason `live` is: that is
+    /// where the trim is, and a trim is set against a meter.
     levels?: Map<number, StreamLevel> | null;
     /// Why the input could not be metered while no session runs (P8), or
     /// `null`. Its own line rather than `liveError`: nothing was refused and

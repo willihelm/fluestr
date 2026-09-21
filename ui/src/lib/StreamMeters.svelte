@@ -1,5 +1,10 @@
 <script lang="ts">
-  // One meter per running stream, side by side.
+  // One meter per configured stream, side by side.
+  //
+  // On screen whether or not a session runs: the same `levels` event arrives
+  // from the monitor before Start (P8), and a strip that appeared with the
+  // session would move the chat under it twice a show. A bar with nothing
+  // arriving stands still, which is what a quiet line looks like anyway.
   //
   // They arrive in a single `levels` event, so all the bars on screen are the
   // same age — which is the point of bundling them: eight meters read together
