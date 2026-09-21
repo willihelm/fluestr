@@ -171,10 +171,11 @@
   // zero point.
   let sessionStarts = $state(new Map<number, number>());
   let levels = $state(new Map<number, StreamLevel>());
-  // What the app and its whisper workers cost the machine (P8). `null` until
-  // the first sample, a second after the window opens: a CPU percentage needs
-  // two points in time, and showing 0 % in the meantime would be a lie told at
-  // exactly the moment the model is being loaded.
+  // Whether the machine is going to keep up (P8): the GPU's share, which is
+  // what decoding runs out of, and what this app and its workers hold in
+  // memory. `null` until the first sample, a second after the window opens —
+  // showing 0 % in the meantime would be a lie told at exactly the moment the
+  // model is being loaded.
   let usage = $state<ResourceUsage | null>(null);
   // Segments the decode queue had to give up on, per stream. Shown rather than
   // only logged: an operator who spoke and saw no text needs to be able to

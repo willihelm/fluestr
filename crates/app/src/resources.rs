@@ -1,24 +1,24 @@
-//! What the app is costing the machine (P8).
+//! Whether the machine is about to stop keeping up (P8).
 //!
 //! An operator running eight channels on a laptop has one question this app
 //! never answered: is the machine keeping up, or is it about to stop keeping
 //! up? The overload counter says it has already happened; this says it is
 //! coming.
 //!
-//! Two things make the measurement less obvious than "ask for our own
-//! process":
+//! Two figures, and they are measured against different things — which the
+//! UI has to say out loud, because side by side they look like one pair:
 //!
-//! - **The decoding happens in child processes.** Every whisper worker is a
+//! - **The GPU share is the whole machine.** Decoding runs on Metal, so the
+//!   GPU is the thing that runs out first, and macOS will not break its
+//!   utilisation down per process. See [`crate::gpu`] for what that means and
+//!   why it is still the right number.
+//! - **The memory is this app and its workers.** Every whisper worker is a
 //!   sidecar (see [`crate::worker`]), so the app's own process is the smallest
-//!   part of what the app costs. What is reported is the whole family — this
+//!   part of what the app holds. What is reported is the whole family — this
 //!   process and everything descended from it — because that is what an
 //!   operator would see in Activity Monitor if they thought to add it up.
-//! - **A percentage needs a denominator.** The operating system counts one
-//!   fully busy core as 100 %, so eight busy workers report 800 % and look
-//!   like a failure. This divides by the number of cores, so the number on
-//!   screen is the share of the whole machine and 100 % means there is nothing
-//!   left.
 
+use crate::gpu;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::thread;
@@ -37,10 +37,10 @@ pub const INTERVAL: Duration = Duration::from_secs(1);
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "resources.ts", rename = "ResourceUsage")]
 pub struct Usage {
-    /// Share of the whole machine, in percent: 100 is every core busy. Summed
-    /// over the app and its sidecars and divided by the core count — see the
-    /// module documentation for why the raw figure would mislead.
-    pub cpu: f32,
+    /// GPU utilisation in percent, smoothed, or `None` on a machine that does
+    /// not report it. The whole machine's, not this app's — see [`crate::gpu`],
+    /// which is also where the smoothing and its reasons live.
+    pub gpu: Option<f32>,
     /// Resident memory of the app and its sidecars, in bytes. Resident rather
     /// than virtual because a whisper model is only a cost once it is actually
     /// in RAM, and virtual size on macOS is a number nobody can act on.
@@ -52,8 +52,10 @@ pub struct Usage {
     /// worker. Shown because "2.1 GB" reads differently when it is one process
     /// than when it is five.
     pub processes: usize,
-    /// Logical cores, which is what the CPU share is measured against.
-    pub cores: usize,
+    /// The GPU's shader cores, when it says. Not a denominator — the share
+    /// above is already one — but the scale an operator reads it against, the
+    /// way the memory figure has the machine's total next to it.
+    pub gpu_cores: Option<usize>,
 }
 
 /// The pids of `root` and everything descended from it.
@@ -93,23 +95,23 @@ fn family(parents: &HashMap<Pid, Option<Pid>>, root: Pid) -> HashSet<Pid> {
 /// Blocks; [`spawn`] is what the app calls. Split out so the loop is readable
 /// without a thread around it.
 fn run(mut emit: impl FnMut(Usage)) {
-    let wanted = ProcessRefreshKind::nothing().with_cpu().with_memory();
+    // Memory only: the per-process CPU figure this used to report is gone, and
+    // asking sysinfo to keep computing it would be work once a second that
+    // nothing reads.
+    let wanted = ProcessRefreshKind::nothing().with_memory();
     let mut system = System::new();
     let us = Pid::from_u32(std::process::id());
 
-    // The first CPU reading of a process is meaningless — a percentage needs
-    // two points in time. So the first refresh is a priming one and nothing is
-    // sent from it; the loop below always has a previous sample to subtract.
-    system.refresh_processes_specifics(ProcessesToUpdate::All, true, wanted);
     system.refresh_memory();
     let total_memory = system.total_memory();
-    // `available_parallelism` rather than sysinfo's CPU list: it is the number
-    // the operating system will actually schedule us on, and it needs no
-    // second refresh of its own. Never zero, but the fallback keeps the
-    // division honest if it ever were.
-    let cores = thread::available_parallelism()
-        .map_or(1, |n| n.get())
-        .max(1);
+
+    // The one reader of the GPU counter, for as long as the app runs. It has
+    // to be exactly one, on a steady interval — see [`crate::gpu`].
+    let mut gpu = gpu::Gpu::open();
+    if gpu.is_none() {
+        tracing::info!("no GPU utilisation available; the indicator will show memory only");
+    }
+    let gpu_cores = gpu.as_ref().and_then(|gpu| gpu.cores);
 
     loop {
         thread::sleep(INTERVAL);
@@ -123,21 +125,19 @@ fn run(mut emit: impl FnMut(Usage)) {
             .collect();
         let ours = family(&parents, us);
 
-        let mut cpu = 0.0;
         let mut memory = 0;
         for pid in &ours {
             if let Some(process) = system.process(*pid) {
-                cpu += process.cpu_usage();
                 memory += process.memory();
             }
         }
 
         emit(Usage {
-            cpu: cpu / cores as f32,
+            gpu: gpu.as_mut().and_then(|gpu| gpu.sample()),
             memory,
             total_memory,
             processes: ours.len(),
-            cores,
+            gpu_cores,
         });
     }
 }
@@ -145,8 +145,8 @@ fn run(mut emit: impl FnMut(Usage)) {
 /// Starts the sampler on a thread of its own.
 ///
 /// Its own thread rather than Tauri's async runtime: the work is a blocking
-/// walk of the process table once a second, and it has no business sharing a
-/// pool with the downloads.
+/// walk of the process table and a registry read once a second, and it has no
+/// business sharing a pool with the downloads.
 pub fn spawn(emit: impl FnMut(Usage) + Send + 'static) {
     thread::Builder::new()
         .name("resource-sampler".into())
@@ -223,25 +223,23 @@ mod tests {
 
         assert!(usage.processes >= 1, "the test process is missing");
         assert!(usage.memory > 0, "a running process occupies memory");
-        assert!(usage.cores >= 1);
-        // A share of the machine, not the per-core figure the operating
-        // system reports: a single-threaded test cannot exceed one core, so
-        // even a busy one stays well under 100 on any real machine.
-        assert!(usage.cpu >= 0.0 && usage.cpu <= 100.0, "{}", usage.cpu);
+        // `None` is allowed — a machine that does not report a GPU is a
+        // machine the indicator degrades on, not one the sampler fails on.
+        if let Some(gpu) = usage.gpu {
+            assert!((0.0..=100.0).contains(&gpu), "{gpu}");
+        }
     }
 
     /// The whole point of walking the tree: a whisper worker is a child
-    /// process, so a sampler that reported only our own process would report
-    /// close to nothing exactly while the machine is busiest. A busy child
-    /// stands in for one — `sh` rather than a real sidecar, which would need a
-    /// model and a minute.
+    /// process, so a sampler that reported only our own process would report a
+    /// fraction of the memory the app actually holds. A child stands in for
+    /// one — `sh` rather than a real sidecar, which would need a model and a
+    /// minute.
     #[test]
     fn counts_a_child_process() {
-        // Started before the sampler, so the first sample it sends already
-        // covers a full interval of the child being busy.
         let mut child = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("while :; do :; done")
+            .arg("while :; do sleep 1; done")
             .spawn()
             .expect("a shell");
 
@@ -257,12 +255,7 @@ mod tests {
         let _ = child.wait();
 
         assert!(usage.processes >= 2, "the child is missing: {usage:?}");
-        // Back into cores: the child saturates one, and the test process is
-        // idle, so anything under half a core means the child was not counted.
-        // Phrased in cores rather than in percent because the percentage
-        // depends on how many the machine has.
-        let cores_busy = usage.cpu * usage.cores as f32 / 100.0;
-        assert!(cores_busy > 0.5, "the child's CPU is missing: {usage:?}");
+        assert!(usage.memory > 0, "the family holds no memory: {usage:?}");
     }
 
     /// Our own pid is always in the table in practice; if a refresh ever

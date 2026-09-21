@@ -19,6 +19,7 @@ pub mod alerts;
 mod bindings;
 pub mod commands;
 pub mod config;
+pub mod gpu;
 pub mod history;
 pub mod models;
 pub mod monitor;

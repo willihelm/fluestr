@@ -83,6 +83,17 @@ unicode-normalization = { version = "0.1", default-features = false }
 # `multithread` stays off too — the sampler must not put a thread pool next to
 # the audio threads once a second.
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+# The GPU share, which sysinfo does not report on any platform. Read straight
+# out of the IO registry — see `app::gpu`. Both crates are already in the tree
+# behind cpal and Tauri; naming them here makes the dependency deliberate
+# rather than borrowed.
+# Default features off: the crate otherwise pulls in USB, HID, serial and
+# power management, none of which this reads. `libc` is what the registry
+# entry points are gated behind.
+objc2-io-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "libc",
+] }
 
 # Audio (P1/P2)
 cpal = "0.16"

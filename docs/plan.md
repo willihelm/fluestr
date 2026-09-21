@@ -677,21 +677,34 @@ gave up on (P5). The two counts are deliberately separate: one is audio lost on
 the way *into* the pipeline, the other audio captured cleanly and then not kept
 up with, and they call for different fixes.
 
-Beside them is a **CPU and memory indicator** for the app itself, in the status
-bar. It answers the question the overload counter only answers too late, and it
-is the figure that decides how many channels a given laptop can be given.
+Beside them is a **GPU and memory indicator** in the status bar. It answers the
+question the overload counter only answers too late, and it is the figure that
+decides how many channels a given laptop can be given.
 
-- **It counts the workers too** — this process and everything descended from
-  it, which is what an operator would see in Activity Monitor if they thought
-  to add it up. Because that sum is not what any one row there shows, the
-  tooltip says so.
-- **The percentage is a share of the machine.** macOS counts one busy core as
-  100 %, so eight busy workers report 800 % and read as a failure. The figure
-  is divided by the core count, and the bar turns at 75 % rather than 90: a
-  warning that arrives once every core is saturated arrives after the segments
+- **The GPU, not the CPU.** Decoding runs on Metal and eight whisper instances
+  contend for one queue, so the GPU is what actually runs out; the CPU figure
+  this replaced moved with the audio plumbing and never came near a threshold
+  that meant anything. The share is read from the `IOAccelerator` entry in the
+  IO registry (`Device Utilization %`), which needs no elevated privileges.
+- **The GPU figure is the whole machine**, because macOS publishes no
+  per-process GPU share. On a machine dedicated to a show that is the right
+  number anyway — a queue saturated by somebody else's video call delays the
+  decodes just as much — but it does mean the figure is not zero when the app
+  is idle, so the tooltip says whose load it is.
+- **It is smoothed**, over roughly five seconds. Measured on an M1 Pro: an idle
+  machine reads anywhere from 5 to 40 % second to second, and one decoding
+  continuously still drops to 30 % between segments. A raw sample would flicker
+  across any threshold placed on it. The bar turns at 75 % rather than 90: a
+  warning that arrives once the GPU is saturated arrives after the segments
   have started dropping.
+- **The memory is the app and its workers** — this process and everything
+  descended from it, which is what an operator would see in Activity Monitor if
+  they thought to add it up. Because that sum is not what any one row there
+  shows, the tooltip says so.
 - **It runs whether or not a session does**, sampled once a second rather than
-  at the meters' 20 Hz — walking the process table is real work.
+  at the meters' 20 Hz — walking the process table is real work, and the GPU
+  counter measures since it was last read, so there has to be exactly one
+  reader on a steady interval.
 
 **An input trim per channel**, as a knob beside each meter on the strip above
 the chat and again in the channel setup — which is why that setup grew a meter

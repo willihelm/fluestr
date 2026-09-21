@@ -31,6 +31,8 @@ tauri = { version = "2", features = [] }
 # other one here, and the frontend keeps a single way of talking to the backend.
 tauri-plugin-dialog = "2"
 sysinfo = { workspace = true }
+objc2-io-kit = { workspace = true }
+objc2-core-foundation = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
 sha2 = { workspace = true }

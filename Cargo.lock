@@ -80,6 +80,8 @@ dependencies = [
  "hex",
  "hound",
  "if-addrs",
+ "objc2-core-foundation",
+ "objc2-io-kit",
  "reqwest",
  "serde",
  "serde_json",

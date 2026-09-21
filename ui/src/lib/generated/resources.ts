@@ -5,11 +5,11 @@
  */
 export type ResourceUsage = { 
 /**
- * Share of the whole machine, in percent: 100 is every core busy. Summed
- * over the app and its sidecars and divided by the core count — see the
- * module documentation for why the raw figure would mislead.
+ * GPU utilisation in percent, smoothed, or `None` on a machine that does
+ * not report it. The whole machine's, not this app's — see [`crate::gpu`],
+ * which is also where the smoothing and its reasons live.
  */
-cpu: number, 
+gpu: number | null, 
 /**
  * Resident memory of the app and its sidecars, in bytes. Resident rather
  * than virtual because a whisper model is only a cost once it is actually
@@ -28,6 +28,8 @@ totalMemory: number,
  */
 processes: number, 
 /**
- * Logical cores, which is what the CPU share is measured against.
+ * The GPU's shader cores, when it says. Not a denominator — the share
+ * above is already one — but the scale an operator reads it against, the
+ * way the memory figure has the machine's total next to it.
  */
-cores: number, };
+gpuCores: number | null, };
