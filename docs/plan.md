@@ -10,10 +10,16 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-21. The detection thresholds became
-settings the same day — a **Detection** section beside the vocabulary holding
-the pause that ends a segment, the ceiling on one segment and the detector's
-threshold, each reaching the running session rather than the next one, which
+**Status of this document:** 2026-09-21. P20 was written down the same day: a
+package for the question of whether a streaming recogniser — one that carries
+state frame by frame instead of waiting for a segment — belongs here as a
+second engine. It is open and it is a measurement first, because the wait for
+the speaker to stop is the largest term in the latency budget and nothing in
+this repository has yet established what removing it would cost. Before that,
+the detection thresholds became settings — a **Detection** section beside the
+vocabulary holding the pause that ends a segment, the ceiling on one segment
+and the detector's threshold, each reaching the running session rather than
+the next one, which
 is what closes P12. The coupling P14 warned about was removed first: the
 forced cut's search window no longer follows the silence timeout, so one
 control moves one behaviour. Before that, the first live session with
@@ -101,6 +107,7 @@ for now, with the reason recorded in the package.
 | P17 | Alert terms & visual attention | **Done** | Subsumed by P19: the terms and the flash flags are rules now, and an existing file is migrated into them |
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
+| P20 | Streaming recognition as a second engine | **Open** | Everything — it is a measurement before it is a feature |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -1723,6 +1730,100 @@ it, and nothing here waits for it.
 
 ---
 
+### P20 — Streaming recognition as a second engine — **Open**
+
+Whisper cannot stream, and that is architectural rather than a matter of
+tuning. Its encoder always runs over a padded 30 s window, nothing is carried
+between calls, and the model has no way to know it received a fragment — which
+is why something outside it has to decide where a segment starts and ends.
+That is P3. The price is that no text can exist before the speaker stops: the
+~500 ms silence timeout is not overhead *around* the latency budget, it is its
+largest single term, and the ~330 ms in measurements.md is measured from the
+end of the segment precisely because that wait is excluded from it.
+
+Streaming-native recognisers — cache-aware transducers (RNN-T/TDT) and
+streaming CTC — carry encoder state from frame to frame and emit a hypothesis
+while the speaker is still talking. This package asks whether one of them is
+worth a second engine here, answered on this house's audio rather than on a
+leaderboard.
+
+**The segmenter does not disappear, which is the first thing to be clear
+about.** Streaming removes the *chunking*, not the detector, and all three
+reasons apply here:
+
+- **Cost scales with channels, not with speech.** A streaming model runs
+  continuously on every channel it is given: eight streams mean eight constant
+  decodes instead of decodes only where somebody spoke. Silero in front of the
+  segmenter costs ~1.3 % of a core per stream (P3) and is what makes the
+  current arrangement cheap. Removing the gate inverts that.
+- **This is a chat log, not a subtitle track.** A bubble has to be finished at
+  some point, so the endpoint decision survives the engine change. Some
+  runtimes offer their own endpointing; whether it is better than the one P3
+  has, and whether its thresholds can reach a running session the way P12's do,
+  is part of what the spike has to find out.
+- **Intercom is a noisy input.** The gate against room noise and bell tones
+  exists because whisper captions silence as plausible sentences (P4, and
+  measurements.md §8). A streaming recogniser does not fix that; it does it
+  continuously.
+
+**Candidates, in the order they are worth trying.**
+
+- **Apple `SpeechAnalyzer` / `SpeechTranscriber` (macOS 26+).** Fully
+  on-device, streaming input, German supported, and the model is downloaded and
+  managed by the OS — which would make P11 redundant on this path rather than
+  extended. It fits the platform the app already targets and costs nothing in
+  model management or disk. Against it: a Swift bridge out of Rust, and a
+  second engine that P18 cannot follow, so the Windows port would still need
+  one of the others.
+- **sherpa-onnx with a streaming transducer.** Streaming Zipformer, or NVIDIA's
+  cache-aware FastConformer transducer whose multilingual build covers 40
+  locales. ONNX, INT8, CPU-capable, Rust bindings exist. This is the
+  platform-neutral route and the one that fits the existing shape best: the
+  sidecar stays a sidecar, only its contract changes from *segment in, text
+  out* to *frames in, revisable hypothesis out*.
+- **Not Parakeet TDT**, despite how often it is named in this context: the
+  published exports are offline, and a stateful streaming session for it is
+  still open upstream. **Not Kyutai STT** either, which is the cleanest
+  streaming design of the three and English/French only — which rules it out
+  before anything else is weighed.
+
+**What the spike is, and what it is not.** It is a measurement on recorded
+material from a live session, not a feature: run the current engine and one
+candidate over the same audio and record two numbers each — word error rate
+against a hand-corrected transcript, and *time to first stable partial* beside
+*time to final text*, both taken from the moment the word was spoken rather
+than from the end of the segment, because that is the whole point and the
+current metric cannot express it. No UI, no settings, no second engine in the
+app. The deliverable is a decision written into this file with the numbers
+behind it.
+
+**Where it would attach, if the answer is yes.** The engine boundary today is
+`whisper-protocol`: one frame carries one finished segment and one carries the
+text back. A streaming engine needs a different contract — an open stream of
+frames and a hypothesis that may be revised before it is final — so this is a
+second trait beside the existing path, not a rewrite of it, in the same way
+`Vad` holds `SileroVad` and `EnergyVad`. Two things above it would have to
+change and neither is free: the worker pool schedules whole segments and would
+have to hold long-lived per-channel sessions instead (P5), and the chat list
+assumes a bubble is final the moment it appears (P7) — a revisable bubble is a
+different component and a different thing to read while a show is running.
+
+**Accepted when:** the four numbers exist for at least one candidate on real
+session audio, and this file records which engine the app keeps and why. A
+measured "no" closes this package as legitimately as a "yes" does.
+
+**Risk:** the comparison is not engine against engine but *system* against
+system. The current path has a 6 s ceiling, a forced cut with overlap, a
+vocabulary prompt (P15) and a per-segment language (P4) — a streaming
+transducer has none of those, and DE/EN code switching *within* one utterance
+is the case where it could be better or considerably worse. A WER number that
+ignores this says nothing. The second risk is that partial text which visibly
+rewrites itself is worse to work beside than text that arrives 500 ms later and
+stays put; that is a judgement for the house, not for a benchmark, and it
+should be made on a running screen before any of this is built.
+
+---
+
 
 ## Dependencies
 
@@ -1758,6 +1859,11 @@ rule, and its outbound action needs P12's file to write it down in.
 P18 hangs below everything because it reopens three packages rather than
 following them: P1's capture, P4's GPU backend and P13's packaging, each for a
 second platform. Nothing between them changes.
+
+P20 is drawn nowhere on purpose. It reaches back into P3, P4, P5 and P7 if it
+is ever answered with a yes, and into nothing at all if it is answered with a
+no — and until it has been measured, which of the two it is remains unknown.
+Sequencing it into the graph would claim a decision this file has not made.
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached, and
 confirmed on real hardware in the live session of 2026-09-21.*
@@ -1801,11 +1907,17 @@ no longer on it.
    only a house can answer are whether a Companion press URL fires from the
    body the editor produces, and whether three seconds and one retry are the
    right numbers on a network with a show on it.
-5. **P15's named lists.** Not the measurement — that went with P14 — but the
+5. **P20's measurement, if the house asks for it.** Deliberately behind the
+   evenings above, because they decide whether it is worth taking: a streaming
+   engine buys latency and costs nearly everything else this pipeline has
+   accumulated, and only somebody sitting in front of the running app can say
+   whether the wait for the speaker to stop is the complaint. If it is, the
+   spike is an afternoon on recorded session audio and answers it for good.
+6. **P15's named lists.** Not the measurement — that went with P14 — but the
    ability to keep a second list and switch between them, which is the only
    comparison left to anybody. One list with no alternative cannot be judged
    even by ear.
-6. **P18, the Windows port.** Last, and not because it is hard: it reopens
+7. **P18, the Windows port.** Last, and not because it is hard: it reopens
    capture, the GPU backend and packaging. The one part worth pulling forward
    is the hardware question in its **Risk** — which channels the interface
    exposes through WASAPI — because it can be answered on the target machine in
