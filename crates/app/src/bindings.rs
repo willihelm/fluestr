@@ -8,8 +8,8 @@
 //! value that silently arrives as `undefined`.
 //!
 //! What ts-rs cannot carry is the handful of **constants** the two sides have
-//! to agree on: a schema version, a default port, a worker count. They are not
-//! types, so this module writes them, in the same run and into the same
+//! to agree on: a schema version, a default port, a worker count, the ends of
+//! a slider's range. They are not types, so this module writes them, in the same run and into the same
 //! directory. Small, but they are exactly the kind of number that is copied
 //! once and then changed on one side only.
 
@@ -72,6 +72,46 @@ export const GAIN_DB_MIN = {gain_min};
  * The loudest, in decibels. Mirrors `audio_core::gain::MAX_DB`.
  */
 export const GAIN_DB_MAX = {gain_max};
+
+/**
+ * The shortest pause the Settings page will offer as the one that ends a
+ * segment, in milliseconds. Mirrors the start of `config::Tuning::SILENCE_MS`,
+ * which clamps again on the way through the file — below it the pause inside
+ * a compound word ends the segment, which is a chopped-up app rather than a
+ * faster one.
+ */
+export const SILENCE_MS_MIN = {silence_min};
+
+/**
+ * The longest, in milliseconds. Mirrors the end of `config::Tuning::SILENCE_MS`.
+ */
+export const SILENCE_MS_MAX = {silence_max};
+
+/**
+ * The lowest ceiling on one segment the page will offer, in milliseconds.
+ * Mirrors the start of `config::Tuning::MAX_SEGMENT_MS`: whisper degrades
+ * badly below about two seconds of audio, so this is a floor rather than a
+ * step on the way to a smaller number.
+ */
+export const MAX_SEGMENT_MS_MIN = {max_segment_min};
+
+/**
+ * The highest, in milliseconds. Mirrors the end of
+ * `config::Tuning::MAX_SEGMENT_MS`.
+ */
+export const MAX_SEGMENT_MS_MAX = {max_segment_max};
+
+/**
+ * The three detection thresholds as they stand when nobody has moved them
+ * (P12). Mirrors `config::Tuning::default()`, which is itself the constants
+ * the app compiled in before they were settings — so a file written before
+ * that and a fresh install describe the same pipeline.
+ */
+export const DEFAULT_TUNING = {{
+  silenceTimeoutMs: {default_silence},
+  maxSegmentMs: {default_max_segment},
+  speechThresholdPercent: {default_threshold},
+}};
 "#,
         version = crate::config::VERSION,
         custom = crate::models::CUSTOM,
@@ -80,6 +120,13 @@ export const GAIN_DB_MAX = {gain_max};
         remote_port = crate::remote::DEFAULT_PORT,
         gain_min = audio_core::gain::MIN_DB,
         gain_max = audio_core::gain::MAX_DB,
+        silence_min = crate::config::Tuning::SILENCE_MS.start(),
+        silence_max = crate::config::Tuning::SILENCE_MS.end(),
+        max_segment_min = crate::config::Tuning::MAX_SEGMENT_MS.start(),
+        max_segment_max = crate::config::Tuning::MAX_SEGMENT_MS.end(),
+        default_silence = crate::config::Tuning::default().silence_timeout_ms,
+        default_max_segment = crate::config::Tuning::default().max_segment_ms,
+        default_threshold = crate::config::Tuning::default().speech_threshold_percent,
     )
 }
 

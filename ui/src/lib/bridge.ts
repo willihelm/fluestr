@@ -49,6 +49,7 @@ import type {
   StoredRemote,
   StoredRule,
   StoredSortDirection,
+  Tuning,
 } from "./generated/config";
 import type {
   DownloadStage,
@@ -101,6 +102,7 @@ export type {
   StreamLevel,
   StreamUpdate,
   TranscriptEvent,
+  Tuning,
 };
 
 // The values the two sides agree on that are not types — a schema version, a
@@ -111,10 +113,15 @@ export {
   CONFIG_VERSION,
   CUSTOM_MODEL,
   DEFAULT_WORKERS,
+  DEFAULT_TUNING,
   GAIN_DB_MAX,
   GAIN_DB_MIN,
+  MAX_SEGMENT_MS_MAX,
+  MAX_SEGMENT_MS_MIN,
   MAX_WORKERS,
   REMOTE_DEFAULT_PORT,
+  SILENCE_MS_MAX,
+  SILENCE_MS_MIN,
 } from "./generated/constants";
 
 export const appVersion = () => call<string>("app_version");
@@ -298,6 +305,18 @@ export const stopSession = () => call<void>("stop_session");
 /// always, by its one writer.
 export const updateStreamConfig = (update: StreamUpdate) =>
   call<SessionState>("update_stream_config", { update });
+
+/// Moves the detection thresholds of the running session (P12).
+///
+/// Beside the save rather than part of it: the file is where the three
+/// numbers live, and the page writes it on its own debounce like every other
+/// setting — but a threshold that only takes effect at the next Start is no
+/// use to somebody setting it by ear while the room talks.
+///
+/// Succeeds with nothing running, and answers with nothing: no session state
+/// changes, so there is nothing for a view to adopt. The next Start reads the
+/// numbers from the file.
+export const updateTuning = (tuning: Tuning) => call<void>("update_tuning", { tuning });
 
 /// Opens the input device just to meter it, while no session is running (P8).
 ///

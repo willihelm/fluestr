@@ -211,6 +211,20 @@ pub struct SessionConfig {
     /// as "no vocabulary" rather than failing to start a session.
     #[serde(default)]
     pub vocabulary: Option<String>,
+    /// How the pipeline cuts and what it listens to (P12), for **every**
+    /// stream.
+    ///
+    /// Session-level like the vocabulary, and for a reason of its own: the
+    /// three numbers describe the intercom system and the room it is in, not
+    /// one position on it. A per-channel detector threshold would be eight
+    /// numbers to keep in agreement and an operator who cannot say, after a
+    /// change, which of them was in force.
+    ///
+    /// `default` — the constants the app compiled in before these were
+    /// settings — so a caller written before this field existed starts the
+    /// session the app always started.
+    #[serde(default)]
+    pub tuning: crate::config::Tuning,
 }
 
 /// Identifies one run of the pipeline.
@@ -472,6 +486,15 @@ pub struct Session {
     /// no business being locked on the pump path, and a change is a handful of
     /// bytes a few times an evening.
     languages: mpsc::Sender<(u16, String)>,
+    /// Detector and segmenter thresholds on their way to the same thread, for
+    /// every stream at once (P12).
+    ///
+    /// A channel for the language's reason. Separate from it rather than one
+    /// message type with an optional stream id, because the two really are
+    /// different messages: a language belongs to one channel and this belongs
+    /// to all of them, and folding them together would mean every send
+    /// stating which of the two it meant.
+    tuning: mpsc::Sender<crate::config::Tuning>,
     /// The trim of every live stream, shared with the pipelines that apply it.
     ///
     /// Shared state rather than a channel, unlike the language: a knob being
@@ -718,8 +741,14 @@ impl Session {
                     // front of this segmenter and the sidecar's backstop
                     // behind it. Each stream needs its own instance — the
                     // detector carries per-stream state.
-                    speech_detector(vad_model.as_deref()),
+                    {
+                        let mut vad = speech_detector(vad_model.as_deref());
+                        vad.set_speech_threshold(config.tuning.speech_threshold());
+                        vad
+                    },
                     SegmenterConfig {
+                        silence_timeout: config.tuning.silence_timeout(),
+                        max_segment: config.tuning.max_segment(),
                         language_mode: LanguageMode::Fixed {
                             language: LanguageCode::new(&stream.language),
                         },
@@ -746,6 +775,7 @@ impl Session {
         let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
         let stop = Arc::new(AtomicBool::new(false));
         let (languages, language_rx) = mpsc::channel();
+        let (tuning, tuning_rx) = mpsc::channel();
         let aggregating = spawn_aggregator(session_id, results, labels.clone(), events.clone());
 
         // The session's zero point, read once in both clocks. `started_at_ms`
@@ -762,6 +792,7 @@ impl Session {
                 pool: pool.clone(),
                 capture_events: capture_event_rx,
                 languages: language_rx,
+                tuning: tuning_rx,
                 stop: stop.clone(),
                 events: events.clone(),
                 device_name: info.name.clone(),
@@ -801,6 +832,7 @@ impl Session {
                 sample_rate: granted,
                 labels,
                 languages,
+                tuning,
                 gains,
                 mutes,
                 running: std::sync::Mutex::new(state.clone()),
@@ -895,6 +927,22 @@ impl Session {
 
         self.events.state(state.clone());
         Ok(state)
+    }
+
+    /// Moves the detection thresholds of every stream while the session runs
+    /// (P12).
+    ///
+    /// Not a [`StreamUpdate`]: it belongs to no channel and changes no part of
+    /// the session state, so there is nothing to announce and nothing for a
+    /// view to adopt. The Settings page that sent it already holds the numbers
+    /// it sent, and the file it writes them to is the one every other view
+    /// reads them from.
+    ///
+    /// A closed channel is not an error, for the language's reason: the
+    /// processing thread has left, the session is ending, and there are no
+    /// segmenters for the change to reach.
+    pub fn update_tuning(&self, tuning: crate::config::Tuning) {
+        let _ = self.tuning.send(tuning);
     }
 
     /// Stops in the order the data flows, so nothing is left half-processed.
@@ -996,6 +1044,8 @@ struct Wiring {
     /// Language changes from `Session::update_stream`. Applied in the thread
     /// because it owns the segmenters.
     languages: mpsc::Receiver<(u16, String)>,
+    /// Threshold changes from `Session::update_tuning`, for every pipeline.
+    tuning: mpsc::Receiver<crate::config::Tuning>,
     stop: Arc<AtomicBool>,
     events: Arc<dyn EventSink>,
     /// For the disconnect message, and only for that. The event itself
@@ -1012,6 +1062,7 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
         pool,
         capture_events,
         languages,
+        tuning,
         stop,
         events,
         device_name,
@@ -1060,6 +1111,29 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                     pipeline.segmenter.set_language_mode(LanguageMode::Fixed {
                         language: LanguageCode::new(&language),
                     });
+                }
+
+                // For every pipeline, unlike the language: the thresholds
+                // describe the system, not a position on it. Only the last
+                // message of a burst matters — a slider being dragged sends
+                // one per pointer event — so the loop applies them in order
+                // and the last one wins, which costs nothing and keeps this
+                // from having to look ahead.
+                for tuning in tuning.try_iter() {
+                    tracing::info!(
+                        silence_ms = tuning.silence_timeout_ms,
+                        max_segment_ms = tuning.max_segment_ms,
+                        threshold = tuning.speech_threshold_percent,
+                        "detection thresholds changed"
+                    );
+                    for pipeline in &mut pipelines {
+                        pipeline
+                            .segmenter
+                            .set_timing(tuning.silence_timeout(), tuning.max_segment());
+                        pipeline
+                            .segmenter
+                            .set_speech_threshold(tuning.speech_threshold());
+                    }
                 }
 
                 let mut failed = None;

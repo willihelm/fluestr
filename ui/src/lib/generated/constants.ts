@@ -50,3 +50,43 @@ export const GAIN_DB_MIN = -20;
  * The loudest, in decibels. Mirrors `audio_core::gain::MAX_DB`.
  */
 export const GAIN_DB_MAX = 20;
+
+/**
+ * The shortest pause the Settings page will offer as the one that ends a
+ * segment, in milliseconds. Mirrors the start of `config::Tuning::SILENCE_MS`,
+ * which clamps again on the way through the file — below it the pause inside
+ * a compound word ends the segment, which is a chopped-up app rather than a
+ * faster one.
+ */
+export const SILENCE_MS_MIN = 150;
+
+/**
+ * The longest, in milliseconds. Mirrors the end of `config::Tuning::SILENCE_MS`.
+ */
+export const SILENCE_MS_MAX = 2000;
+
+/**
+ * The lowest ceiling on one segment the page will offer, in milliseconds.
+ * Mirrors the start of `config::Tuning::MAX_SEGMENT_MS`: whisper degrades
+ * badly below about two seconds of audio, so this is a floor rather than a
+ * step on the way to a smaller number.
+ */
+export const MAX_SEGMENT_MS_MIN = 2000;
+
+/**
+ * The highest, in milliseconds. Mirrors the end of
+ * `config::Tuning::MAX_SEGMENT_MS`.
+ */
+export const MAX_SEGMENT_MS_MAX = 15000;
+
+/**
+ * The three detection thresholds as they stand when nobody has moved them
+ * (P12). Mirrors `config::Tuning::default()`, which is itself the constants
+ * the app compiled in before they were settings — so a file written before
+ * that and a fresh install describe the same pipeline.
+ */
+export const DEFAULT_TUNING = {
+  silenceTimeoutMs: 500,
+  maxSegmentMs: 6000,
+  speechThresholdPercent: 50,
+};

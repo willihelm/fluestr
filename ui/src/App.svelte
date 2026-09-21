@@ -17,6 +17,8 @@
     newProfile,
     reuseKeys,
     toStoredConfig,
+    clampTuning,
+    DEFAULT_TUNING,
     NO_REMOTE,
     type ModelChoice,
     type Profile,
@@ -54,6 +56,7 @@
     startSession,
     stopSession,
     updateStreamConfig,
+    updateTuning,
     startMonitor,
     stopMonitor,
     setMonitorGain,
@@ -66,6 +69,7 @@
     type StoredRemote,
     type StreamLevel,
     type TranscriptEvent,
+    type Tuning,
     type WebhookStatus,
   } from "./lib/bridge";
 
@@ -118,6 +122,12 @@
   // window's own chat may be turned over from the bar above it, and that is
   // the view's business and never written here.
   let chatSort = $state<SortDirection>(DEFAULT_DIRECTION);
+  // How speech is found and where a segment is cut (P12). Beside the
+  // vocabulary rather than inside a profile: how hard the intercom is to hear
+  // belongs to the house and its beltpacks, not to the production being
+  // carried through it. Pushed into a running session as well as stored —
+  // these are set by ear, which means while somebody is talking.
+  let tuning = $state<Tuning>({ ...DEFAULT_TUNING });
   // Whether this view can still reach the app. Always "connected" in the app's
   // own windows; on a remote it is the difference between a live chat and a
   // frozen picture of one, which has to be said rather than looked like
@@ -309,6 +319,12 @@
         deviceId: deviceId || device,
         streams: toConfig(channels),
         vocabulary: null,
+        // Neither of the last two reaches anything here — metering does not
+        // segment and does not decode — but the meters are keyed on the
+        // stream ids in `streams`, and a second shape of what starts the
+        // device would be a second thing that can disagree about which
+        // channel is which.
+        tuning: clampTuning(tuning),
       })
         .then(() => {
           metering = true;
@@ -408,6 +424,7 @@
             models: {},
             remote: { ...NO_REMOTE },
             chatSort: DEFAULT_DIRECTION,
+            tuning: { ...DEFAULT_TUNING },
           };
 
       if (restored.profiles.length === 0) {
@@ -436,6 +453,7 @@
       if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
       models = restored.models;
       remote = restored.remote;
+      tuning = restored.tuning;
 
       loaded = true;
 
@@ -548,7 +566,15 @@
     // Built here rather than in the timer: this is what reads every field, and
     // reading them is what makes this effect run again when one of them
     // changes.
-    const config = toStoredConfig(profiles, activeKey, vocabulary, models, remote, chatSort);
+    const config = toStoredConfig(
+      profiles,
+      activeKey,
+      vocabulary,
+      models,
+      remote,
+      chatSort,
+      tuning,
+    );
     latest = config;
 
     let stopWaiting: (() => void) | null = null;
@@ -605,6 +631,7 @@
     models = restored.models;
     remote = restored.remote;
     chatSort = restored.chatSort;
+    tuning = restored.tuning;
   };
 
   // The compiled rules live on the backend, where every transcript is
@@ -640,6 +667,36 @@
 
     return () => clearTimeout(timer);
   });
+
+  // The detection thresholds, pushed into the running session the way the
+  // rules are and for the same reason (P12): the file is a debounce behind
+  // the slider, and a threshold that starts working a second late is a
+  // threshold nobody can set by ear.
+  //
+  // Only when a session is running. Without one there is nothing to push to —
+  // the next Start carries the numbers itself — and the backend would
+  // cheerfully accept a call that reached nothing.
+  let pushed: Tuning | null = null;
+  $effect(() => {
+    if (!loaded || !running) return;
+    const next = clampTuning(tuning);
+    // Dragging a slider fires per pointer event, and the pipeline does not
+    // need the forty values on the way to the one that was let go of.
+    if (pushed !== null && sameTuning(pushed, next)) return;
+
+    const timer = setTimeout(() => {
+      updateTuning(next)
+        .then(() => (pushed = next))
+        .catch((e) => console.warn("the thresholds did not reach the session:", e));
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  });
+
+  const sameTuning = (a: Tuning, b: Tuning) =>
+    a.silenceTimeoutMs === b.silenceTimeoutMs &&
+    a.maxSegmentMs === b.maxSegmentMs &&
+    a.speechThresholdPercent === b.speechThresholdPercent;
 
   // A deleted channel has to leave the groups it was in, and a deleted group
   // has to release the chat. Both are cheap to do on every change and easy to
@@ -808,6 +865,9 @@
         streams: toConfig(channels),
         // One vocabulary for every stream — see `vocabulary.ts`.
         vocabulary: vocabularyConfig(vocabulary),
+        // And one set of thresholds, for the same reason: they describe the
+        // intercom system, not one position on it (P12).
+        tuning: clampTuning(tuning),
       });
       noteSession(status);
       view = "chat";
@@ -989,8 +1049,10 @@
       bind:models
       bind:remote
       bind:sort={chatSort}
+      bind:tuning
       {deviceChannels}
       locked={running || busy}
+      {running}
       {saveError}
       {liveError}
       live={running ? liveStream : null}

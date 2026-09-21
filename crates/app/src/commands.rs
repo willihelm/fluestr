@@ -105,6 +105,16 @@ pub enum Command {
     UpdateStreamConfig {
         update: StreamUpdate,
     },
+    /// Moves the detection thresholds of a running session (P12).
+    ///
+    /// Beside `save_config` rather than part of it: the file is where the
+    /// numbers live and the Settings page writes it on its own debounce, but a
+    /// stored number that only takes effect at the next Start is no use to
+    /// somebody setting it by ear while the room talks. Succeeds with nothing
+    /// running — the file still has it, and the next session starts on it.
+    UpdateTuning {
+        tuning: crate::config::Tuning,
+    },
     /// Opens the device just to meter it, while no session is running (P8).
     ///
     /// Idempotent: asked for what is already being metered, it does nothing,
@@ -168,6 +178,7 @@ pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) -> Resul
         }
         Command::StopSession => json(stop_session(app)?),
         Command::UpdateStreamConfig { update } => json(update_stream_config(app, update)?),
+        Command::UpdateTuning { tuning } => json(update_tuning(app, tuning)?),
         // On a blocking thread, like Start: opening an audio device is a
         // driver call that can take a moment, and the async runtime is also
         // what serves the LAN remote.
@@ -622,6 +633,26 @@ fn update_stream_config<R: Runtime>(
         tracing::error!(error = ?err, "updating a running stream failed");
         err.to_string()
     })
+}
+
+/// Pushes the thresholds into the running session, if there is one.
+///
+/// Unlike `update_stream_config` this does not refuse when nothing is running.
+/// The two are asking different things: a stream update names a stream that
+/// has to exist, while these three numbers are the app's settings — they are
+/// stored either way, and the next Start reads them from the file. Refusing
+/// would put "no session is running" on the Settings page every time somebody
+/// set up before a show.
+fn update_tuning<R: Runtime>(
+    app: &AppHandle<R>,
+    tuning: crate::config::Tuning,
+) -> Result<(), String> {
+    let state = state(app)?;
+    let session = state.session.lock().map_err(|_| "session state poisoned")?;
+    if let Some(session) = session.as_ref() {
+        session.update_tuning(tuning);
+    }
+    Ok(())
 }
 
 fn remote_status<R: Runtime>(app: &AppHandle<R>) -> Result<remote::Status, String> {

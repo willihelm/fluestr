@@ -163,7 +163,15 @@ remote: StoredRemote,
  * before this existed has no such field, and what it meant is what the
  * chat did then.
  */
-chatSort: StoredSortDirection, profiles: Array<StoredProfile>, };
+chatSort: StoredSortDirection, 
+/**
+ * How the pipeline cuts and what it listens to (P12). See [`Tuning`].
+ *
+ * `#[serde(default)]` — the constants the app used to compile in —
+ * because a file written before these were settings describes a session
+ * that ran on exactly those numbers.
+ */
+tuning: Tuning, profiles: Array<StoredProfile>, };
 
 /**
  * A named view onto some of the channels.
@@ -382,3 +390,61 @@ minIntervalMs: number, };
  * caller is asking the same question about the same thing.
  */
 export type StoredSortDirection = "newest-bottom" | "newest-top";
+
+/**
+ * The three numbers that decide how the pipeline cuts and what it listens
+ * to (P12).
+ *
+ * They were constants in the code until 2026-09-21, held back on purpose
+ * until the latency/accuracy sweep in P14 could say what they should be.
+ * P14 was set aside that day in favour of testing in the house, which
+ * inverts the argument rather than removing it: a number that is now found
+ * by ear has to be reachable while listening, and an operator who hears a
+ * word being cut off has to be able to do something about it before the next
+ * cue rather than after the show.
+ *
+ * **Whole numbers, and milliseconds rather than floats.** The file is one an
+ * operator may have to read or repair by hand, `550` is easier to be sure
+ * about than `0.55`, and it keeps this comparable with `==` — which
+ * [`save_config`](crate::commands) relies on to tell a configuration that
+ * changed from one that did not.
+ *
+ * Beside the profiles rather than inside one, for the vocabulary's reason
+ * rather than the model's: how hard the intercom is to hear — how much air a
+ * beltpack puts on the line, how clipped the house's cue calls are — is a
+ * property of the system in the building, and it outlives any one
+ * production. A patch carried to the next show should not arrive with the
+ * detector set for a different room.
+ */
+export type Tuning = { 
+/**
+ * How long a pause has to last before it ends a segment.
+ *
+ * The *latency* control, and the one an operator reaches for first: it is
+ * paid in full on every line of the chat, before the ~330 ms of decoding
+ * that follows it. Lower is faster and cuts more sentences in half.
+ */
+silenceTimeoutMs: number, 
+/**
+ * The ceiling on one segment, for a speaker who never pauses.
+ *
+ * The worst case an operator waits, and the only bound on it. Lower is
+ * faster and costs accuracy: whisper is trained on 30 s windows and
+ * degrades badly below about two seconds of audio, which is where the
+ * `[BREAK]`s and the invented sentences come from.
+ */
+maxSegmentMs: number, 
+/**
+ * How certain the detector has to be that a frame is speech, in whole
+ * percent.
+ *
+ * Lower hears the quiet ones and decodes more of the room; higher decodes
+ * less and loses a command murmured into a beltpack. One number, not two:
+ * the release threshold follows it at a fixed distance, which is what
+ * keeps a word from falling apart mid-vowel — see
+ * [`audio_core::silero::HYSTERESIS`].
+ *
+ * Percent rather than a probability for this struct's reason, and `u8`
+ * because the range is 0–100 and nothing here needs more.
+ */
+speechThresholdPercent: number, };

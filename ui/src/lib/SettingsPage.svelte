@@ -4,8 +4,9 @@
     | "audio"
     | "groups"
     | "rules"
-    | "vocabulary"
     | "models"
+    | "detection"
+    | "vocabulary"
     | "remote"
     | "view";
 
@@ -54,6 +55,7 @@
   import ModelPicker from "./ModelPicker.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
   import ViewSettings from "./ViewSettings.svelte";
+  import DetectionSettings from "./DetectionSettings.svelte";
   import { lengthWarning } from "./vocabulary";
   import { connectedDevice, type ModelChoice, type Profile } from "./profiles";
   import type { SortDirection } from "./sort";
@@ -64,6 +66,7 @@
     type Language,
     type StoredRemote,
     type StreamLevel,
+    type Tuning,
   } from "./bridge";
   import { onMount } from "svelte";
   import { watchNarrow } from "./layout";
@@ -87,8 +90,18 @@
     /// any one patch, and it is not a property of the machine either — every
     /// view the remote serves opens the way this says.
     sort: SortDirection;
+    /// How speech is found and where a segment is cut (P12). In the General
+    /// half with the vocabulary, and for its reason: how hard the intercom is
+    /// to hear belongs to the house, not to the production passing through
+    /// it.
+    tuning: Tuning;
     deviceChannels: number;
     locked: boolean;
+    /// Whether capture is running. Narrower than `locked`, which also covers
+    /// a session that is starting: the Detection section says whether a
+    /// change reaches the audio *now*, and during a start there is nothing
+    /// for it to reach yet.
+    running: boolean;
     saveError: string | null;
     /// Why a change to the running session was refused, or `null`. Its own
     /// strip and not `saveError`: "Settings not saved" would be wrong twice
@@ -128,8 +141,10 @@
     models = $bindable(),
     remote = $bindable(),
     sort = $bindable(),
+    tuning = $bindable(),
     deviceChannels,
     locked,
+    running,
     saveError,
     liveError,
     live,
@@ -230,6 +245,10 @@
     // at a setting that is off on most machines and fine on the rest.
     remote: null,
     models: modelFlag,
+    // Never flagged: there is no wrong setting here, only one that suits the
+    // house better or worse, and the operator finds that out by listening
+    // rather than by being told.
+    detection: null,
     // Never flagged: a reading direction cannot be wrong, and the window it
     // applies to is where it is seen.
     view: null,
@@ -243,6 +262,7 @@
       scope: "General",
       items: [
         { id: "models", title: "Models" },
+        { id: "detection", title: "Detection" },
         { id: "vocabulary", title: "Vocabulary" },
         { id: "view", title: "View" },
         // Only in the app. The remote's own Settings page shows everything
@@ -439,6 +459,10 @@
           <RemoteSettings bind:remote />
         </div>
       {/if}
+
+      <div class="sheet" hidden={section !== "detection"}>
+        <DetectionSettings bind:tuning {running} />
+      </div>
 
       <div class="sheet" hidden={section !== "view"}>
         <ViewSettings bind:sort />

@@ -329,6 +329,120 @@ pub enum SortDirection {
     NewestTop,
 }
 
+/// The three numbers that decide how the pipeline cuts and what it listens
+/// to (P12).
+///
+/// They were constants in the code until 2026-09-21, held back on purpose
+/// until the latency/accuracy sweep in P14 could say what they should be.
+/// P14 was set aside that day in favour of testing in the house, which
+/// inverts the argument rather than removing it: a number that is now found
+/// by ear has to be reachable while listening, and an operator who hears a
+/// word being cut off has to be able to do something about it before the next
+/// cue rather than after the show.
+///
+/// **Whole numbers, and milliseconds rather than floats.** The file is one an
+/// operator may have to read or repair by hand, `550` is easier to be sure
+/// about than `0.55`, and it keeps this comparable with `==` — which
+/// [`save_config`](crate::commands) relies on to tell a configuration that
+/// changed from one that did not.
+///
+/// Beside the profiles rather than inside one, for the vocabulary's reason
+/// rather than the model's: how hard the intercom is to hear — how much air a
+/// beltpack puts on the line, how clipped the house's cue calls are — is a
+/// property of the system in the building, and it outlives any one
+/// production. A patch carried to the next show should not arrive with the
+/// detector set for a different room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts")]
+pub struct Tuning {
+    /// How long a pause has to last before it ends a segment.
+    ///
+    /// The *latency* control, and the one an operator reaches for first: it is
+    /// paid in full on every line of the chat, before the ~330 ms of decoding
+    /// that follows it. Lower is faster and cuts more sentences in half.
+    pub silence_timeout_ms: u64,
+    /// The ceiling on one segment, for a speaker who never pauses.
+    ///
+    /// The worst case an operator waits, and the only bound on it. Lower is
+    /// faster and costs accuracy: whisper is trained on 30 s windows and
+    /// degrades badly below about two seconds of audio, which is where the
+    /// `[BREAK]`s and the invented sentences come from.
+    pub max_segment_ms: u64,
+    /// How certain the detector has to be that a frame is speech, in whole
+    /// percent.
+    ///
+    /// Lower hears the quiet ones and decodes more of the room; higher decodes
+    /// less and loses a command murmured into a beltpack. One number, not two:
+    /// the release threshold follows it at a fixed distance, which is what
+    /// keeps a word from falling apart mid-vowel — see
+    /// [`audio_core::silero::HYSTERESIS`].
+    ///
+    /// Percent rather than a probability for this struct's reason, and `u8`
+    /// because the range is 0–100 and nothing here needs more.
+    pub speech_threshold_percent: u8,
+}
+
+impl Default for Tuning {
+    /// The constants as they stood when this became a setting, so that a file
+    /// written before it existed and a fresh install behave exactly as the
+    /// app did.
+    fn default() -> Self {
+        let segmenter = audio_core::SegmenterConfig::default();
+        Self {
+            silence_timeout_ms: segmenter.silence_timeout.as_millis() as u64,
+            max_segment_ms: segmenter.max_segment.as_millis() as u64,
+            speech_threshold_percent: (audio_core::silero::DEFAULT_ONSET * 100.0).round() as u8,
+        }
+    }
+}
+
+impl Tuning {
+    /// The narrowest pause that still ends a segment, and the widest.
+    ///
+    /// Below ~150 ms the pause inside a compound word ends the segment, which
+    /// is not a faster app but a chopped-up one. Above two seconds the wait is
+    /// longer than anything the ceiling would allow anyway.
+    pub const SILENCE_MS: std::ops::RangeInclusive<u64> = 150..=2_000;
+
+    /// The lowest ceiling worth offering, and the highest.
+    ///
+    /// Two seconds is where whisper's accuracy starts falling off a cliff, so
+    /// it is the floor rather than a step on the way to a smaller one.
+    /// Fifteen seconds is well past useful and is here only so that a house
+    /// that wants whole paragraphs is not stopped by this.
+    pub const MAX_SEGMENT_MS: std::ops::RangeInclusive<u64> = 2_000..=15_000;
+
+    /// Silence that ends a segment, in range.
+    pub fn silence_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.silence_timeout_ms
+                .clamp(*Self::SILENCE_MS.start(), *Self::SILENCE_MS.end()),
+        )
+    }
+
+    /// The ceiling, in range.
+    pub fn max_segment(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.max_segment_ms
+                .clamp(*Self::MAX_SEGMENT_MS.start(), *Self::MAX_SEGMENT_MS.end()),
+        )
+    }
+
+    /// The detector's onset threshold as a probability.
+    pub fn speech_threshold(&self) -> f32 {
+        self.speech_threshold_percent.min(100) as f32 / 100.0
+    }
+
+    /// Brings every field into range, so that a hand-edited file is corrected
+    /// visibly on the Settings page rather than silently at each use.
+    fn clamp(&mut self) {
+        self.silence_timeout_ms = self.silence_timeout().as_millis() as u64;
+        self.max_segment_ms = self.max_segment().as_millis() as u64;
+        self.speech_threshold_percent = self.speech_threshold_percent.min(100);
+    }
+}
+
 /// The whole configuration file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -429,6 +543,13 @@ pub struct Config {
     /// chat did then.
     #[serde(default)]
     pub chat_sort: SortDirection,
+    /// How the pipeline cuts and what it listens to (P12). See [`Tuning`].
+    ///
+    /// `#[serde(default)]` — the constants the app used to compile in —
+    /// because a file written before these were settings describes a session
+    /// that ran on exactly those numbers.
+    #[serde(default)]
+    pub tuning: Tuning,
     pub profiles: Vec<Profile>,
 }
 
@@ -459,6 +580,7 @@ impl Default for Config {
             alerts: Vec::new(),
             remote: crate::remote::RemoteConfig::default(),
             chat_sort: SortDirection::default(),
+            tuning: Tuning::default(),
             profiles: Vec::new(),
         }
     }
@@ -513,6 +635,8 @@ impl Config {
         if self.active >= self.profiles.len() {
             self.active = 0;
         }
+
+        self.tuning.clamp();
 
         self.version = VERSION;
     }
@@ -746,6 +870,11 @@ mod tests {
                 port: 8787,
             },
             chat_sort: SortDirection::NewestTop,
+            tuning: Tuning {
+                silence_timeout_ms: 350,
+                max_segment_ms: 4_000,
+                speech_threshold_percent: 60,
+            },
             profiles: vec![
                 Profile {
                     name: "Probebühne".into(),
@@ -1109,6 +1238,54 @@ mod tests {
     }
 
     #[test]
+    fn a_file_written_before_the_thresholds_were_settings_keeps_the_constants() {
+        // The three numbers were compiled in until P12 exposed them. A file
+        // from before that describes a session that ran on exactly those
+        // values, so reading it must produce them and not a new opinion.
+        let path = temp_dir().join(FILE_NAME);
+        fs::write(
+            &path,
+            r##"{"version":2,"active":0,"vocabulary":null,"profiles":[]}"##,
+        )
+        .expect("writing the old file");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.tuning, Tuning::default());
+        let segmenter = audio_core::SegmenterConfig::default();
+        assert_eq!(loaded.tuning.silence_timeout(), segmenter.silence_timeout);
+        assert_eq!(loaded.tuning.max_segment(), segmenter.max_segment);
+        assert_eq!(
+            loaded.tuning.speech_threshold(),
+            audio_core::silero::DEFAULT_ONSET
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_threshold_is_corrected_where_it_can_be_seen() {
+        // Clamping only at each use would leave the Settings page showing a
+        // number the pipeline is not running on. Correcting it on the way
+        // through the file puts the page and the audio back in agreement, and
+        // the operator can see that their 10 ms was not taken.
+        let path = temp_dir().join(FILE_NAME);
+        fs::write(
+            &path,
+            r##"{"version":2,"active":0,"vocabulary":null,"profiles":[],
+                "tuning":{"silenceTimeoutMs":10,"maxSegmentMs":600000,
+                          "speechThresholdPercent":250}}"##,
+        )
+        .expect("writing the file");
+
+        let loaded = load(&path);
+        assert_eq!(
+            loaded.tuning.silence_timeout_ms,
+            *Tuning::SILENCE_MS.start()
+        );
+        assert_eq!(loaded.tuning.max_segment_ms, *Tuning::MAX_SEGMENT_MS.end());
+        assert_eq!(loaded.tuning.speech_threshold_percent, 100);
+        assert_eq!(loaded.tuning.speech_threshold(), 1.0);
+    }
+
+    #[test]
     fn a_cleared_vocabulary_stays_cleared() {
         // `None` is "never set" and the UI fills in its default; `Some("")` is
         // an operator who turned the prompt off. Collapsing the two would
@@ -1147,11 +1324,16 @@ mod tests {
                 "modelPath",
                 "profiles",
                 "remote",
+                "tuning",
                 "vadModel",
                 "version",
                 "vocabulary",
                 "workers",
             ]
+        );
+        assert_eq!(
+            keys(&json["tuning"]),
+            ["maxSegmentMs", "silenceTimeoutMs", "speechThresholdPercent"]
         );
         assert_eq!(
             keys(&json["profiles"][0]),

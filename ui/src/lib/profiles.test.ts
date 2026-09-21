@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 import {
   adoptDeviceIds,
   canonical,
+  clampTuning,
+  DEFAULT_TUNING,
   connectedDevice,
   duplicate,
   fromStored,
@@ -371,6 +373,68 @@ describe("the configuration as a whole", () => {
     );
 
     expect(restored.chatSort).toBe("newest-bottom");
+  });
+
+  // The three detection thresholds (P12), stored once for the whole app
+  // beside the vocabulary: how hard the intercom is to hear belongs to the
+  // house, not to the production passing through it.
+  it("stores the thresholds it was given", () => {
+    const config = toStoredConfig([aProfile()], 1, "", {}, undefined, undefined, {
+      silenceTimeoutMs: 350,
+      maxSegmentMs: 4_000,
+      speechThresholdPercent: 65,
+    });
+
+    expect(config.tuning).toEqual({
+      silenceTimeoutMs: 350,
+      maxSegmentMs: 4_000,
+      speechThresholdPercent: 65,
+    });
+  });
+
+  it("writes the defaults when nothing was chosen", () => {
+    expect(toStoredConfig([aProfile()], 1, "").tuning).toEqual(DEFAULT_TUNING);
+  });
+
+  // A file written before the thresholds were settings. What its absence
+  // meant is the constants the app ran on then, and reading it as anything
+  // else would change the pipeline of every setup that has one.
+  it("reads a file with no thresholds as the pipeline it used to be", () => {
+    const restored = fromStoredConfig(
+      anOldFile<StoredConfig>({
+        version: 2,
+        active: 0,
+        vocabulary: null,
+        profiles: [],
+      }),
+    );
+
+    expect(restored.tuning).toEqual(DEFAULT_TUNING);
+  });
+
+  // The box is left mid-number when the window closes, which is exactly the
+  // case the last-ditch save exists for. The backend clamps again; this is so
+  // that what the page shows afterwards is what the audio is running on.
+  it("brings a hand-edited threshold back into range", () => {
+    const clamped = clampTuning({
+      silenceTimeoutMs: 5,
+      maxSegmentMs: 600_000,
+      speechThresholdPercent: 250,
+    });
+
+    expect(clamped.silenceTimeoutMs).toBeGreaterThanOrEqual(150);
+    expect(clamped.maxSegmentMs).toBeLessThanOrEqual(15_000);
+    expect(clamped.speechThresholdPercent).toBe(100);
+  });
+
+  it("falls back to the default rather than storing a box that is not a number", () => {
+    const clamped = clampTuning({
+      silenceTimeoutMs: Number.NaN,
+      maxSegmentMs: Number.NaN,
+      speechThresholdPercent: Number.NaN,
+    });
+
+    expect(clamped).toEqual(DEFAULT_TUNING);
   });
 
   it("comes back on the profile that was in use", () => {

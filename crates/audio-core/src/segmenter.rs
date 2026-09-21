@@ -48,6 +48,15 @@ pub struct SegmenterConfig {
     /// `max_segment` rather than adding to it — the segment stays within the
     /// ceiling, it just advances less far.
     pub forced_overlap: Duration,
+    /// How far back a forced cut looks for a quiet frame to cut at.
+    ///
+    /// **Independent of `silence_timeout` on purpose.** It was derived from it
+    /// until 2026-09-21, which meant shortening the pause that ends a segment
+    /// also narrowed the window a forced cut searches — one number moving two
+    /// behaviours, so nobody tuning the timeout by ear could tell which of the
+    /// two had changed the result. The search window is a property of how long
+    /// a word is, not of how long a pause has to be before it counts.
+    pub cut_search_window: Duration,
     /// Anything shorter is discarded — clicks, coughs, a knock on the desk.
     pub min_segment: Duration,
     pub language_mode: LanguageMode,
@@ -62,6 +71,11 @@ impl Default for SegmenterConfig {
             silence_timeout: Duration::from_millis(500),
             max_segment: Duration::from_secs(6),
             forced_overlap: Duration::from_millis(500),
+            // Long enough to hold a whole word, which is what the search is
+            // trying to avoid cutting through. It happens to be what the
+            // derived value came to at the default timeout, so the behaviour
+            // at the defaults is unchanged by the decoupling.
+            cut_search_window: Duration::from_millis(500),
             min_segment: Duration::from_millis(300),
             language_mode: LanguageMode::default(),
             initial_prompt: None,
@@ -144,8 +158,7 @@ impl Segmenter {
             silence_frames,
             max_samples: samples(config.max_segment).max(frame),
             min_samples: samples(config.min_segment),
-            // The plan's "quietest point in the last 500 ms".
-            flush_window_frames: silence_frames.max(1),
+            flush_window_frames: (samples(config.cut_search_window) / frame).max(1),
             // Bounded by the ceiling: an overlap as long as the segment would
             // never let the stream advance.
             overlap_samples: samples(config.forced_overlap).min(samples(config.max_segment) / 2),
@@ -253,6 +266,36 @@ impl Segmenter {
     /// the same either way.
     pub fn set_language_mode(&mut self, mode: LanguageMode) {
         self.config.language_mode = mode;
+    }
+
+    /// Moves the two timing thresholds while the stream is running (P12).
+    ///
+    /// Both are read per frame — `silence_timeout` when deciding whether a
+    /// pause has gone on long enough, `max_segment` when checking the ceiling
+    /// — so a change lands on the segment being spoken rather than on the one
+    /// after it. Shortening the ceiling below what `current` already holds
+    /// therefore cuts it at the next frame, which is the same thing the
+    /// ceiling does to any segment that reaches it and needs no special case.
+    ///
+    /// The search window is not here: it is not a control (see
+    /// [`SegmenterConfig::cut_search_window`]), and nothing on screen moves
+    /// it.
+    pub fn set_timing(&mut self, silence_timeout: Duration, max_segment: Duration) {
+        self.config.silence_timeout = silence_timeout;
+        self.config.max_segment = max_segment;
+        self.silence_frames = (samples(silence_timeout) / self.frame).max(1);
+        self.max_samples = samples(max_segment).max(self.frame);
+        // Derived from the ceiling, so it has to follow it down: an overlap
+        // longer than half the segment would leave the stream advancing by
+        // less than it carries back.
+        self.overlap_samples = samples(self.config.forced_overlap).min(self.max_samples / 2);
+    }
+
+    /// Moves the speech detector's threshold while the stream is running
+    /// (P12). A no-op on a detector that has no such number — see
+    /// [`Vad::set_speech_threshold`].
+    pub fn set_speech_threshold(&mut self, onset: f32) {
+        self.vad.set_speech_threshold(onset);
     }
 
     /// Segments emitted so far. Also the next sequence number.
@@ -841,6 +884,87 @@ mod tests {
         let after = run(&mut seg, &signal);
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].language_mode.whisper_language(), Some("en"));
+    }
+
+    #[test]
+    fn the_search_window_does_not_follow_the_silence_timeout() {
+        // The coupling this replaced: `flush_window_frames` was derived from
+        // `silence_frames`, so lowering the timeout also narrowed the window a
+        // forced cut searches. Tuning one number by ear moved two behaviours,
+        // and nobody could tell which of them had changed the result.
+        let short = segmenter(SegmenterConfig {
+            silence_timeout: Duration::from_millis(200),
+            ..Default::default()
+        });
+        let long = segmenter(SegmenterConfig {
+            silence_timeout: Duration::from_millis(800),
+            ..Default::default()
+        });
+
+        assert_ne!(
+            short.silence_frames, long.silence_frames,
+            "the timeout itself still moves"
+        );
+        assert_eq!(
+            short.flush_window_frames, long.flush_window_frames,
+            "the cut search window must not move with it"
+        );
+    }
+
+    #[test]
+    fn the_search_window_follows_its_own_setting() {
+        let narrow = segmenter(SegmenterConfig {
+            cut_search_window: Duration::from_millis(200),
+            ..Default::default()
+        });
+        let wide = segmenter(SegmenterConfig {
+            cut_search_window: Duration::from_millis(800),
+            ..Default::default()
+        });
+
+        assert!(narrow.flush_window_frames < wide.flush_window_frames);
+    }
+
+    #[test]
+    fn the_timing_can_be_moved_while_the_stream_runs() {
+        // What the settings screen does when the slider moves: the change
+        // lands on the audio being spoken, not on the next session.
+        let mut seg = segmenter(SegmenterConfig::default());
+        let mut signal = silence(0.3);
+        // Shorter than the default 500 ms timeout, longer than 200 ms: one
+        // segment before the change, two after it.
+        signal.extend(tone(0.6, 0.3));
+        signal.extend(silence(0.35));
+        signal.extend(tone(0.6, 0.3));
+        signal.extend(silence(1.0));
+
+        assert_eq!(
+            run(&mut seg, &signal).len(),
+            1,
+            "at 500 ms the 350 ms pause is inside one segment"
+        );
+
+        seg.set_timing(Duration::from_millis(200), Duration::from_secs(6));
+
+        assert_eq!(
+            run(&mut seg, &signal).len(),
+            2,
+            "at 200 ms the same pause ends a segment"
+        );
+    }
+
+    #[test]
+    fn a_lowered_ceiling_takes_the_overlap_down_with_it() {
+        // The overlap comes out of the ceiling. Left where it was, a ceiling
+        // set below twice the overlap would carry back more than it advances.
+        let mut seg = segmenter(SegmenterConfig {
+            forced_overlap: Duration::from_millis(500),
+            ..Default::default()
+        });
+
+        seg.set_timing(Duration::from_millis(500), Duration::from_millis(600));
+
+        assert!(seg.overlap_samples <= seg.max_samples / 2);
     }
 
     #[test]

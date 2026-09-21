@@ -21,6 +21,19 @@ pub trait Vad: Send {
     fn frame_samples(&self) -> usize;
 
     fn is_speech(&mut self, frame: &[f32]) -> bool;
+
+    /// Moves the bar for what counts as speech, on a detector that is already
+    /// running (P12).
+    ///
+    /// A no-op by default, and that default is the honest answer rather than a
+    /// convenience: `onset` is a *probability* between 0 and 1, which is what
+    /// [`SileroVad`](crate::SileroVad) decides with. [`EnergyVad`] compares a
+    /// level against an adaptive noise floor and has no such number to set;
+    /// inventing a mapping would put a control on screen that means something
+    /// different depending on which detector a session fell back to.
+    fn set_speech_threshold(&mut self, onset: f32) {
+        let _ = onset;
+    }
 }
 
 /// Frame length in milliseconds. 20 ms is the granularity every VAD worth

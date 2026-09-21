@@ -51,6 +51,22 @@ pub const DEFAULT_ONSET: f32 = 0.5;
 /// is the second, coarser half of the same hysteresis.
 pub const DEFAULT_RELEASE: f32 = 0.35;
 
+/// The gap between the two, kept when the onset is moved from the settings
+/// screen (P12).
+///
+/// One control, not two. The operator's question is "does it hear the quiet
+/// ones", which the onset answers; the release exists so a word does not fall
+/// apart mid-vowel, and its distance from the onset is what does that work.
+/// Exposing both would let the two be set the wrong way round, which silently
+/// removes the hysteresis instead of reporting an error.
+pub const HYSTERESIS: f32 = DEFAULT_ONSET - DEFAULT_RELEASE;
+
+/// The release that belongs to an onset, keeping [`HYSTERESIS`] where there is
+/// room for it and shrinking it towards zero where there is not.
+pub fn release_for(onset: f32) -> f32 {
+    (onset - HYSTERESIS).max(0.0)
+}
+
 /// Fallback window size if the model cannot be probed for its own. Silero at
 /// 16 kHz uses 512 samples (32 ms); the value is read from the model file
 /// rather than compiled in, so this is only a last resort.
@@ -132,9 +148,19 @@ impl SileroVad {
     /// decode time against the risk of losing a quietly spoken command, which
     /// is a judgement about the room, not a constant.
     pub fn with_thresholds(mut self, onset: f32, release: f32) -> Self {
+        self.set_thresholds(onset, release);
+        self
+    }
+
+    /// The same, on a detector already running — the settings screen moves
+    /// this while the room is talking.
+    ///
+    /// `speaking` is deliberately left alone. It is which side of the
+    /// hysteresis the detector is currently on, not a threshold; resetting it
+    /// would cut the word being spoken at the moment the slider moves.
+    pub fn set_thresholds(&mut self, onset: f32, release: f32) {
         self.onset = onset.clamp(0.0, 1.0);
         self.release = release.clamp(0.0, self.onset);
-        self
     }
 
     /// How much context each decision is given, in frames. Zero judges every
@@ -198,6 +224,10 @@ impl SileroVad {
 impl Vad for SileroVad {
     fn frame_samples(&self) -> usize {
         self.window
+    }
+
+    fn set_speech_threshold(&mut self, onset: f32) {
+        self.set_thresholds(onset, release_for(onset));
     }
 
     fn is_speech(&mut self, frame: &[f32]) -> bool {

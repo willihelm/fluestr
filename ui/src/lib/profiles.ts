@@ -25,12 +25,18 @@ import { restoreRule, type Rule } from "./rules";
 import { DEFAULT_DIRECTION, type SortDirection } from "./sort";
 import {
   CONFIG_VERSION,
+  DEFAULT_TUNING as GENERATED_TUNING,
+  MAX_SEGMENT_MS_MAX,
+  MAX_SEGMENT_MS_MIN,
   MAX_WORKERS,
   REMOTE_DEFAULT_PORT,
+  SILENCE_MS_MAX,
+  SILENCE_MS_MIN,
   type DeviceOption,
   type StoredConfig,
   type StoredProfile,
   type StoredRemote,
+  type Tuning,
 } from "./bridge";
 
 /// What a configuration that has never held a remote setting is read as (P16):
@@ -41,6 +47,41 @@ export const NO_REMOTE: StoredRemote = {
   address: "",
   port: REMOTE_DEFAULT_PORT,
 };
+
+/// What a configuration that has never held the detection thresholds is read
+/// as (P12): the constants the app compiled in before they were settings.
+///
+/// Beside `NO_REMOTE` and for its reason — the Settings page needs something
+/// to render before the first save — and the numbers come from the backend's
+/// own constants, so "the default" means one thing on both sides.
+export const DEFAULT_TUNING: Tuning = GENERATED_TUNING;
+
+/// Thresholds a session can actually be started with.
+///
+/// Applied on the way into the file rather than while typing, for the port's
+/// reason: a number box being filled in goes through states that are not
+/// numbers yet, and a field that fights them is a field nobody can fill in.
+/// The backend clamps again — this is a page, not the only caller.
+export const clampTuning = (tuning: Tuning): Tuning => ({
+  silenceTimeoutMs: clampMs(
+    tuning.silenceTimeoutMs,
+    SILENCE_MS_MIN,
+    SILENCE_MS_MAX,
+    GENERATED_TUNING.silenceTimeoutMs,
+  ),
+  maxSegmentMs: clampMs(
+    tuning.maxSegmentMs,
+    MAX_SEGMENT_MS_MIN,
+    MAX_SEGMENT_MS_MAX,
+    GENERATED_TUNING.maxSegmentMs,
+  ),
+  speechThresholdPercent: Number.isFinite(tuning.speechThresholdPercent)
+    ? Math.min(100, Math.max(0, Math.trunc(tuning.speechThresholdPercent)))
+    : GENERATED_TUNING.speechThresholdPercent,
+});
+
+const clampMs = (value: number, min: number, max: number, fallback: number): number =>
+  Number.isFinite(value) ? Math.min(max, Math.max(min, Math.trunc(value))) : fallback;
 
 /// A port a browser can actually be pointed at.
 ///
@@ -316,6 +357,10 @@ export const toStoredConfig = (
   /// any one patch. A view may still override it for itself, and that override
   /// never comes through here — see `sort.ts`.
   chatSort: SortDirection = DEFAULT_DIRECTION,
+  /// How the pipeline cuts and what it listens to (P12). Beside the profiles
+  /// like the vocabulary, and for its reason: how hard the intercom is to hear
+  /// is a property of the house, not of the production passing through it.
+  tuning: Tuning = DEFAULT_TUNING,
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -341,6 +386,9 @@ export const toStoredConfig = (
   // exists for — and `null` fails the backend's `u16` outright.
   remote: { ...remote, port: clampPort(remote.port) },
   chatSort,
+  // Clamped here as well as in the boxes, for the port's reason: a box left
+  // mid-number is exactly the state the last-ditch save catches.
+  tuning: clampTuning(tuning),
   profiles: profiles.map(toStored),
 });
 
@@ -374,6 +422,7 @@ export const fromStoredConfig = (
   models: ModelChoice;
   remote: StoredRemote;
   chatSort: SortDirection;
+  tuning: Tuning;
 } => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
@@ -398,6 +447,9 @@ export const fromStoredConfig = (
     // A file written before the chat could be turned over has no such field,
     // and what its absence meant is what the chat did then.
     chatSort: stored.chatSort ?? DEFAULT_DIRECTION,
+    // A file written before these were settings has no such block, and what
+    // its absence meant is the constants the app ran on then.
+    tuning: stored.tuning ? clampTuning(stored.tuning) : DEFAULT_TUNING,
   };
 };
 
