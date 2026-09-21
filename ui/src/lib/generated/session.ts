@@ -279,7 +279,17 @@ export type TranscriptEvent = {
 /**
  * See [`NEXT_SESSION_ID`]: `seq` alone does not identify a segment.
  */
-sessionId: number, streamId: number, seq: number, label: string, tStartMs: number, tEndMs: number, text: string, detectedLanguage: string | null, 
+sessionId: number, streamId: number, seq: number, label: string, 
+/**
+ * When the speech began and ended, in milliseconds since the session's
+ * zero point — [`SessionState::Running::started_at_ms`], which turns it
+ * into a time of day.
+ *
+ * Read off the wall clock at the moment the segment was closed, not
+ * counted in samples: see [`anchor`] for why the difference matters to a
+ * channel that spent part of the show muted.
+ */
+tStartMs: number, tEndMs: number, text: string, detectedLanguage: string | null, 
 /**
  * Time whisper.cpp spent decoding.
  */

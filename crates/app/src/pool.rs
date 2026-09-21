@@ -890,6 +890,7 @@ mod tests {
                 seq,
                 t_start: Duration::from_secs(seq),
                 t_end: Duration::from_secs(seq + 1),
+                lag: Duration::ZERO,
                 pcm: Vec::new(),
                 language_mode: LanguageMode::default(),
                 initial_prompt: None,

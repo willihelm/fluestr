@@ -45,6 +45,7 @@ fn segment_on(stream: u16, seq: u64) -> Segment {
         seq,
         t_start: Duration::from_millis(seq * 500),
         t_end: Duration::from_millis(seq * 500 + 500),
+        lag: Duration::ZERO,
         pcm,
         language_mode: LanguageMode::Fixed {
             language: LanguageCode::german(),

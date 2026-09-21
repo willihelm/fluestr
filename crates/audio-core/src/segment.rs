@@ -20,8 +20,26 @@ pub struct Segment {
     /// restore ordering, because workers do not necessarily reply in order.
     pub seq: u64,
     /// Offset from the start of the session.
+    ///
+    /// Written by the segmenter on its own sample clock and rewritten by
+    /// whoever submits the segment, which is the only party that has a wall
+    /// clock — see [`Segment::lag`].
     pub t_start: std::time::Duration,
     pub t_end: std::time::Duration,
+    /// How far the segment's last sample lies in the past at the moment the
+    /// segmenter closed it.
+    ///
+    /// The segmenter dates a segment in samples, which is the one ruler that
+    /// matches the audio exactly — but a ruler is not a clock. It measures
+    /// what it was fed, so a muted channel, a ring overrun or a device whose
+    /// 48 kHz is not quite the system's each leave it permanently behind the
+    /// wall clock, and every segment after that point dated equally early.
+    ///
+    /// This is the short end of that ruler: seconds at most, over which no
+    /// such difference has had time to accumulate. Subtracted from a wall
+    /// clock read at submission, it gives the segment a time of day that is
+    /// right whatever the sample clock has been doing all evening.
+    pub lag: std::time::Duration,
     /// 16 kHz mono, normalised to [-1, 1].
     pub pcm: Vec<f32>,
     pub language_mode: LanguageMode,
@@ -118,6 +136,7 @@ mod tests {
             seq: 42,
             t_start: Duration::from_millis(1_000),
             t_end: Duration::from_millis(2_500),
+            lag: Duration::ZERO,
             pcm: vec![0.0; n],
             language_mode: LanguageMode::default(),
             initial_prompt: None,

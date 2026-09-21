@@ -199,6 +199,7 @@ fn noise_and_silence_produce_no_text() {
             seq: 0,
             t_start: Duration::ZERO,
             t_end: Duration::from_secs(3),
+            lag: Duration::ZERO,
             pcm,
             language_mode: LanguageMode::Fixed {
                 language: LanguageCode::german(),

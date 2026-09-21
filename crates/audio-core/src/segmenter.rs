@@ -202,6 +202,40 @@ impl Segmenter {
         self.close_current(self.current.len())
     }
 
+    /// Passes over audio that is heard but not analysed — a muted channel.
+    ///
+    /// Nothing is analysed and nothing can be emitted; the sample clock
+    /// advances as if it had been, so that it goes on measuring the stream
+    /// rather than the part of the stream this happened to look at. What that
+    /// clock is good for is short distances — see [`Segment::lag`] — and a
+    /// gap in it would spoil exactly the one that spans the gap.
+    ///
+    /// The pre-roll goes with it, and so does any segment still open. What
+    /// comes back after the gap is a new onset: the audio in front of it
+    /// belongs to whatever was happening before the operator pressed M, and
+    /// joining the two halves would produce one segment whose own timestamps
+    /// say it lasted through the mute. A caller who wants the words spoken
+    /// into the open microphone calls [`Segmenter::finish`] first, which is
+    /// what the session does — this only makes sure that forgetting to loses
+    /// half a sentence rather than corrupting the one after it.
+    pub fn skip(&mut self, samples: usize) {
+        // Whatever did not make a whole frame was never analysed and never
+        // will be; its time is part of the gap like the rest.
+        self.consumed += (samples + self.pending.len()) as u64;
+        self.pending.clear();
+        self.history.clear();
+
+        // Not `close_current`: a sequence number is only ever spent on a
+        // segment that reaches the chat, so that a gap in the numbering
+        // always means a segment was lost.
+        self.speaking = false;
+        self.current.clear();
+        self.current_pre_roll = 0;
+        self.frames.clear();
+        self.silence_run = 0;
+        self.continuation = false;
+    }
+
     pub fn stream_id(&self) -> StreamId {
         self.stream_id
     }
@@ -391,6 +425,10 @@ impl Segmenter {
             seq,
             t_start: at(start_sample),
             t_end: at(end_sample),
+            // Everything analysed since this segment ended: the silence that
+            // closed it, or in the case of a forced cut the audio that has
+            // already become the start of the next one.
+            lag: at(self.consumed.saturating_sub(end_sample)),
             pcm,
             language_mode: self.config.language_mode.clone(),
             initial_prompt: self.config.initial_prompt.clone(),
@@ -667,6 +705,96 @@ mod tests {
         let segments = run(&mut seg, &signal);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].duration(), segments[0].pcm_duration());
+    }
+
+    /// Whoever submits a segment dates it by subtracting this from a wall
+    /// clock reading, so it has to be the real distance back to the audio —
+    /// including the silence the segmenter sat through before it decided the
+    /// segment was over.
+    #[test]
+    fn a_segment_knows_how_far_back_its_own_audio_ended() {
+        let mut seg = segmenter(SegmenterConfig::default());
+        let mut signal = silence(0.3);
+        signal.extend(tone(1.0, 0.3));
+        signal.extend(silence(1.0));
+
+        let segments = run(&mut seg, &signal);
+        assert_eq!(segments.len(), 1);
+        // The silence the segmenter waited out before closing, less the two
+        // frames of it kept on the end of the audio: 500 ms minus 40 ms.
+        assert_eq!(segments[0].lag, Duration::from_millis(460));
+    }
+
+    /// The point of the whole arrangement: a gap in what the segmenter was
+    /// fed moves its clock, and must not move the distance back to the audio,
+    /// because that is what a timestamp is built from.
+    #[test]
+    fn the_lag_survives_a_skip() {
+        let mut seg = segmenter(SegmenterConfig::default());
+        seg.skip(silence(120.0).len());
+
+        let mut signal = silence(0.3);
+        signal.extend(tone(1.0, 0.3));
+        signal.extend(silence(1.0));
+        let segments = run(&mut seg, &signal);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            segments[0].lag,
+            Duration::from_millis(460),
+            "two minutes of mute are not part of how long ago this was said"
+        );
+    }
+
+    /// A channel muted mid-session and brought back keeps its place on the
+    /// clock: the operator reads the chat against the running time of the
+    /// show, and a line stamped two minutes early is worse than no line.
+    #[test]
+    fn a_skipped_stretch_still_costs_its_time() {
+        let mut seg = segmenter(SegmenterConfig::default());
+        let mut before = silence(0.5);
+        before.extend(tone(1.0, 0.3));
+        before.extend(silence(1.0));
+        assert_eq!(run(&mut seg, &before).len(), 1);
+
+        // Muted for ten seconds: the audio arrives and is not analysed.
+        seg.skip(silence(10.0).len());
+
+        let mut after = silence(0.5);
+        after.extend(tone(1.0, 0.3));
+        after.extend(silence(1.0));
+        let segments = run(&mut seg, &after);
+        assert_eq!(segments.len(), 1);
+
+        // 2.5 s of audio, 10 s of mute, then half a second before the tone —
+        // less the pre-roll the onset reaches back for.
+        let start = segments[0].t_start.as_millis() as i64;
+        assert!(
+            (12_500..=13_000).contains(&start),
+            "the segment after the mute should start around 13 s, got {start} ms"
+        );
+    }
+
+    /// The pre-roll is audio from *before* the onset, and after a mute that is
+    /// audio the operator asked not to hear.
+    #[test]
+    fn a_skip_drops_the_pre_roll_it_would_have_carried_across() {
+        let mut seg = segmenter(SegmenterConfig::default());
+        // Speech running right up to the mute, so the history is full of it.
+        run(&mut seg, &tone(1.0, 0.3));
+        seg.finish();
+        seg.skip(silence(5.0).len());
+
+        let mut after = silence(0.1);
+        after.extend(tone(1.0, 0.3));
+        after.extend(silence(1.0));
+        let segments = run(&mut seg, &after);
+        assert_eq!(segments.len(), 1);
+        // Only the 100 ms of silence in front of the tone can be pre-roll.
+        assert!(
+            segments[0].pcm_duration() <= Duration::from_millis(1_200),
+            "pre-roll from before the mute leaked in: {:?}",
+            segments[0].pcm_duration()
+        );
     }
 
     #[test]

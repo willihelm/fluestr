@@ -39,8 +39,8 @@ use crate::pool::{Completed, Outcome, PoolConfig, PoolEvent, Reorder, WorkerPool
 use anyhow::{bail, Context, Result};
 use audio_core::{
     gain::Gain, ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession,
-    ChannelAssignment, ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segmenter,
-    SegmenterConfig, SileroVad, StreamId, StreamProcessor, Vad, SAMPLE_RATE,
+    ChannelAssignment, ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segment,
+    Segmenter, SegmenterConfig, SileroVad, StreamId, StreamProcessor, Vad, SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -237,6 +237,13 @@ pub struct TranscriptEvent {
     pub stream_id: u16,
     pub seq: u64,
     pub label: String,
+    /// When the speech began and ended, in milliseconds since the session's
+    /// zero point — [`SessionState::Running::started_at_ms`], which turns it
+    /// into a time of day.
+    ///
+    /// Read off the wall clock at the moment the segment was closed, not
+    /// counted in samples: see [`anchor`] for why the difference matters to a
+    /// channel that spent part of the show muted.
     pub t_start_ms: u64,
     pub t_end_ms: u64,
     pub text: String,
@@ -740,14 +747,26 @@ impl Session {
         let stop = Arc::new(AtomicBool::new(false));
         let (languages, language_rx) = mpsc::channel();
         let aggregating = spawn_aggregator(session_id, results, labels.clone(), events.clone());
+
+        // The session's zero point, read once in both clocks. `started_at_ms`
+        // is what the UI adds a bubble's offset to; `started` is what the
+        // processing thread measures those offsets against. A time of day is
+        // only honest if the two are the same instant, which is why they are
+        // taken here together rather than each where it is first needed.
+        let started_at_ms = now_ms();
+        let started = Instant::now();
+
         let processing = spawn_processor(
             pipelines,
-            pool.clone(),
-            capture_event_rx,
-            language_rx,
-            stop.clone(),
-            events.clone(),
-            info.name.clone(),
+            Wiring {
+                pool: pool.clone(),
+                capture_events: capture_event_rx,
+                languages: language_rx,
+                stop: stop.clone(),
+                events: events.clone(),
+                device_name: info.name.clone(),
+                started,
+            },
         );
 
         tracing::info!(
@@ -763,7 +782,7 @@ impl Session {
 
         let state = SessionState::Running {
             session_id,
-            started_at_ms: now_ms(),
+            started_at_ms,
             device: info.name,
             streams: running,
             sample_rate: granted,
@@ -966,20 +985,38 @@ pub fn speech_detector(vad_model: Option<&std::path::Path>) -> Box<dyn Vad> {
     }
 }
 
-fn spawn_processor(
-    mut pipelines: Vec<Pipeline>,
+/// Everything the processing thread needs besides the pipelines themselves.
+///
+/// One struct rather than a row of parameters: they are handed over once, at
+/// the only call there is, and a caller counting commas to see which channel
+/// went where is how the wrong one gets passed.
+struct Wiring {
     pool: Arc<WorkerPool>,
     capture_events: mpsc::Receiver<CaptureEvent>,
-    // Language changes from `Session::update_stream`. Applied here because
-    // this thread owns the segmenters.
+    /// Language changes from `Session::update_stream`. Applied in the thread
+    /// because it owns the segmenters.
     languages: mpsc::Receiver<(u16, String)>,
     stop: Arc<AtomicBool>,
     events: Arc<dyn EventSink>,
-    // For the disconnect message, and only for that. The event itself carries
-    // the device's id, which is a CoreAudio UID and means nothing to the
-    // operator reading why their session stopped.
+    /// For the disconnect message, and only for that. The event itself
+    /// carries the device's id, which is a CoreAudio UID and means nothing to
+    /// the operator reading why their session stopped.
     device_name: String,
-) -> JoinHandle<()> {
+    /// The session's zero point on the monotonic clock, against which every
+    /// segment is dated — see [`anchor`].
+    started: Instant,
+}
+
+fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<()> {
+    let Wiring {
+        pool,
+        capture_events,
+        languages,
+        stop,
+        events,
+        device_name,
+        started,
+    } = wiring;
     std::thread::Builder::new()
         .name("processing".into())
         .spawn(move || {
@@ -1056,15 +1093,27 @@ fn spawn_processor(
                         // would arrive whenever the channel comes back, under
                         // a timestamp from before the interval.
                         if muted {
-                            if let Some(segment) = pipeline.segmenter.finish() {
-                                pool.submit(segment, Instant::now());
+                            if let Some(mut segment) = pipeline.segmenter.finish() {
+                                let now = Instant::now();
+                                anchor(&mut segment, now - started);
+                                pool.submit(segment, now);
                             }
                         }
                     }
 
-                    if !muted {
-                        for segment in pipeline.segmenter.push(&buffer) {
-                            pool.submit(segment, Instant::now());
+                    if muted {
+                        // Heard, not analysed — and the segmenter is told
+                        // rather than simply left out, so that its ruler goes
+                        // on measuring the channel instead of the part of it
+                        // this thread bothered to look at, and so that the
+                        // pre-roll waiting in it is not the room from before
+                        // the M was pressed.
+                        pipeline.segmenter.skip(buffer.len());
+                    } else {
+                        for mut segment in pipeline.segmenter.push(&buffer) {
+                            let now = Instant::now();
+                            anchor(&mut segment, now - started);
+                            pool.submit(segment, now);
                         }
                     }
                 }
@@ -1098,12 +1147,42 @@ fn spawn_processor(
             // Whatever was still being spoken on any channel when stop was
             // pressed.
             for pipeline in &mut pipelines {
-                if let Some(segment) = pipeline.segmenter.finish() {
-                    pool.submit(segment, Instant::now());
+                if let Some(mut segment) = pipeline.segmenter.finish() {
+                    let now = Instant::now();
+                    anchor(&mut segment, now - started);
+                    pool.submit(segment, now);
                 }
             }
         })
         .expect("spawning the processing thread")
+}
+
+/// Dates a closed segment on the session clock, which is the wall clock.
+///
+/// The segmenter dates its segments in samples, and over the length of a show
+/// that is not a clock: it counts what it was fed, so a muted channel, a ring
+/// overrun (see [`audio_core::ring`]) or a device whose 48 kHz is not quite
+/// the system's leaves it behind for good — and every bubble after that point
+/// an equal amount too early, on the operator's chat, against the log they are
+/// reading it beside.
+///
+/// So only the short end of the sample clock is used. [`Segment::lag`] is the
+/// distance from the segment's last sample to the segmenter's present —
+/// seconds, over which nothing has had time to drift — and `elapsed` is the
+/// wall clock read at the same moment. The end of the audio is one subtracted
+/// from the other, and the start is the end less the audio's own length,
+/// which keeps `t_end - t_start` exactly the duration of the samples.
+///
+/// The reading is taken in the processing thread, one pump — 20 ms — after
+/// the audio it dates. It is deliberately *not* taken when the text comes
+/// back: a decode takes anything from a moment to several seconds, and
+/// stamping a line with the time its transcription finished would scatter the
+/// chat's timestamps by exactly the thing the latency figure exists to
+/// measure.
+fn anchor(segment: &mut Segment, elapsed: Duration) {
+    let t_end = elapsed.saturating_sub(segment.lag);
+    segment.t_start = t_end.saturating_sub(segment.pcm_duration());
+    segment.t_end = t_end;
 }
 
 /// Why a decoded segment does not belong in the chat, or `None` if it does.
@@ -1595,6 +1674,64 @@ mod tests {
         let texts = recorder.transcripts.lock().unwrap();
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].text, "Standby für Cue fünf");
+    }
+
+    fn closed(lag_ms: u64, seconds: f64) -> Segment {
+        Segment {
+            stream_id: StreamId(0),
+            seq: 0,
+            // Whatever the segmenter's own clock said: `anchor` replaces it.
+            t_start: Duration::from_secs(9_999),
+            t_end: Duration::from_secs(9_999),
+            pcm: vec![0.0; (seconds * SAMPLE_RATE as f64) as usize],
+            language_mode: LanguageMode::default(),
+            initial_prompt: None,
+            lag: Duration::from_millis(lag_ms),
+        }
+    }
+
+    /// A bubble is dated from the wall clock and the short distance back to
+    /// the audio, and from nothing else — see [`anchor`].
+    #[test]
+    fn a_segment_is_dated_backwards_from_the_moment_it_was_submitted() {
+        // Closed half a second after the words ended, an hour into the show.
+        let mut segment = closed(500, 2.0);
+        anchor(&mut segment, Duration::from_secs(3_600));
+
+        assert_eq!(segment.t_end, Duration::from_millis(3_599_500));
+        assert_eq!(segment.t_start, Duration::from_millis(3_597_500));
+        // The span stays exactly the length of the audio, which the bubble
+        // grouping in the UI and the latency figure both read.
+        assert_eq!(segment.duration(), segment.pcm_duration());
+    }
+
+    /// The reason the wall clock is the anchor at all: the sample clock of a
+    /// channel that was muted for two minutes is two minutes behind for the
+    /// rest of the session, and nothing in the dating may depend on it.
+    #[test]
+    fn a_gap_in_the_sample_clock_does_not_reach_the_timestamps() {
+        let mut segment = closed(500, 2.0);
+        anchor(&mut segment, Duration::from_secs(3_600));
+        let undisturbed = segment.t_start;
+
+        // The same segment out of a segmenter that skipped two minutes: its
+        // own timestamps are two minutes early, its lag is unchanged.
+        let mut after_mute = closed(500, 2.0);
+        after_mute.t_start = Duration::from_secs(9_999 - 120);
+        after_mute.t_end = Duration::from_secs(9_999 - 120);
+        anchor(&mut after_mute, Duration::from_secs(3_600));
+
+        assert_eq!(after_mute.t_start, undisturbed);
+    }
+
+    /// A session's first moments: a segment closed before the clock has run
+    /// as far back as the audio reaches lands at zero rather than wrapping.
+    #[test]
+    fn a_segment_at_the_very_start_does_not_underflow() {
+        let mut segment = closed(500, 2.0);
+        anchor(&mut segment, Duration::from_millis(300));
+        assert_eq!(segment.t_start, Duration::ZERO);
+        assert_eq!(segment.t_end, Duration::ZERO);
     }
 
     #[test]
