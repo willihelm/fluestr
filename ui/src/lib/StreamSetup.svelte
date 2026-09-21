@@ -148,14 +148,13 @@
          reader. -->
     {#if channels.length > 0}
       <div class="head" aria-hidden="true">
-        <span></span>
+        <span>Colour</span>
         <span>Ch</span>
         <span>Label</span>
         <span>Lang</span>
         <span>M</span>
         <span>Gain</span>
         <span>Level</span>
-        <span>Colour</span>
         <span></span>
       </div>
     {/if}
@@ -166,7 +165,16 @@
         class:absent={absent.has(index)}
         style="--channel: {channel.color}"
       >
-        <span class="dot" title="Stream {index}"></span>
+        <!-- First in the row, and the only mark of the channel's colour: a
+             dot beside a swatch said the same thing twice, and the swatch is
+             the one that can be clicked. -->
+        <input
+          type="color"
+          aria-label="Colour"
+          title="Stream {index}"
+          bind:value={channel.color}
+          disabled={locked}
+        />
 
         <!-- Counted from 1, the way channels are numbered on an interface and
              in a patch list. The backend stays zero-based; the conversion
@@ -242,8 +250,6 @@
           {/if}
         </div>
 
-        <input type="color" aria-label="Colour" bind:value={channel.color} disabled={locked} />
-
         <div class="end">
           <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
             title="Remove this channel">×</button>
@@ -307,8 +313,8 @@
        holds a name, and "Portuguese (pt)" truncated to "Portug…" is no better
        than the code it replaced. */
     grid-template-columns:
-      0.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 1.5rem 2.4rem
-      minmax(3rem, 0.7fr) 2.6rem 2rem;
+      2.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 1.5rem 2.4rem
+      minmax(3rem, 0.7fr) 2rem;
     align-items: center;
     gap: 0.5rem;
   }
@@ -316,6 +322,85 @@
   .head {
     font-size: 0.7rem;
     color: var(--text-dim);
+  }
+
+  /* Narrow: the three live controls — mute, gain, level — drop to a second
+     line of their own, so the identity of the row (colour, channel, label,
+     language) keeps the full width instead of every column being squeezed
+     to nothing. The column headings go with them: they name a single line of
+     fields, and over a row that wraps they name nothing. */
+  @media (max-width: 45rem) {
+    .head {
+      display: none;
+    }
+
+    .row {
+      grid-template-columns: 2.4rem 3.2rem minmax(0, 1fr) minmax(0, 1fr) 2rem;
+      grid-template-areas:
+        "colour ch label lang end"
+        "mute gain level level level";
+      row-gap: 0.35rem;
+    }
+
+    /* Two lines per channel means the eye needs telling where one channel
+       ends: without it the mute and the bar of one row read as belonging to
+       the label underneath them. A rule rather than a card, because eight
+       boxed channels is a heavier page than the setup deserves. */
+    .rows {
+      gap: 0;
+    }
+
+    .row + .row {
+      margin-top: 0.55rem;
+      padding-top: 0.55rem;
+      border-top: 1px solid var(--border);
+    }
+
+    /* The header's four parts do not fit on one line on a phone, and squeezed
+       onto one they turn the count into three lines and the button into two.
+       Title, count and action keep the first line; the language preset, which
+       is a field and not a title, takes the second. */
+    section.panel > header {
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .preset {
+      flex: 1 1 100%;
+      order: 1;
+    }
+
+    .preset :global(select) {
+      flex: 1;
+      min-width: 0;
+    }
+
+    /* Placed by position rather than by class: three of the eight cells are
+       components, whose root element this file cannot name. */
+    .row > *:nth-child(1) {
+      grid-area: colour;
+    }
+    .row > *:nth-child(2) {
+      grid-area: ch;
+    }
+    .row > *:nth-child(3) {
+      grid-area: label;
+    }
+    .row > :global(*:nth-child(4)) {
+      grid-area: lang;
+    }
+    .row > :global(*:nth-child(5)) {
+      grid-area: mute;
+    }
+    .row > :global(*:nth-child(6)) {
+      grid-area: gain;
+    }
+    .row > *:nth-child(7) {
+      grid-area: level;
+    }
+    .row > *:nth-child(8) {
+      grid-area: end;
+    }
   }
 
   /* The bar takes the channel's own colour, as it does on the meter strip:
@@ -327,13 +412,6 @@
     min-width: 0;
     font-size: 0.75rem;
     --accent: var(--channel);
-  }
-
-  .dot {
-    width: 0.6rem;
-    height: 0.6rem;
-    border-radius: 50%;
-    background: var(--channel);
   }
 
   .end {

@@ -87,4 +87,26 @@
     opacity: 0.45;
     cursor: default;
   }
+
+  /* On a touch screen the global rule gives every button a fingertip's
+     height, which on a 1.5 rem square turns the M into a tall narrow slot
+     beside a bar it should be square next to. The button keeps its shape and
+     grows an invisible target around itself instead: the finger gets its
+     44 px, the strip keeps its proportions. */
+  @media (pointer: coarse) {
+    .mute {
+      min-height: 0;
+      width: 1.7rem;
+      height: 1.7rem;
+      position: relative;
+    }
+
+    .mute::after {
+      content: "";
+      position: absolute;
+      /* Half the shortfall on each side, so the target is centred on the
+         button and reaches `--touch` in both directions. */
+      inset: calc((1.7rem - var(--touch)) / 2);
+    }
+  }
 </style>
