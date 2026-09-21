@@ -471,8 +471,9 @@ channels produced no visible lag on screen, which is not the same as a number.
 Two pages. **Settings** holds the input device, the editable channel list
 (device channel, label, language, colour), the global vocabulary, the alert
 terms, the groups with their membership, the profiles and the model manager.
-**Chat** holds a group sidebar, a meter per running stream in the selected
-view, and the lines themselves, each with its channel's colour down the left
+**Chat** holds a group sidebar, a meter per stream in the selected view —
+fed by the session while one runs and by the monitor before it starts, so the
+lines can be checked without pressing Start — and the lines themselves, each with its channel's colour down the left
 edge and its label, timestamp, language badges and measured latency, with a
 "jump to latest" button. Start/Stop is in the header and belongs to neither
 page: an operator who has to find the right page before they can stop capture
@@ -675,8 +676,9 @@ event and the ordinary save carries it to disk.
 
 **Clear all communication** clears every transcript, across every group and
 session, in every open window at once. It does not change channel, group or
-Settings configuration. Because it is irreversible it requires confirmation and
-is available only after capture has been stopped.
+Settings configuration. Because it is irreversible it requires confirmation, and
+it is available at any time — a running session included, since a chat that
+has filled up mid-show is when it is most needed.
 
 **Accepted when:** eight streams run visibly live; speech that runs on is one
 bubble rather than one per segment ✔; scrolling stays smooth at 10,000 segments
@@ -813,7 +815,11 @@ every view learning to read both.
 
 - **One device, one holder.** `start_session` stops the monitor before opening
   its own capture, and it refuses to start while a session runs, whose meters
-  are these meters. The Settings page starts it again when the session ends.
+  are these meters. The main window starts it again when the session ends.
+- **In every view, not only in Settings.** The meters answer "is anything
+  arriving on this line?", which is asked during a get-in and should not be
+  behind a page about configuration; the chat's own meter strip shows them
+  before Start.
 - **Idempotent, and asked for on every edit.** `start_monitor` takes the same
   channel list Start does, and does nothing when it is already metering that
   device and channel map — so typing a label does not reopen the interface

@@ -2,10 +2,10 @@
   // Clear all communication: the one action that empties the chat.
   //
   // Start and Stop deliberately never clear anything, so this is the only way
-  // transcripts go away — which is why it is explicit, confirmed, and offered
-  // only while capture is stopped. Clearing under a running session would race
-  // the transcripts still arriving, and the operator would be left unsure
-  // whether what reappeared was old or new.
+  // transcripts go away — which is why it is explicit and confirmed. It is
+  // offered at all times, a running session included: a chat that has filled
+  // up mid-show is exactly when it is needed, and the lines that arrive after
+  // the press are the ones the operator wants left.
   //
   // It clears transcripts across every group and session. It changes no
   // configuration: channels, colours, groups and vocabulary all survive it.
@@ -14,20 +14,19 @@
   // WebView owns blocks the event loop the live meters are drawn from.
 
   interface Props {
-    /// Disabled while a session runs, with the reason shown.
-    running: boolean;
+    /// Disabled only when there is nothing to delete.
     empty: boolean;
     clear: () => void;
   }
 
-  let { running, empty, clear }: Props = $props();
+  let { empty, clear }: Props = $props();
 
   let asking = $state(false);
 
-  // A running session or an emptied chat both make the open panel stale; it
-  // must not stay open offering an action that no longer applies.
+  // An emptied chat makes the open panel stale; it must not stay open
+  // offering an action that no longer applies.
   $effect(() => {
-    if (running || empty) asking = false;
+    if (empty) asking = false;
   });
 
   const confirm = () => {
@@ -49,10 +48,8 @@
   <button
     class="quiet"
     onclick={() => (asking = true)}
-    disabled={running || empty}
-    title={running
-      ? "Stop the session first — clearing while transcripts arrive would leave it unclear what was cleared."
-      : "Delete every transcript. Configuration is kept."}
+    disabled={empty}
+    title="Delete every transcript. Configuration is kept."
   >
     Clear all communication
   </button>

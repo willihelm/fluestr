@@ -280,9 +280,13 @@
   /// Whether the input is being metered with no session running (P8).
   ///
   /// The meters are how a trim is set, and a trim is set *before* a show. So
-  /// the Settings page opens the device on its own: no model, no sidecar, no
+  /// the window opens the device on its own: no model, no sidecar, no
   /// transcripts — a few ring buffers and a thread that adds up squares. See
   /// `crates/app/src/monitor.rs`.
+  ///
+  /// In every view and not only in Settings: "is anything coming in on this
+  /// line?" is the first question of a get-in, and the answer should not be
+  /// three clicks away behind a page about configuration.
   let metering = $state(false);
   let meterError = $state<string | null>(null);
 
@@ -293,7 +297,7 @@
   /// language does not reopen the interface underneath a bar somebody is
   /// watching.
   let meterKey = $derived(
-    view === "settings" && !running && !busy && connected && channels.length > 0
+    !running && !busy && connected && channels.length > 0
       ? `${deviceId || device}\u0000${channels.map((c) => c.channel).join(",")}`
       : null,
   );
@@ -359,6 +363,33 @@
       ? status.streams.filter((s) => s.muted && !s.absent).length
       : 0,
   );
+
+  /// The status bar's one line: device, channel count, rate, model.
+  ///
+  /// Four short facts and nothing else. What used to be here as well — the
+  /// absent and muted counts, CPU or GPU, how long the model took to load —
+  /// wrapped onto a second row on a phone and is anyway read better
+  /// elsewhere: an absent or muted channel is marked on its own meter, and
+  /// the model's origin is on the Settings page. It is kept as the bar's
+  /// title, where a problem being reported can still be read off it.
+  let statusLine = $derived.by(() => {
+    if (status.state !== "running") return "";
+    const count = status.streams.length - absent.size;
+    const model = status.model.split("/").pop();
+    return `${status.device} · ${count} ch. · ${status.sampleRate / 1000}kHz · ${model}`;
+  });
+
+  let statusDetail = $derived.by(() => {
+    if (status.state !== "running") return "";
+    const count = status.streams.length - absent.size;
+    const channels = `${count} ${count === 1 ? "channel" : "channels"}`;
+    const missing = absent.size > 0 ? `, ${absent.size} not on the device` : "";
+    const muted = mutedCount > 0 ? `, ${mutedCount} muted` : "";
+    const model = status.model.split("/").pop();
+    const where = status.gpu ? "GPU" : "CPU";
+    const load = (status.loadMs / 1000).toFixed(1);
+    return `${status.device} · ${channels}${missing}${muted} · ${status.sampleRate} Hz · ${model} · ${where}, loaded in ${load} s`;
+  });
 
   let group = $derived(groups.find((g) => g.key === selectedGroup) ?? null);
   // Which view this window currently *is*, as a rule addresses one: the
@@ -972,7 +1003,10 @@
       {/if}
 
       {#if running}
-        <button class="primary" onclick={stop}>Stop</button>
+        <!-- Red, unlike Start: it is the one button in the header that
+             ends what is running, and during a show it is pressed by
+             somebody looking for it rather than reading it. -->
+        <button class="primary danger" onclick={stop}>Stop</button>
       {:else}
         <button
           class="primary"
@@ -1004,16 +1038,8 @@
     <div class="bar status">
       {#if status.state === "running"}
         <span class="ok">●</span>
-        <span>
-          {status.device} · {status.streams.length - absent.size}
-          {status.streams.length - absent.size === 1
-            ? "channel"
-            : "channels"}{absent.size > 0
-            ? `, ${absent.size} not on the device`
-            : ""}{mutedCount > 0 ? `, ${mutedCount} muted` : ""} · {status.sampleRate} Hz ·
-          {status.model.split("/").pop()} · {status.gpu ? "GPU" : "CPU"}, loaded in
-          {(status.loadMs / 1000).toFixed(1)} s
-        </span>
+        <!-- Four short facts, in the width of one bar — see `statusLine`. -->
+        <span title={statusDetail}>{statusLine}</span>
       {:else if status.state === "starting"}
         <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
       {:else if status.state === "failed"}
@@ -1030,7 +1056,6 @@
         <ResourceMeter {usage} />
         {#if view === "chat"}
           <ClearCommunication
-            {running}
             empty={messages.length === 0}
             clear={clearCommunication}
           />
@@ -1069,11 +1094,16 @@
       />
 
       <div class="stream">
-        {#if running}
+        {#if running || metering}
           <!-- The meters follow the same view — eight bars for a
                three-channel group are five things to read past. The filtering
                happens by stream id inside the component, because the stream id
-               *is* the position in `channels`. -->
+               *is* the position in `channels`.
+
+               Shown before Start as well, off the monitor (P8): the bars are
+               how an operator sees that the interface is plugged in and that
+               somebody is talking on the line, and that is checked before the
+               session, not after it. -->
           <StreamMeters
             {channels}
             {levels}
@@ -1270,6 +1300,13 @@
   .primary:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  /* Stop, and only Stop. The same red every other destructive control in the
+     app uses, so the button that ends the session is found by colour during a
+     show rather than read. */
+  .primary.danger {
+    background: #ff6b6b;
   }
 
   .dim {
