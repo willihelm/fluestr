@@ -10,8 +10,15 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-19, after the interface was made to fit a
-phone — drawers for both sidebars, a strip of vertical meters and a page that
+**Status of this document:** 2026-09-21, after the first live session with
+four channels on real hardware. It answered what P1 had left open — a known
+source on a known channel appeared in that channel's stream and in no other —
+and the pipeline held with four people talking at once. On the strength of it
+the user set P14 aside: the reference load test, the latency/accuracy sweep and
+the WER baseline give way to testing in the house and feeding the improvements
+back. That moves P12's thresholds to the front, because a number tuned by ear
+has to be reachable while listening. Before that, on 2026-09-19, the interface
+was made to fit a phone — drawers for both sidebars, a strip of vertical meters and a page that
 respects a device's safe areas, so the LAN remote (P16) is usable on the
 screen it is most often opened on. The same day, P19's two outbound actions
 became one: the MIDI cue was folded into the webhook, because the desk is
@@ -69,11 +76,11 @@ for now, with the reason recorded in the package.
 | | Package | Status | What is missing |
 |---|---|---|---|
 | P0 | Scaffolding & toolchain | **Done** | — |
-| P1 | Audio capture (macOS, multichannel) | **Partial** | Channel mapping unverified on real hardware |
+| P1 | Audio capture (macOS, multichannel) | **Done** | — |
 | P2 | Ring buffer & resampling | **Done** | — |
 | P3 | VAD & segment scheduler | **Done** | — |
 | P4 | Whisper sidecar | **Partial** | Not registered as a Tauri `externalBin` |
-| P5 | Worker pool & backpressure | **Partial** | No reference load test on live audio |
+| P5 | Worker pool & backpressure | **Done** | The ten-minute memory-growth run was never taken — set aside with P14 |
 | P6 | Tauri API | **Done** | `search_session` decided against — search is per view, see below |
 | P7 | Chat UI | **Done** | — |
 | P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
@@ -82,8 +89,8 @@ for now, with the reason recorded in the package.
 | P11 | Model manager | **Done** | — |
 | P12 | Settings & presets | **Partial** | Profiles, default language and stable device id are stored; every threshold is still a constant in the code |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
-| P14 | Performance & latency budget | **Partial** | Latency measured on one stream; no reference load test, no WER baseline |
-| P15 | Vocabulary & prompt management | **Partial** | One global box, stored, but not named lists and not measured against a baseline |
+| P14 | Performance & latency budget | **Deferred** | Set aside by the user: tested in the house rather than on a bench |
+| P15 | Vocabulary & prompt management | **Partial** | One global box, stored, but not named lists; no baseline left to measure it against |
 | P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. No authentication — by decision |
 | P17 | Alert terms & visual attention | **Done** | Subsumed by P19: the terms and the flash flags are rules now, and an existing file is migrated into them |
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
@@ -106,10 +113,14 @@ interface the app recognises after a rename; a model manager that brings a
 fresh machine to its first transcription without a terminal; and, optionally,
 the same UI served to a browser on the local network as a full peer.
 
-**What a multi-channel patch still lacks is a measurement of its own:** every
-latency and CPU number was taken with one stream running. Eight channels is
-the load P14 reasons about and `tests/pool.rs` exercises synthetically; it is
-a reference point, not a ceiling.
+**What a multi-channel patch has behind it:** one live session with four
+channels on real hardware — the right text in the right stream, nothing
+dropped, no visible slowdown. Every latency and CPU number in measurements.md
+is still a single-stream number and, with P14 set aside, will stay one. Eight
+channels is the load P14 reasoned about and `tests/pool.rs` exercises
+synthetically; it is a reference point, not a ceiling. What tells an operator
+whether a given patch keeps up is the GPU meter and the overload counter (P8),
+not a benchmark.
 
 ---
 
@@ -191,7 +202,7 @@ Svelte + TS, Tauri v2, pnpm, pinned Rust toolchain, `justfile`, CI on
 membership, the vocabulary prompt — is tested with vitest, run by `just check`
 and by CI alongside the Rust tests.
 
-### P1 — Audio capture (macOS, multichannel) — **Partial**
+### P1 — Audio capture (macOS, multichannel) — **Done**
 
 `AudioBackend` trait as the platform seam, macOS implementation on `cpal`.
 Device enumeration, one input stream on the chosen multichannel device,
@@ -204,11 +215,13 @@ The callback is a realtime context: **no allocation, no lock, no logging**. The
 **Accepted when:** an integration test writes 10 s of two channels of an
 aggregate device into separate WAVs and the channels are provably not swapped.
 
-**Outstanding:** the de-interleaving is unit-tested, including a device buffer
-spanning several scratch passes. But no signal was present on the 32-channel
-interface during testing, so the end-to-end mapping is **unconfirmed on real
-hardware**: patching a known source to one channel and checking that only the
-matching WAV carries it remains a manual step.
+The de-interleaving is unit-tested, including a device buffer spanning several
+scratch passes, and the end-to-end mapping was **confirmed on real hardware**
+in the live session of 2026-09-21: a known source on a known channel appeared
+in that channel's stream and in no other, over four channels at once. The WAV
+fixture was never written — the question it existed to answer was answered by
+people talking into the finished app, which is the stronger evidence of the
+two, and only the weaker one is repeatable in CI.
 
 ### P2 — Ring buffer & resampling — **Done**
 
@@ -273,7 +286,7 @@ and did nothing at all.
 **Outstanding:** registration as a Tauri `externalBin` so the binary is bundled
 and co-signed. Belongs with P13.
 
-### P5 — Worker pool & backpressure — **Partial**
+### P5 — Worker pool & backpressure — **Done**
 
 Pool of M sidecar processes (default 2, set on the Models page) on **one**
 shared queue, oldest segment first so no stream starves. The bound is a
@@ -314,10 +327,14 @@ own sidecars mid-session. Eight streams have been through the queue in
 `eight_streams_share_the_queue_without_starving_each_other`, which asserts the
 fairness claim but says nothing about memory or latency.
 
-**Outstanding:** the reference load test, which belongs with P14 and now needs
-live audio on eight channels rather than synthetic segments. Until then the
-pool size, the backlog per worker and the timeouts are reasoned defaults, not measured
-ones.
+The first half went with P14 on 2026-09-21. What stands in its place is a live
+session: four channels through the queue with nothing dropped and nothing
+lagging. **The ten-minute memory figure was therefore never taken** — if the
+app is ever left running for hours and slows, this is the first place to look.
+
+**Outstanding:** nothing planned. The pool size, the backlog per worker and the
+timeouts stay reasoned defaults, now with one live session behind them rather
+than none.
 
 ### P6 — Tauri API — **Done**
 
@@ -430,8 +447,9 @@ put one viewer's private filter on a shared surface. The search itself is P9,
 in the frontend.
 
 **Accepted when:** the frontend receives typed events; eight streams under full
-load keep the WebView main thread under ~30 %. The second half is unmeasured —
-it belongs with the P14 load test.
+load keep the WebView main thread under ~30 %. The second half is unmeasured
+and stays that way: it belonged to the load test that went with P14. Four live
+channels produced no visible lag on screen, which is not the same as a number.
 
 ### P7 — Chat UI (Svelte) — **Done**
 
@@ -648,7 +666,7 @@ is available only after capture has been stopped.
 **Accepted when:** eight streams run visibly live; speech that runs on is one
 bubble rather than one per segment ✔; scrolling stays smooth at 10,000 segments
 — the DOM is bounded by construction, but "smooth" is a claim about a machine
-under load and belongs to the P14 test; a third language can be chosen without
+under load and went unmeasured with P14; four live channels were smooth; a third language can be chosen without
 a code change ✔; a channel has a preselected but editable colour ✔; a channel
 can appear in two groups and is visible in both ✔; all configured channels
 start from one action ✔; starting again after a Stop retains the preceding chat
@@ -1031,53 +1049,70 @@ Gatekeeper warning.
 **Risk:** hardened runtime plus a sidecar process is the classic stumbling
 block — the sidecar needs its own signature.
 
-### P14 — Performance & latency budget — **Partial**
+### P14 — Performance & latency budget — **Deferred**
 
-**Measured** (measurements.md §7 and §8): ~330 ms end to end on one stream, of
-which 300–340 ms is the decode; resampling at ~2200× realtime; the speech gate
-rejects non-speech in 3–8 ms instead of a ~320 ms decode.
+**Set aside by the user on 2026-09-21**, after the first live session with four
+channels, with the reason: *I test it myself and feed the improvements back.* A
+scope decision like P10's rather than a postponement — what was dropped is the
+measurement programme, not the concern it served.
 
-**Outstanding:** instrumented measuring points across all stages, a written
-latency budget held against the measurements, a repeatable "8 streams,
+**Measured, and still standing** (measurements.md §7 and §8): ~330 ms end to
+end on one stream, of which 300–340 ms is the decode; resampling at ~2200×
+realtime; the speech gate rejects non-speech in 3–8 ms instead of a ~320 ms
+decode. Beside them now: four channels running together in a real session,
+nothing dropped.
+
+**What was dropped:** instrumented measuring points across all stages, a
+written latency budget held against them, the repeatable "8 streams,
 30 minutes" reference load test, and the **code-switching fixture set** with
 reference transcripts for measuring word error rate separately over German and
-English passages. The load test is unblocked and is the next thing to do: eight
-streams run and `tests/pool.rs` puts eight through the queue with synthetic
-segments — what is missing is live audio, duration, and anything being
-*measured* rather than asserted.
+English passages.
 
-**Accepted when:** a reproducible benchmark shows p95 latency within the target
-on defined hardware; the WER baseline for mixed-language material is
-documented.
+**What it costs, named where it lands:**
 
-**Caveat on what exists:** the current fixture is macOS text-to-speech in a
-quiet room. Real intercom traffic with noise, compression and crosstalk will do
-worse. The numbers are an upper bound, not a promise.
+- **P12's thresholds** were to be set from a measured sweep. They will be set
+  by ear instead — which makes exposing them in the interface more urgent, not
+  less: a number tuned by listening has to be reachable while listening.
+- **P15 has no baseline to beat.** Whether a vocabulary list helps is a
+  judgement now, and the page should not imply a measurement behind it.
+- **P5's and P6's second acceptance halves** stay unmeasured; both say so.
+- **What replaces the benchmark in daily use** is P8: the GPU meter and the
+  overload counter are what tell an operator that a patch is at its limit, and
+  they were already built for the question the load test would only have
+  answered once.
 
-**The cheapest latency experiment, and the one to run first.** The ~330 ms is
-measured from the *end* of a segment, which is not what anybody waits for. What
-an operator waits for is `silence_timeout` plus however long the speaker keeps
-going — bounded by `max_segment`, so the worst case is six seconds of talking
-before a word of it is readable. Both numbers are constants today (P12), and
-both are cheap to sweep: 500 → 300 → 200 ms of silence, 6 → 4 → 2 s of ceiling,
-over the fixture set, recording the time from the last spoken word to the text
-appearing *and* the word error rate for each pair. Shorter forced segments cost
-accuracy — whisper is trained on 30 s windows and degrades badly below about
-two seconds of audio, which is where the `[BREAK]` and the invented sentences
-come from — so the sweep is not looking for a better default. It is measuring
-the exchange rate between latency and accuracy, which is the thing nobody here
-knows and every later decision about responsiveness rests on.
+**Caveat on the numbers that remain:** the fixture behind them is macOS
+text-to-speech in a quiet room. Real intercom traffic with noise, compression
+and crosstalk will do worse. They are an upper bound, not a promise — and now
+nothing is scheduled to replace them.
 
-Two couplings will corrupt the result if they are not accounted for first:
+**If measurement is ever revived, this is the experiment to run first.** The
+~330 ms is measured from the *end* of a segment, which is not what anybody
+waits for. What an operator waits for is `silence_timeout` plus however long
+the speaker keeps going — bounded by `max_segment`, so the worst case is six
+seconds of talking before a word of it is readable. Both numbers are constants
+today (P12), and both are cheap to sweep: 500 → 300 → 200 ms of silence,
+6 → 4 → 2 s of ceiling, recording the time from the last spoken word to the
+text appearing *and* the word error rate for each pair. Shorter forced segments
+cost accuracy — whisper is trained on 30 s windows and degrades badly below
+about two seconds of audio, which is where the `[BREAK]` and the invented
+sentences come from — so the sweep is not looking for a better default. It
+measures the exchange rate between latency and accuracy, which is the thing
+nobody here knows.
+
+Two couplings will corrupt the result if they are not accounted for first, and
+**the first of them now matters even without the sweep**, because tuning by ear
+hits it just as hard:
 
 - **`flush_window_frames` is derived from `silence_frames`** (segmenter.rs).
   Lowering the timeout also shrinks the window in which a forced cut looks for
   the quietest frame, so a single number moves two behaviours. Decouple them
-  before the sweep, or the accuracy column measures both at once.
+  before either sweeping or exposing the timeout as a setting, or nobody can
+  tell which of the two changed the result.
 - **`SileroVad` fails open**, so the counter only advances on a frame the model
   confidently calls silence (P3). A lower timeout buys the shorter wait only
-  where the detector is decisive, and the fixture set should therefore include
-  material where it is not.
+  where the detector is decisive, so material where it is not belongs in
+  anything that claims to have tested the change.
 
 It comes before any work on streaming partial hypotheses — re-decoding a
 growing buffer and committing only what two successive decodes agree on, the
@@ -1085,8 +1120,8 @@ LocalAgreement policy. That approach can deliver text while somebody is still
 speaking, but because whisper's encoder always runs on a padded 30 s window, a
 one-second partial costs about as much as a six-second segment: it multiplies
 decoder load per stream and would be the first thing to break the P5 budget.
-Paying that is only justified if the exchange rate measured here turns out to
-be bad. If it is good, the same responsiveness is a changed constant.
+Paying that is only justified if the exchange rate turns out to be bad. If it
+is good, the same responsiveness is a changed constant.
 
 ### P15 — Vocabulary & prompt management — **Partial**
 
@@ -1112,13 +1147,16 @@ which keeps the default, apart from "deliberately cleared", which turns the
 prompt off and is how its effect gets measured at all.
 
 **Outstanding:** *named* lists with exactly one active — today there is one list
-and no way to keep a second — a shipped starter list, shortening that is
-deliberate rather than whisper's silent truncation, and the measurement, which
-needs the P14 fixture set.
+and no way to keep a second — a shipped starter list, and shortening that is
+deliberate rather than whisper's silent truncation. The measurement went with
+P14 on 2026-09-21.
 
-**Accepted when:** on the P14 fixture set the enabled global vocabulary list
-measurably improves the word error rate of the technical terms against the
-baseline on every applicable channel.
+**Accepted when:** originally, when the enabled list measurably improved the
+word error rate of the technical terms against a baseline on the P14 fixture
+set. With P14 set aside there is no baseline, so what is left is weaker and
+should be said plainly: named lists exist, one is active, and an operator can
+switch between two and keep the one that sounds better. The ability to switch
+is the point — it is the only comparison anybody can still make.
 
 ### P17 — Alert terms & visual attention — **Done**
 
@@ -1365,9 +1403,10 @@ which in the manifest means keeping *one* optional dependency behind
 The mechanical part is small. What is not small is that every number in
 measurements.md is a Metal number: the ~330 ms end-to-end budget, the ~8 s
 first-start shader compilation the UI announces, the pool's sizing, the
-0.41 ms per VAD frame. None of them carries over. The port therefore includes
-re-running P14 on the target hardware, and the default worker count is likely
-to come out differently.
+0.41 ms per VAD frame. None of them carries over. P14 was set aside on macOS, where
+measurements.md still stands behind the defaults; on Windows there is nothing behind
+them at all, so the port has to establish its own worker count and its own
+first-start expectation by running the app on the target hardware.
 
 **The rest is certain and small.** `worker::find_binary` joins
 `"whisper-worker"` with no extension and needs `std::env::consts::EXE_SUFFIX`,
@@ -1683,60 +1722,58 @@ P18 hangs below everything because it reopens three packages rather than
 following them: P1's capture, P4's GPU backend and P13's packaging, each for a
 second platform. Nothing between them changes.
 
-**Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached; what P5
-still owes is a load test on live audio.*
+**Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached, and
+confirmed on real hardware in the live session of 2026-09-21.*
 
 **Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17, P19. *What is left
 is the settings proper — every threshold is still a constant in the code.*
 
-**Milestone C (language quality & production readiness):** + P14 fixtures, P15,
-P8, P9, P13. *P10 left it on 2026-09-18; P3b was dropped.*
+**Milestone C (language quality & production readiness):** + P15, P8, P9, P13.
+*P10 left it on 2026-09-18 and P14 on 2026-09-21; P3b was dropped. What is
+left of it is P15's named lists and P13.*
 
-**Milestone D (second platform):** + P18. *Deliberately after C: a Windows
-build of an app whose own numbers are not yet measured would be measured
-against nothing.*
+**Milestone D (second platform):** + P18. *Deliberately after C: it reopens
+capture, the GPU backend and packaging, and each is cheaper to redo once the
+macOS version it is ported from has settled in the house.*
 
 ---
 
 ## Suggested next steps
 
-In this order, with the reason each one comes where it does.
+In this order, with the reason each one comes where it does. Reordered on
+2026-09-21: the load test that stood at the head of this list went with P14,
+and what it was blocking moved up.
 
-1. **P14 reference load test** — every number the remaining decisions rest on
-   is a single-stream number. The 10 % CPU figure for eight streams' speech
-   detection is arithmetic, and the queue has only been put under contention by
-   synthetic segments. The chat's window bounds the DOM, which removes the
-   frontend from the list of things that could explain a bad result. It is also
-   the one step here that cannot be written: it needs the interface and
-   somebody to talk into it.
-2. **The rest of P12 — the settings proper.** The Silero threshold and the
-   segmenter's `silence_timeout` and `max_segment` are still constants. They
-   come *after* step 1 on purpose: exposing a number as a setting fixes the
-   default somebody will keep, and the current defaults are single-stream
-   guesses. The latency/accuracy sweep described under P14 is what turns the
-   two segmenter constants from guesses into a measured trade-off, and it needs
-   step 1's fixture set to run at all.
-3. **P15** — develop vocabulary against the measurable baseline from step 1,
-   not by feel. The control exists and is global; what is missing is the
-   evidence that any particular list is better than another.
-4. **The remote, on a real network.** P16 has not had a second machine, a house
+1. **The rest of P12 — the settings proper.** The Silero threshold and the
+   segmenter's `silence_timeout` and `max_segment` are still constants in the
+   code. They were behind the sweep on purpose, because exposing a number fixes
+   the default somebody will keep; with the sweep gone, the argument inverts —
+   tuning happens by ear in the house now, and a number tuned by listening has
+   to be reachable while listening. **Decouple `flush_window_frames` from
+   `silence_frames` first** (see P14): otherwise one control moves two
+   behaviours and nobody can say which one improved things.
+2. **The remote, on a real network.** P16 has not had a second machine, a house
    network and somebody working from it. That comes before authentication —
    the obvious next thing to want, and the wrong thing to build against an
    arrangement nobody has used yet.
-5. **P13, packaging and signing.** With P6, P7, P9 and P19 in, what is left
-   between this and a machine that is not this one is a notarised build.
-6. **The webhook against a real Companion.** Built and tested against its own
+3. **P13, packaging and signing.** With P6, P7, P9 and P19 in, what is left
+   between this and a machine that is not this one is a notarised build. It
+   carries P4's outstanding piece — the sidecar as a Tauri `externalBin`, so it
+   is bundled and co-signed.
+4. **The webhook against a real Companion.** Built and tested against its own
    unit tests on 2026-09-19; what it has not had is a desk. The two things
    only a house can answer are whether a Companion press URL fires from the
    body the editor produces, and whether three seconds and one retry are the
    right numbers on a network with a show on it.
-7. **P18, the Windows port.** Last, and not because it is hard: it reopens
-   capture, the GPU backend and packaging, and each of the three is cheaper to
-   redo once the macOS answer it is being ported from is measured rather than
-   assumed. The one part worth pulling forward is the hardware question in its
-   **Risk** — which channels the interface exposes through WASAPI — because it
-   can be answered on the target machine in an afternoon and decides the shape
-   of the rest.
+5. **P15's named lists.** Not the measurement — that went with P14 — but the
+   ability to keep a second list and switch between them, which is the only
+   comparison left to anybody. One list with no alternative cannot be judged
+   even by ear.
+6. **P18, the Windows port.** Last, and not because it is hard: it reopens
+   capture, the GPU backend and packaging. The one part worth pulling forward
+   is the hardware question in its **Risk** — which channels the interface
+   exposes through WASAPI — because it can be answered on the target machine in
+   an afternoon and decides the shape of the rest.
 
 ## Whole-system verification
 
@@ -1783,7 +1820,11 @@ In this order, with the reason each one comes where it does.
     finds it and starts, under its new name. With two identical interfaces
     connected, the picker offers both and each profile keeps the one it was set
     to (P12).
-12. Run the P14 reference load test, record p95 latency.
+12. Run a session with as many channels as the show actually needs and watch
+    the GPU meter and the per-stream overload counters rather than a
+    benchmark — with P14 set aside, this is what took the load test's place
+    (P8). Four channels have been through it; the ceiling is unknown by
+    decision, and the meters are how it is found.
 13. Write a rule on `cue` that highlights and asks urgently, unfocus the main
     window and speak "Cue fünf" → the exact word is highlighted and the window
     requests attention; "rescue" does neither. Repeat from a channel in an open
