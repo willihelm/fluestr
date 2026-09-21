@@ -43,12 +43,6 @@
     /// rather than one value, because the chat holds lines from every session
     /// that has run since it was cleared.
     starts: Map<number, number>;
-    /// The channels this view shows, in stream order, for the channel filter
-    /// (P9). Handed down rather than derived from the bubbles: a channel that
-    /// has not spoken yet is still one an operator may want to sit on, and a
-    /// picker whose entries appear as people talk is a picker that moves under
-    /// the cursor.
-    streams: { streamId: number; label: string }[];
     /// Which end of the chat new lines arrive at, as the app's configuration
     /// has it (P7) — the default every view is born with and reads until it is
     /// turned over. Handed down rather than read from storage here: it is part
@@ -57,7 +51,7 @@
     direction: SortDirection;
   }
 
-  let { messages, colors, starts, streams, direction }: Props = $props();
+  let { messages, colors, starts, direction }: Props = $props();
 
   // --- Search and filter (P9) ---------------------------------------------
   //
@@ -76,8 +70,6 @@
   /// chat around the answer, "let me watch for this" wants only the answer —
   /// and an operator switches between them mid-question.
   let onlyMatches = $state(false);
-  /// One channel of this view, or `null` for all of them.
-  let stream = $state<number | null>(null);
   /// Which hit the ↑/↓ buttons are on, as a position in `hits`.
   let focus = $state(0);
 
@@ -87,18 +79,16 @@
   // [`toBubbles`] for where a bubble ends.
   let bubbles = $derived(toBubbles(messages));
 
-  /// The chat as this view has narrowed it: one channel, and under the toggle
-  /// only the lines that match.
+  /// The chat as this view has narrowed it: under the toggle, only the lines
+  /// that match. Which channels are in it at all is the window's own group
+  /// selection and nothing this view chooses — there is no picker to widen it
+  /// past the group the operator opened.
   ///
   /// The window, the "N earlier" button and the follow-to-the-bottom effect
   /// all work on this rather than on `bubbles`, so a filtered chat scrolls and
   /// pages like any other — there is no second reading mode to maintain.
   let listed = $derived(
-    bubbles.filter(
-      (b) =>
-        (stream === null || b.streamId === stream) &&
-        (!onlyMatches || !searching || matches(b.text, query)),
-    ),
+    bubbles.filter((b) => !onlyMatches || !searching || matches(b.text, query)),
   );
 
   /// Where the hits are, as positions in `listed`.
@@ -505,17 +495,6 @@
     }}
   />
 
-  {#if streams.length > 1}
-    <!-- Only when there is a choice to make. On a single-channel view a picker
-         reading "All channels" over one channel is furniture. -->
-    <select class="channel" aria-label="Limit to one channel" bind:value={stream}>
-      <option value={null}>All channels</option>
-      {#each streams as option (option.streamId)}
-        <option value={option.streamId}>{option.label || "Stream " + option.streamId}</option>
-      {/each}
-    </select>
-  {/if}
-
   {#if searching}
     <span class="count" aria-live="polite">
       {hits.length === 0
@@ -756,8 +735,7 @@
     min-width: 0;
   }
 
-  .query,
-  .channel {
+  .query {
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
@@ -806,15 +784,10 @@
     }
 
     /* The whole of the line it is on, after the direction button beside it:
-       a search field shared with a channel picker and two step buttons is
-       four half-width controls and no room to read what was typed. */
+       a search field shared with two step buttons is three half-width
+       controls and no room to read what was typed. */
     .query {
       flex: 1 0 8rem;
-    }
-
-    .channel {
-      flex: 1 1 8rem;
-      min-width: 0;
     }
 
     /* The count no longer holds a fixed width: on the desk it is stopping the

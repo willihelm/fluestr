@@ -24,6 +24,7 @@
 
   import { onMount } from "svelte";
   import { clampPort } from "./profiles";
+  import { encodeQr, qrPath } from "./qr";
   import {
     listInterfaces,
     onRemoteStatus,
@@ -63,6 +64,7 @@
     const subscription = onRemoteStatus((next) => (status = next));
     return () => {
       subscription.then((unlisten) => unlisten()).catch(() => {});
+      if (sayTimer !== null) clearTimeout(sayTimer);
     };
   });
 
@@ -82,13 +84,99 @@
   // serving a network nobody asked it to.
   const pick = (address: string) => (remote.address = address);
 
-  const copy = () => {
-    if (!status?.url) return;
-    navigator.clipboard?.writeText(status.url).catch((e) => {
-      // Not worth a strip on the page: the URL is on screen and can be read.
-      console.warn("the address was not copied:", e);
-    });
+  // Copying the address, and saying whether it worked.
+  //
+  // Both halves were the bug. A browser only hands out `navigator.clipboard`
+  // in a secure context, and the remote page is plain http on a LAN address —
+  // so on the very machine this button exists for, the object is not there at
+  // all and the optional call was a no-op. And because nothing was said
+  // either way, a button that did nothing looked exactly like a button that
+  // had worked, which is how an operator ends up pasting whatever was in the
+  // clipboard before.
+
+  /// How long the button's answer stays up. Long enough to read, short enough
+  /// that it is gone before the next press.
+  const SAID_MS = 1_600;
+
+  let said = $state<"copied" | "failed" | null>(null);
+  let sayTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const say = (what: "copied" | "failed") => {
+    said = what;
+    if (sayTimer !== null) clearTimeout(sayTimer);
+    sayTimer = setTimeout(() => {
+      sayTimer = null;
+      said = null;
+    }, SAID_MS);
   };
+
+  /// The clipboard the old way. Deprecated everywhere, and the only thing
+  /// that works on an http page — which is what the remote client is, and
+  /// will stay until there is a certificate to serve it under.
+  const copyTheOldWay = (text: string): boolean => {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    // Placed off-screen rather than hidden: what the command copies is a
+    // selection, and nothing that is not rendered can be selected.
+    field.style.position = "fixed";
+    field.style.top = "-1000px";
+    document.body.appendChild(field);
+    try {
+      field.select();
+      return document.execCommand("copy");
+    } catch {
+      return false;
+    } finally {
+      field.remove();
+    }
+  };
+
+  const copy = async () => {
+    const url = status?.url;
+    if (!url) return;
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        say("copied");
+        return;
+      }
+    } catch (e) {
+      // Present but refusing — no permission, or no user gesture the webview
+      // recognised. The old way still tends to go through.
+      console.warn("the clipboard refused the address:", e);
+    }
+    say(copyTheOldWay(url) ? "copied" : "failed");
+  };
+
+  // The address as something a phone can be pointed at.
+  //
+  // The other machine is often a phone, and typing `http://192.168.1.23:8420`
+  // on a glass keyboard while standing at a rack is the worst part of setting
+  // the remote up. The camera does it instead, and the operator hands the
+  // phone to somebody else and has them scan it too.
+  //
+  // Drawn dark on white with a margin around it, in a window that is
+  // otherwise dark throughout. That is not an oversight: the quiet zone is
+  // part of the code, and a reader that has to find the finder patterns
+  // against a dark page is a reader that sometimes does not.
+  let code = $derived.by(() => {
+    const url = status?.running ? status.url : null;
+    if (!url) return null;
+    try {
+      const encoded = encodeQr(url);
+      return { size: encoded.size, path: qrPath(encoded) };
+    } catch (e) {
+      // Only an address longer than a version 9 code holds, which a LAN URL
+      // is not. The panel is still useful without the picture.
+      console.warn("the address was not turned into a QR code:", e);
+      return null;
+    }
+  });
+
+  /// The quiet zone, in modules. Four is what the standard asks for, and less
+  /// than that is the usual reason a code that looks fine will not scan.
+  const QUIET = 4;
 </script>
 
 <section class="panel">
@@ -157,8 +245,32 @@
         <span class="ok">●</span>
         Open <code>{status.url}</code> on the other machine.
       </p>
+      {#if code}
+        <svg
+          class="qr"
+          viewBox="{-QUIET} {-QUIET} {code.size + QUIET * 2} {code.size + QUIET * 2}"
+          role="img"
+          aria-label="The address as a QR code"
+        >
+          <rect
+            x={-QUIET}
+            y={-QUIET}
+            width={code.size + QUIET * 2}
+            height={code.size + QUIET * 2}
+            fill="#fff"
+          />
+          <path d={code.path} fill="#000" />
+        </svg>
+      {/if}
       <div class="row">
         <button onclick={copy}>Copy address</button>
+        {#if said === "copied"}
+          <span class="dim" aria-live="polite">Copied.</span>
+        {:else if said === "failed"}
+          <!-- The address is on screen right above this: saying so is the
+               whole of the recovery. -->
+          <span class="error" aria-live="polite">Not copied — select the address and copy it.</span>
+        {/if}
         <span class="dim">
           {status.clients}
           {status.clients === 1 ? "browser connected" : "browsers connected"}
@@ -240,6 +352,17 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
+  }
+
+  /* Big enough to scan from arm's length, and no bigger: the panel is a
+     settings card, not a poster. `crispEdges` keeps the modules square —
+     anti-aliased edges at this size are what a reader trips over. */
+  .qr {
+    width: 9rem;
+    height: 9rem;
+    align-self: flex-start;
+    border-radius: 0.2rem;
+    shape-rendering: crispEdges;
   }
 
   button {

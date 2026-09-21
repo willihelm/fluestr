@@ -12,11 +12,19 @@
   // open at all. There the meters turn: a strip of narrow columns filling
   // upwards, scrolled sideways if there are more than fit, in the height of a
   // single desk row.
+  //
+  // Either shape can be folded away entirely, down to the handle that brings
+  // it back: the strip is the tallest fixed thing above the chat, and a window
+  // parked in the corner of the desk is usually open for the chat alone. What
+  // survives the fold is the health counts — a strip hiding the fact that
+  // segments are being dropped would be worse than no strip.
 
   import LevelMeter from "./LevelMeter.svelte";
   import GainKnob from "./GainKnob.svelte";
   import MuteButton from "./MuteButton.svelte";
   import { watchNarrow } from "./layout";
+  import { loadCollapsed, saveCollapsed } from "./meters";
+  import { currentGroup } from "./windows";
   import type { Channel } from "./streams";
   import type { StreamLevel, WebhookStatus } from "./bridge";
 
@@ -95,71 +103,189 @@
     peak: 0,
     dropped: 0,
   });
+
+  /// Which view this window is, for the storage key. Read once, like the
+  /// chat's reading direction: a window does not become another view.
+  const view = currentGroup();
+
+  /// Whether the bars are folded away. This view's own answer, remembered
+  /// across a restart — a window sized for the chat alone should still be that
+  /// window tomorrow.
+  let collapsed = $state(loadCollapsed(view));
+
+  const fold = (next: boolean) => {
+    collapsed = next;
+    saveCollapsed(view, next);
+  };
+
+  /// Segments the decode queue gave up on across the channels this view shows.
+  /// Only for the folded handle: expanded, each count sits on the meter of the
+  /// stream it happened on, which is the more useful place for it.
+  let dropped = $derived(
+    channels.reduce(
+      (total, _channel, streamId) =>
+        visible === null || visible.has(streamId)
+          ? total + (overloaded.get(streamId) ?? 0)
+          : total,
+      0,
+    ),
+  );
 </script>
 
-<div class="meters" class:vertical={narrow}>
-  {#each channels as channel, streamId (channel.key)}
-    {#if visible === null || visible.has(streamId)}
-    {@const level = levels.get(streamId) ?? empty(streamId)}
-    <div
-      class="stream"
-      class:absent={absent.has(streamId)}
-      class:muted={channel.muted}
-      style="--channel: {channel.color}"
-    >
-      <span class="name">{channel.label}</span>
-      {#if mute}
-        <!-- Before the knob: mute is pressed in a hurry and trim is set
-             slowly, so the one that is reached for under pressure sits next
-             to the name it belongs to. -->
-        <MuteButton
-          muted={channel.muted}
-          label={channel.label}
-          disabled={absent.has(streamId)}
-          onchange={(next) => mute(streamId, next)}
-        />
-      {/if}
-      {#if gain}
-        <!-- Before the bar, so the reading stays the widest thing in the row
-             and the knob sits with the name of what it trims. -->
-        <GainKnob
-          value={channel.gainDb}
-          label={channel.label}
-          onchange={(db) => gain(streamId, db)}
-        />
-      {/if}
-      <LevelMeter
-        rms={level.rms}
-        peak={level.peak}
-        dropped={level.dropped}
-        vertical={narrow}
-      />
-      {#if (overloaded.get(streamId) ?? 0) > 0}
-        <span class="error" title="The decode queue was full and the oldest segments were dropped: {overloaded.get(streamId)}">
-          <!-- As with the dropped count: the number stays, the sentence it is
-               the subject of goes to the tooltip when there is no room. -->
-          {overloaded.get(streamId)}<span class="word">&nbsp;not transcribed</span>
-        </span>
-      {/if}
-    </div>
-    {/if}
-  {/each}
-
-  {#if webhooks && webhooks.dropped > 0}
-    <div class="stream outbound">
-      <span
-        class="error"
-        title="Webhook requests given up on — the queue was full, or the endpoint did not answer{webhooks.lastError
-          ? `: ${webhooks.lastError}`
-          : ''}"
-      >
-        {webhooks.dropped}<span class="word">&nbsp;webhooks dropped</span>
+<div class="strip" class:folded={collapsed}>
+  <!-- The handle, on the strip rather than in the window header: it is the
+       thing directly above the chat that a window is being made shorter by,
+       and it stays in the same place whether the bars are there or not. -->
+  <button
+    class="fold"
+    onclick={() => fold(!collapsed)}
+    aria-expanded={!collapsed}
+    aria-label="Level meters"
+    title={collapsed ? "Show the meters" : "Hide the meters"}
+  >
+    <span class="chevron" aria-hidden="true">{collapsed ? "\u25b8" : "\u25be"}</span>
+    <span class="folded-only">Meters</span>
+    {#if dropped > 0}
+      <!-- Folded, this is the only place the count is said at all. -->
+      <span class="error folded-only" title="The decode queue was full and the oldest segments were dropped: {dropped}">
+        {dropped}&nbsp;not transcribed
       </span>
-    </div>
+    {/if}
+    {#if webhooks && webhooks.dropped > 0}
+      <span class="error folded-only" title="Webhook requests given up on — the queue was full, or the endpoint did not answer{webhooks.lastError ? `: ${webhooks.lastError}` : ''}">
+        {webhooks.dropped}&nbsp;webhooks dropped
+      </span>
+    {/if}
+  </button>
+
+  {#if !collapsed}
+  <div class="meters" class:vertical={narrow}>
+    {#each channels as channel, streamId (channel.key)}
+      {#if visible === null || visible.has(streamId)}
+      {@const level = levels.get(streamId) ?? empty(streamId)}
+      <div
+        class="stream"
+        class:absent={absent.has(streamId)}
+        class:muted={channel.muted}
+        style="--channel: {channel.color}"
+      >
+        <span class="name">{channel.label}</span>
+        {#if mute}
+          <!-- Before the knob: mute is pressed in a hurry and trim is set
+               slowly, so the one that is reached for under pressure sits next
+               to the name it belongs to. -->
+          <MuteButton
+            muted={channel.muted}
+            label={channel.label}
+            disabled={absent.has(streamId)}
+            onchange={(next) => mute(streamId, next)}
+          />
+        {/if}
+        {#if gain}
+          <!-- Before the bar, so the reading stays the widest thing in the row
+               and the knob sits with the name of what it trims. -->
+          <GainKnob
+            value={channel.gainDb}
+            label={channel.label}
+            onchange={(db) => gain(streamId, db)}
+          />
+        {/if}
+        <LevelMeter
+          rms={level.rms}
+          peak={level.peak}
+          dropped={level.dropped}
+          vertical={narrow}
+        />
+        {#if (overloaded.get(streamId) ?? 0) > 0}
+          <span class="error" title="The decode queue was full and the oldest segments were dropped: {overloaded.get(streamId)}">
+            <!-- As with the dropped count: the number stays, the sentence it is
+                 the subject of goes to the tooltip when there is no room. -->
+            {overloaded.get(streamId)}<span class="word">&nbsp;not transcribed</span>
+          </span>
+        {/if}
+      </div>
+      {/if}
+    {/each}
+
+    {#if webhooks && webhooks.dropped > 0}
+      <div class="stream outbound">
+        <span
+          class="error"
+          title="Webhook requests given up on — the queue was full, or the endpoint did not answer{webhooks.lastError
+            ? `: ${webhooks.lastError}`
+            : ''}"
+        >
+          {webhooks.dropped}<span class="word">&nbsp;webhooks dropped</span>
+        </span>
+      </div>
+    {/if}
+  </div>
   {/if}
 </div>
 
 <style>
+  /* The handle and the bars it folds, as one band across the top of the chat:
+     the border below and the surface behind it belong to the band rather than
+     to the meters, so folding them away leaves a strip that still reads as the
+     edge of the chat and not as a stray button. */
+  .strip {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  /* A column the width of its chevron, down the left of the bars: the fold is
+     reached for between shows and the controls beside it during one, so it
+     keeps out of the way of the knobs rather than sitting among them. */
+  .fold {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: none;
+    padding: 0 0.45rem;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .fold:hover {
+    color: var(--text);
+  }
+
+  /* Sized against the strip rather than against the text beside it: it is the
+     one thing in the band that is aimed at with a mouse in a dark room, and at
+     the size of the label it was a target the width of a full stop. */
+  .chevron {
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+
+  /* Folded, the handle *is* the strip, so it takes the width and the padding
+     the bars had — which is what gives the word and the counts beside it room,
+     and what keeps the whole band one line high. */
+  .folded .fold {
+    flex: 1;
+    min-width: 0;
+    padding: 0.2rem 1rem;
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
+  }
+
+  /* Said only when there is nothing else in the band to say it: expanded, the
+     bars are what the chevron is pointing at. */
+  .fold .folded-only {
+    display: none;
+  }
+
+  .folded .fold .folded-only {
+    display: inline;
+  }
+
   .meters {
     display: grid;
     /* Wide enough for a name, an M, a knob and a bar that is still worth
@@ -168,8 +294,10 @@
     grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
     gap: 0.35rem 1rem;
     padding: 0.5rem 1rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    /* Beside the handle, and the one that gives way when the window is too
+       narrow for every column it would like. */
+    flex: 1;
+    min-width: 0;
   }
 
   .stream {
@@ -244,7 +372,8 @@
     grid-template-columns: none;
     gap: 0 0.5rem;
     padding: 0.4rem 0.75rem;
-    padding-left: max(0.75rem, var(--safe-left));
+    /* Only the right edge takes the inset: the handle is what sits against
+       the left one now, and it has its own. */
     padding-right: max(0.75rem, var(--safe-right));
     overflow-x: auto;
     /* A sideways drag here is the strip being scrolled; the page behind it
@@ -283,5 +412,13 @@
 
   .vertical .error .word {
     display: none;
+  }
+
+  /* A phone's rounded corner cuts into the left edge the handle now sits
+     against, expanded as well as folded. */
+  @media (max-width: 45rem) {
+    .fold {
+      padding-left: max(0.3rem, var(--safe-left));
+    }
   }
 </style>

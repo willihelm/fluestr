@@ -7,7 +7,7 @@
   import ClearCommunication from "./lib/ClearCommunication.svelte";
   import ResourceMeter from "./lib/ResourceMeter.svelte";
   import { toConfig, validate, absentChannels } from "./lib/streams";
-  import { forgetChannels, viewStreams, visibleStreams } from "./lib/groups";
+  import { forgetChannels, visibleStreams } from "./lib/groups";
   import { forget as forgetInRules } from "./lib/rules";
   import {
     adoptDeviceIds,
@@ -372,7 +372,6 @@
   // with no members shows nothing, and saying so is more useful than silently
   // falling back to showing everything.
   let visible = $derived(visibleStreams(group, channels));
-  let searchable = $derived(viewStreams(channels, visible));
   let shown = $derived(
     visible === null ? messages : messages.filter((m) => visible.has(m.streamId)),
   );
@@ -1101,7 +1100,6 @@
             messages={shown}
             {colors}
             starts={sessionStarts}
-            streams={searchable}
             direction={chatSort}
           />
         {/if}
