@@ -311,17 +311,19 @@ fn transcribe(
 
     // The price of that decision is whisper's repetition loop: greedy sampling
     // with nothing to fall back to sometimes cycles on a phrase until the
-    // token budget runs out, which costs seconds of decode for a segment of
-    // pure noise. The loop itself is cut from the text on the app side
-    // (`audio_core::collapse_repetitions`) — this only bounds what it may cost
-    // before then.
+    // token budget runs out. It is cut from the text on the app side
+    // (`audio_core::collapse_repetitions`), and it is *not* bounded here.
     //
-    // Twenty tokens per second of audio is roughly three times the fastest
-    // German anybody speaks into an intercom, so no real utterance reaches it;
-    // a loop reaches it immediately. The constant on top keeps very short
-    // segments from being capped by rounding alone.
-    let seconds = pcm.len() as f64 / audio_core::SAMPLE_RATE as f64;
-    params.set_max_tokens(20 + (seconds * 20.0) as i32);
+    // A per-segment token cap was tried and had to be taken out again: it did
+    // not truncate where it was set. When whisper stops on `max_tokens` it
+    // keeps only the tokens up to the last closing timestamp it emitted and
+    // throws the rest away (`whisper_full_with_state`, the `result_len`
+    // resize), so a cap that lands mid-sentence deletes that whole sentence,
+    // and one that lands before the first timestamp fails the decode and
+    // deletes the segment. Both look exactly like speech that was never
+    // spoken — the silent damage this project does not accept — while the
+    // loop itself is only ever a latency cost, bounded anyway by whisper's own
+    // ceiling of half the text context.
 
     // Decoder chatter does not belong on stdout.
     params.set_print_special(false);
