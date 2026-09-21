@@ -1102,14 +1102,19 @@
         <span class="dim">Press Start to transcribe all configured channels.</span>
       {/if}
 
+      <!-- Clear first, then the meters. The button is a control and the
+           meters are a reading, and the two are not looked for in the same
+           way: a control is reached for, a number is glanced at. Putting the
+           reading at the very end of the bar also stops the button moving
+           sideways as the numbers in it change width. -->
       <div class="right">
-        <ResourceMeter {usage} />
         {#if view === "chat"}
           <ClearCommunication
             empty={messages.length === 0}
             clear={clearCommunication}
           />
         {/if}
+        <ResourceMeter {usage} />
       </div>
     </div>
   {/if}

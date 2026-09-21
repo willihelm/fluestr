@@ -678,11 +678,17 @@ to itself immediately and asks the main window to store it, because **the
 configuration has exactly one writer**; the request travels as a `group-on-top`
 event and the ordinary save carries it to disk.
 
-**Clear all communication** clears every transcript, across every group and
-session, in every open window at once. It does not change channel, group or
-Settings configuration. Because it is irreversible it requires confirmation, and
-it is available at any time — a running session included, since a chat that
-has filled up mid-show is when it is most needed.
+**Clear all communication** — the button says **Clear all**, which is the
+whole of it in a bar that has the session line beside it — clears every
+transcript, across every group and session, in every open window at once. It
+does not change channel, group or Settings configuration. Because it is
+irreversible it requires confirmation, and the confirmation is the button
+itself: one press arms it —
+it turns red and asks — and a second within five seconds does it, after which
+it disarms on its own. A panel beside it wrapped the status bar onto a second
+row on a phone and moved what was being read. It is available at any time — a
+running session included, since a chat that has filled up mid-show is when it
+is most needed.
 
 **Accepted when:** eight streams run visibly live; speech that runs on is one
 bubble rather than one per segment ✔; scrolling stays smooth at 10,000 segments
