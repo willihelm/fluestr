@@ -10,7 +10,13 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-21, after the first live session with
+**Status of this document:** 2026-09-21. The detection thresholds became
+settings the same day — a **Detection** section beside the vocabulary holding
+the pause that ends a segment, the ceiling on one segment and the detector's
+threshold, each reaching the running session rather than the next one, which
+is what closes P12. The coupling P14 warned about was removed first: the
+forced cut's search window no longer follows the silence timeout, so one
+control moves one behaviour. Before that, the first live session with
 four channels on real hardware. It answered what P1 had left open — a known
 source on a known channel appeared in that channel's stream and in no other —
 and the pipeline held with four people talking at once. On the strength of it
@@ -87,7 +93,7 @@ for now, with the reason recorded in the package.
 | P9 | Live search & filter | **Done** | Per view, over what the window holds. No time-range filter |
 | P10 | SQLite persistence | **Deferred** | Set aside by the user: this is about live communication, not persistence |
 | P11 | Model manager | **Done** | — |
-| P12 | Settings & presets | **Partial** | Profiles, default language and stable device id are stored; every threshold is still a constant in the code |
+| P12 | Settings & presets | **Done** | The theme is still a constant; every threshold that decides what is transcribed is a setting |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Deferred** | Set aside by the user: tested in the house rather than on a bench |
 | P15 | Vocabulary & prompt management | **Partial** | One global box, stored, but not named lists; no baseline left to measure it against |
@@ -105,7 +111,9 @@ than refused, and what decides how many channels keep up is how many decodes
 run at once, which is an operator's to set on the Models page.
 Around it: a Settings page holding the device, the channel map — whose labels
 and languages can be changed while the session runs, without stopping capture —
-the global vocabulary, the groups and the rules that fire on them; a chat page with a
+the global vocabulary, the groups and the rules that fire on them, and the
+three detection thresholds, which move the audio of a session that is already
+running; a chat page with a
 group sidebar that narrows the view and detaches any group — or everything —
 into a window of its own, and a search that narrows it further to one channel or
 one word without any of that reaching the other screens; profiles that come back at the next start, keyed on an
@@ -963,7 +971,7 @@ map. `just model` and `just vad-model` are kept for the integration tests and
 The remaining acceptance half — a machine that has never run this, guided to
 its first transcription — needs P13.
 
-### P12 — Settings & configuration persistence — **Partial**
+### P12 — Settings & configuration persistence — **Done**
 
 **Accepted when:** a preset, including channel colours and non-exclusive group
 memberships, and the global vocabulary survive a restart and a reconnect of the
@@ -1024,12 +1032,40 @@ entries in the picker. cpal knows a device only by name and keeps its
   every device on Windows until the WASAPI port brings its endpoint id, falls
   back to the name as its id — which is exactly what the app did before.
 
-**Outstanding:** the settings proper — worker count, VAD thresholds, maximum
-segment length, theme — are all still constants in the code and none is in the
-file. Two are already identified as needing to be settings: the segmenter's
-`silence_timeout` (a *latency* parameter, not only a quality one) and the
-Silero threshold, which trades decode time against the risk of losing quietly
-spoken commands.
+**The settings proper** are in, as a **Detection** section beside the
+vocabulary: the pause that ends a segment, the ceiling on one segment, and how
+sure the speech detector has to be. They were held back on purpose until P14's
+sweep could say what they should be; when P14 was set aside on 2026-09-21 the
+argument inverted rather than disappearing — a number found by ear has to be
+reachable while listening.
+
+Four decisions in it:
+
+- **They reach the session that is already running**, on the next segment
+  rather than at the next Start. A change is pushed to the processing thread
+  through a channel of its own, the way a language change is, and applied to
+  every pipeline; the thresholds describe the system, so there is no per-stream
+  version of them. Setting them by ear means setting them while somebody
+  talks, and a control that needed a Stop would be used once and never again.
+- **Stored beside the profiles**, for the vocabulary's reason rather than the
+  model's: how hard the intercom is to hear — how much air a beltpack puts on
+  the line — belongs to the house and outlives any one patch.
+- **Whole milliseconds and whole percent, not floats.** The file is one an
+  operator may repair by hand, and `550` is easier to be sure about than
+  `0.55`. It also keeps a configuration comparable with `==`, which is what
+  tells `save_config` a real change from an echo.
+- **One threshold on screen, not two.** The detector's release follows the
+  onset at a fixed distance (`silero::HYSTERESIS`), which is what stops a word
+  falling apart mid-vowel. Two boxes could be set the wrong way round, which
+  removes the hysteresis silently instead of reporting an error.
+
+The ends of every slider are generated from the Rust constants into
+`constants.ts`, like the gain range and the worker count, so the page cannot
+offer a number the backend will not take.
+
+**Outstanding:** the theme, which is the last thing on the original list that
+is still a constant, and the least of them — it changes nothing about what is
+transcribed.
 
 ### P13 — Packaging & signing (macOS) — **Open**
 
@@ -1104,11 +1140,12 @@ Two couplings will corrupt the result if they are not accounted for first, and
 **the first of them now matters even without the sweep**, because tuning by ear
 hits it just as hard:
 
-- **`flush_window_frames` is derived from `silence_frames`** (segmenter.rs).
-  Lowering the timeout also shrinks the window in which a forced cut looks for
-  the quietest frame, so a single number moves two behaviours. Decouple them
-  before either sweeping or exposing the timeout as a setting, or nobody can
-  tell which of the two changed the result.
+- **`flush_window_frames` was derived from `silence_frames`** (segmenter.rs):
+  lowering the timeout also shrank the window in which a forced cut looks for
+  the quietest frame, so a single number moved two behaviours. **Decoupled on
+  2026-09-21**, before the timeout was exposed as a setting — the search
+  window is now its own value, unchanged at the default, and a sweep or an ear
+  moves one behaviour at a time.
 - **`SileroVad` fails open**, so the counter only advances on a frame the model
   confidently calls silence (P3). A lower timeout buys the shorter wait only
   where the detector is decisive, so material where it is not belongs in
@@ -1725,8 +1762,9 @@ second platform. Nothing between them changes.
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached, and
 confirmed on real hardware in the live session of 2026-09-21.*
 
-**Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17, P19. *What is left
-is the settings proper — every threshold is still a constant in the code.*
+**Milestone B (usable MVP):** + P6, P7, P11, P12, P16, P17, P19. *Reached on
+2026-09-21, when the detection thresholds became settings that reach a running
+session.*
 
 **Milestone C (language quality & production readiness):** + P15, P8, P9, P13.
 *P10 left it on 2026-09-18 and P14 on 2026-09-21; P3b was dropped. What is
@@ -1742,16 +1780,14 @@ macOS version it is ported from has settled in the house.*
 
 In this order, with the reason each one comes where it does. Reordered on
 2026-09-21: the load test that stood at the head of this list went with P14,
-and what it was blocking moved up.
+and what it was blocking — the settings proper — was done the same day and is
+no longer on it.
 
-1. **The rest of P12 — the settings proper.** The Silero threshold and the
-   segmenter's `silence_timeout` and `max_segment` are still constants in the
-   code. They were behind the sweep on purpose, because exposing a number fixes
-   the default somebody will keep; with the sweep gone, the argument inverts —
-   tuning happens by ear in the house now, and a number tuned by listening has
-   to be reachable while listening. **Decouple `flush_window_frames` from
-   `silence_frames` first** (see P14): otherwise one control moves two
-   behaviours and nobody can say which one improved things.
+1. **The thresholds, in the house.** Nothing to build: the controls exist and
+   reach the running session, and what they have not had is an evening with
+   somebody turning them while a show talks. It is first because every number
+   in the Detection section is still the constant it was, and the point of
+   exposing them was to find out what this house wants instead.
 2. **The remote, on a real network.** P16 has not had a second machine, a house
    network and somebody working from it. That comes before authentication —
    the obvious next thing to want, and the wrong thing to build against an
@@ -1820,12 +1856,22 @@ and what it was blocking moved up.
     finds it and starts, under its new name. With two identical interfaces
     connected, the picker offers both and each profile keeps the one it was set
     to (P12).
-12. Run a session with as many channels as the show actually needs and watch
+12. With a session running and somebody talking, open **Detection** and move
+    the pause that ends a segment from 500 ms to 200 → the next lines arrive
+    sooner and more of them are cut mid-sentence, without a Stop and without
+    the channel map being touched. Move the detector's threshold to 90 → a
+    quietly spoken line no longer arrives; back to 50 → it does. Press **Back
+    to the defaults**, restart the app → the section comes up on the
+    defaults, and a `config.json` hand-edited to 5 ms comes up at the lowest
+    value the page offers rather than at 5 (P12).
+    1. Open the same section from the browser on the LAN → it shows the same
+       three numbers, and moving one there moves the audio on the machine.
+13. Run a session with as many channels as the show actually needs and watch
     the GPU meter and the per-stream overload counters rather than a
     benchmark — with P14 set aside, this is what took the load test's place
     (P8). Four channels have been through it; the ceiling is unknown by
     decision, and the meters are how it is found.
-13. Write a rule on `cue` that highlights and asks urgently, unfocus the main
+14. Write a rule on `cue` that highlights and asks urgently, unfocus the main
     window and speak "Cue fünf" → the exact word is highlighted and the window
     requests attention; "rescue" does neither. Repeat from a channel in an open
     group to verify its separate window. Then narrow the same rule to one
@@ -1851,12 +1897,12 @@ and what it was blocking moved up.
        calls a webhook and offers no URL, method, header or body box. Untick
        the action there and speak → the button does not press. Tick it again
        on the machine and the destination is still the one that was typed.
-14. On Windows, with a DAW holding the same interface: start a session on eight
+15. On Windows, with a DAW holding the same interface: start a session on eight
     channels and let the DAW run through it — the transcripts appear and the
     DAW is undisturbed. Then switch the capture route to ASIO on a driver that
     is single-client and confirm the app says the interface is busy instead of
     taking it (P18).
-15. With a long chat open, switch to **Newest at top** while reading an older
+16. With a long chat open, switch to **Newest at top** while reading an older
     bubble → the same bubble stays under the cursor, older pages load below and
     a new transcript appears at the top. Switch back to **Newest at bottom**
     and verify the inverse; the main window, an open group window and the LAN
