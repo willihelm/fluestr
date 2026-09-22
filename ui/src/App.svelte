@@ -192,7 +192,8 @@
   /// Whether the window is too narrow to show the sidebar beside the chat —
   /// the LAN remote on a phone (P16), or the app on half a laptop screen. The
   /// sidebar decides this for itself too; what it is needed for *here* is the
-  /// burger, which is a control in the header and not in the sidebar it opens.
+  /// burger, which is a control in the bar above the chat and not in the
+  /// sidebar it opens.
   let narrow = $state(false);
   $effect(() => watchNarrow((next) => (narrow = next)));
   /// Whether that sidebar is currently drawn over the chat. Bound rather than
@@ -1005,36 +1006,6 @@
 
 <main>
   <header class="bar">
-    <!-- The way to the views on a window with no room for them beside the
-         chat. In the header rather than floating over the transcripts: it is
-         a control about the window, it sits where the other two are, and a
-         button over the chat would cover the newest line — which on this page
-         is the one thing that must never be covered.
-
-         Rendered only where it does something. A burger beside a sidebar that
-         is already open is a button whose two states look identical. -->
-    {#if narrow && view === "chat"}
-      <button
-        class="burger"
-        onclick={() => (sidebarOpen = !sidebarOpen)}
-        aria-expanded={sidebarOpen}
-        aria-label={sidebarOpen ? "Close the list of views" : "Views"}
-        title="Views"
-      >
-        <!-- Drawn rather than an emoji or a "≡", for the reason the group
-             window's pin is drawn: it has to take its weight and its colour
-             from the row it is in at every font size. -->
-        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-          <path
-            d="M2 4h12M2 8h12M2 12h12"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-          />
-        </svg>
-      </button>
-    {/if}
-
     <h1>Intercom2Chat</h1>
 
     <nav class="tabs">
@@ -1141,6 +1112,42 @@
         {/if}
         <ResourceMeter {usage} />
       </div>
+    </div>
+  {/if}
+
+  <!-- On a narrow window the sidebar is not a column beside the chat but a
+       drawer over it, and this is the line it is reduced to: the burger that
+       opens it, and the name of the view that is showing.
+
+       Directly above the chat rather than up in the header, and the same
+       shape as the Settings page's rail bar: both are a way into a drawer
+       over the thing below them, and a burger that sits two bars away from
+       what it opens is a burger nobody connects to the drawer that appears.
+       The name is the half that matters — a burger alone would leave "which
+       of my groups am I reading?" to be answered by looking at the channel
+       colours in the bubbles. -->
+  {#if narrow && view === "chat"}
+    <div class="bar viewbar">
+      <button
+        class="burger"
+        onclick={() => (sidebarOpen = !sidebarOpen)}
+        aria-expanded={sidebarOpen}
+        aria-label={sidebarOpen ? "Close the list of views" : "Views"}
+        title="Views"
+      >
+        <!-- Drawn rather than an emoji or a "≡", for the reason the group
+             window's pin is drawn: it has to take its weight and its colour
+             from the row it is in at every font size. -->
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path
+            d="M2 4h12M2 8h12M2 12h12"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+      <span class="where">{group ? group.name : "All channels"}</span>
     </div>
   {/if}
 
@@ -1256,6 +1263,26 @@
   /* The topmost bar is the one that clears the status bar and the camera. */
   header.bar {
     padding-top: max(0.6rem, var(--safe-top));
+  }
+
+  /* A strip in the shape of the bars above it: it is part of the window's
+     furniture, not a control floating over the transcripts. A button over the
+     chat would cover the newest line, which on this page is the one thing
+     that must never be covered. */
+  .viewbar {
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+
+  /* Where the operator is. The brightest thing on the line, because it is the
+     whole reason the line is there. */
+  .viewbar .where {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .burger {
@@ -1458,9 +1485,11 @@
       max-width: 8rem;
     }
 
-    /* The checkbox stays reachable; its label does not — Start itself is the
-       one thing in the bar with no narrower spelling. */
-    .auto-start span {
+    /* Gone entirely, label and box. It is set once, between shows, and the
+       header on a phone is already a profile name and Start on one line —
+       the one control here the session turns on. Auto-start keeps whatever it
+       was given on the desk; it is not changed by being unreachable. */
+    .auto-start {
       display: none;
     }
   }

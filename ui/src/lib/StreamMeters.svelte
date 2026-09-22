@@ -139,8 +139,13 @@
 
 <div class="strip" class:folded={collapsed}>
   <!-- The handle, on the strip rather than in the window header: it is the
-       thing directly above the chat that a window is being made shorter by,
-       and it stays in the same place whether the bars are there or not. -->
+       thing directly above the chat that a window is being made shorter by.
+       A full-width row across the top of the band, folded or not: it is the
+       one control here that is not about a channel, and beside the bars it
+       both sat among the knobs and moved — a left column when the bars were
+       there, the whole band when they were not. A handle that is in a
+       different place depending on what it did last is one that has to be
+       looked for every time. -->
   <button
     class="fold"
     onclick={() => fold(!collapsed)}
@@ -149,7 +154,10 @@
     title={collapsed ? "Show the meters" : "Hide the meters"}
   >
     <span class="chevron" aria-hidden="true">{collapsed ? "\u25b8" : "\u25be"}</span>
-    <span class="folded-only">Meters</span>
+    <!-- Named whether or not the bars are showing, unlike the counts beside
+         it: a row with a chevron and nothing else in it is a control that
+         says only that something can be opened, not what. -->
+    <span class="what">Meters</span>
     {#if dropped > 0}
       <!-- Folded, this is the only place the count is said at all. -->
       <span class="error folded-only" title="The decode queue was full and the oldest segments were dropped: {dropped}">
@@ -235,26 +243,32 @@
      edge of the chat and not as a stray button. */
   .strip {
     display: flex;
+    flex-direction: column;
     align-items: stretch;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
   }
 
-  /* A column the width of its chevron, down the left of the bars: the fold is
-     reached for between shows and the controls beside it during one, so it
-     keeps out of the way of the knobs rather than sitting among them. */
+  /* A row across the top of the band, in the same place and at the same width
+     whether the bars below it are showing or not. Its contents are pushed to
+     the left, where the eye starting on the band already is. */
   .fold {
     display: flex;
     align-items: center;
+    justify-content: flex-start;
     gap: 0.5rem;
     flex: none;
-    padding: 0 0.45rem;
+    width: 100%;
+    padding: 0.15rem 1rem;
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
     background: none;
     border: none;
     color: var(--text-dim);
     font: inherit;
     font-size: 0.8rem;
     line-height: 1;
+    text-align: left;
     cursor: pointer;
   }
 
@@ -264,25 +278,19 @@
 
   /* Sized against the strip rather than against the text beside it: it is the
      one thing in the band that is aimed at with a mouse in a dark room, and at
-     the size of the label it was a target the width of a full stop. */
+     the size of the label it was a target the width of a full stop. The row it
+     is in is the target now, but the arrow is still what is aimed at. */
   .chevron {
-    font-size: 1.4rem;
+    font-size: 1.2rem;
     line-height: 1;
   }
 
-  /* Folded, the handle *is* the strip, so it takes the width and the padding
-     the bars had — which is what gives the word and the counts beside it room,
-     and what keeps the whole band one line high. */
-  .folded .fold {
-    flex: 1;
-    min-width: 0;
-    padding: 0.2rem 1rem;
-    padding-left: max(1rem, var(--safe-left));
-    padding-right: max(1rem, var(--safe-right));
+  .what {
+    font-weight: 600;
   }
 
-  /* Said only when there is nothing else in the band to say it: expanded, the
-     bars are what the chevron is pointing at. */
+  /* The counts are said here only when there is nothing else in the band to
+     say them: expanded, each one sits on the meter it happened on. */
   .fold .folded-only {
     display: none;
   }
@@ -298,10 +306,10 @@
        than its own label is not a meter. */
     grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
     gap: 0.35rem 1rem;
-    padding: 0.5rem 1rem;
-    /* Beside the handle, and the one that gives way when the window is too
-       narrow for every column it would like. */
-    flex: 1;
+    padding: 0 1rem 0.5rem;
+    padding-left: max(1rem, var(--safe-left));
+    padding-right: max(1rem, var(--safe-right));
+    /* Under the handle, across the whole band. */
     min-width: 0;
   }
 
@@ -376,9 +384,8 @@
     display: flex;
     grid-template-columns: none;
     gap: 0 0.5rem;
-    padding: 0.4rem 0.75rem;
-    /* Only the right edge takes the inset: the handle is what sits against
-       the left one now, and it has its own. */
+    padding: 0 0.75rem 0.4rem;
+    padding-left: max(0.75rem, var(--safe-left));
     padding-right: max(0.75rem, var(--safe-right));
     overflow-x: auto;
     /* A sideways drag here is the strip being scrolled; the page behind it
@@ -419,11 +426,12 @@
     display: none;
   }
 
-  /* A phone's rounded corner cuts into the left edge the handle now sits
-     against, expanded as well as folded. */
+  /* The same gutter the rest of the phone layout keeps, plus whatever the
+     rounded corner takes. */
   @media (max-width: 45rem) {
     .fold {
-      padding-left: max(0.3rem, var(--safe-left));
+      padding-left: max(0.75rem, var(--safe-left));
+      padding-right: max(0.75rem, var(--safe-right));
     }
   }
 </style>
