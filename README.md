@@ -3,10 +3,12 @@
 An offline desktop app that transcribes several intercom streams at once and
 presents them as a chat log.
 
-Audio engineers monitor several intercom channels during a production and
-inevitably lose information — nobody can follow eight conversations in
-parallel, and what was said is gone. This app makes what you missed readable
+Audio engineers often struggle to monitor intercom channels and what was said is gone quickly. This app makes what you missed readable
 and searchable, locally and without any cloud service.
+
+**The name** — *Fluestr* is German *Flüster* / *Flüstern*, "whisper", written
+the way German spells an umlaut without one (ü → ue). It is pronounced
+[ˈflʏstɐ]. It allows you to turn down your shout box and still get what is said on coms.
 
 **Status:** one channel runs end to end — microphone, ring buffer, resampling,
 segmentation, sidecar, chat list — at a measured **~330 ms** from the end of a
