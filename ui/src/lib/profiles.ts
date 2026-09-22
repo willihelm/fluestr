@@ -361,6 +361,11 @@ export const toStoredConfig = (
   /// like the vocabulary, and for its reason: how hard the intercom is to hear
   /// is a property of the house, not of the production passing through it.
   tuning: Tuning = DEFAULT_TUNING,
+  /// Whether the active profile's session starts the moment the app comes
+  /// up. Beside the profiles for the remote's reason: whether this machine is
+  /// attended when it is switched on is a property of where it stands, not of
+  /// the production currently patched into it.
+  autoStart: boolean = false,
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -389,6 +394,7 @@ export const toStoredConfig = (
   // Clamped here as well as in the boxes, for the port's reason: a box left
   // mid-number is exactly the state the last-ditch save catches.
   tuning: clampTuning(tuning),
+  autoStart,
   profiles: profiles.map(toStored),
 });
 
@@ -423,6 +429,7 @@ export const fromStoredConfig = (
   remote: StoredRemote;
   chatSort: SortDirection;
   tuning: Tuning;
+  autoStart: boolean;
 } => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
@@ -450,6 +457,9 @@ export const fromStoredConfig = (
     // A file written before these were settings has no such block, and what
     // its absence meant is the constants the app ran on then.
     tuning: stored.tuning ? clampTuning(stored.tuning) : DEFAULT_TUNING,
+    // A file written before this existed describes a machine that had to be
+    // started by hand, which is what its absence must keep meaning.
+    autoStart: stored.autoStart ?? false,
   };
 };
 

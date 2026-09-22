@@ -171,7 +171,22 @@ chatSort: StoredSortDirection,
  * because a file written before these were settings describes a session
  * that ran on exactly those numbers.
  */
-tuning: Tuning, profiles: Array<StoredProfile>, };
+tuning: Tuning, 
+/**
+ * Whether the session for the active profile starts the moment the app
+ * comes up, without the operator reaching for the Start button.
+ *
+ * Beside the profiles rather than inside one, and for the remote's
+ * reason: whether this machine is meant to be attended when it is
+ * switched on is a property of where it is installed — a booth an
+ * operator sits at all evening against a rack that is powered up before
+ * anyone arrives — not of the production currently patched into it.
+ *
+ * `#[serde(default)]` — off — because a file written before this existed
+ * describes a machine that had to be started by hand, and that is what
+ * its absence must keep meaning.
+ */
+autoStart: boolean, profiles: Array<StoredProfile>, };
 
 /**
  * A named view onto some of the channels.

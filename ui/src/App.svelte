@@ -172,6 +172,11 @@
   // carried through it. Pushed into a running session as well as stored —
   // these are set by ear, which means while somebody is talking.
   let tuning = $state<Tuning>({ ...DEFAULT_TUNING });
+  // Whether the active profile's session starts the moment the app comes up
+  // (P12), without the operator reaching for the Start button. Checked once,
+  // in the startup effect below, and never again — an operator who stops the
+  // session mid-evening has not asked the app to start it back up on its own.
+  let autoStart = $state(false);
   // Whether this view can still reach the app. Always "connected" in the app's
   // own windows; on a remote it is the difference between a live chat and a
   // frozen picture of one, which has to be said rather than looked like
@@ -496,6 +501,7 @@
             remote: { ...NO_REMOTE },
             chatSort: DEFAULT_DIRECTION,
             tuning: { ...DEFAULT_TUNING },
+            autoStart: false,
           };
 
       if (restored.profiles.length === 0) {
@@ -525,10 +531,17 @@
       models = restored.models;
       remote = restored.remote;
       tuning = restored.tuning;
+      autoStart = restored.autoStart;
 
       loaded = true;
 
       await catchUp();
+
+      // Reached only once, right after the setup from last time has been
+      // restored: an operator who stopped the session and left it stopped has
+      // not asked the app to start it back up the moment something else in
+      // the file changes.
+      if (autoStart && !running) await start();
     };
 
     first().catch((e) => (status = { state: "failed", message: String(e) }));
@@ -645,6 +658,7 @@
       remote,
       chatSort,
       tuning,
+      autoStart,
     );
     latest = config;
 
@@ -703,6 +717,7 @@
     remote = restored.remote;
     chatSort = restored.chatSort;
     tuning = restored.tuning;
+    autoStart = restored.autoStart;
   };
 
   // The compiled rules live on the backend, where every transcript is
@@ -1051,6 +1066,16 @@
         <span class="profile" title="Active profile">{active.name}</span>
       {/if}
 
+      <!-- Beside the button it decides the fate of, rather than a page away
+           in Settings: what it sets is exactly "what happens the next time
+           this button would otherwise have to be pressed", and that is a
+           question answered by looking at the button, not by opening a
+           different page to guess at it. -->
+      <label class="auto-start" title="Start automatically the next time the app opens">
+        <input type="checkbox" bind:checked={autoStart} />
+        <span>Auto-start</span>
+      </label>
+
       {#if running}
         <!-- Red, unlike Start: it is the one button in the header that
              ends what is running, and during a show it is pressed by
@@ -1361,6 +1386,16 @@
     white-space: nowrap;
   }
 
+  .auto-start {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
   .primary:disabled {
     opacity: 0.5;
     cursor: default;
@@ -1421,6 +1456,12 @@
 
     .profile {
       max-width: 8rem;
+    }
+
+    /* The checkbox stays reachable; its label does not — Start itself is the
+       one thing in the bar with no narrower spelling. */
+    .auto-start span {
+      display: none;
     }
   }
 

@@ -550,6 +550,20 @@ pub struct Config {
     /// that ran on exactly those numbers.
     #[serde(default)]
     pub tuning: Tuning,
+    /// Whether the session for the active profile starts the moment the app
+    /// comes up, without the operator reaching for the Start button.
+    ///
+    /// Beside the profiles rather than inside one, and for the remote's
+    /// reason: whether this machine is meant to be attended when it is
+    /// switched on is a property of where it is installed — a booth an
+    /// operator sits at all evening against a rack that is powered up before
+    /// anyone arrives — not of the production currently patched into it.
+    ///
+    /// `#[serde(default)]` — off — because a file written before this existed
+    /// describes a machine that had to be started by hand, and that is what
+    /// its absence must keep meaning.
+    #[serde(default)]
+    pub auto_start: bool,
     pub profiles: Vec<Profile>,
 }
 
@@ -581,6 +595,7 @@ impl Default for Config {
             remote: crate::remote::RemoteConfig::default(),
             chat_sort: SortDirection::default(),
             tuning: Tuning::default(),
+            auto_start: false,
             profiles: Vec::new(),
         }
     }
@@ -875,6 +890,7 @@ mod tests {
                 max_segment_ms: 4_000,
                 speech_threshold_percent: 60,
             },
+            auto_start: true,
             profiles: vec![
                 Profile {
                     name: "Probebühne".into(),
@@ -1319,6 +1335,7 @@ mod tests {
             keys(&json),
             [
                 "active",
+                "autoStart",
                 "chatSort",
                 "model",
                 "modelPath",
