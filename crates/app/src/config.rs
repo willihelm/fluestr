@@ -863,6 +863,14 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        // Emptied first. The name is unique within one process and no further:
+        // a pid is reused, and which test gets which number depends on the
+        // order they happen to start in, so a run can be handed the directory
+        // a *different* test filled on some earlier run. What that looks like
+        // is `a_first_start_has_no_file_and_no_complaint` failing now and then
+        // on a machine that has run these tests a lot, and passing on its own
+        // every time it is investigated.
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("creating the test directory");
         dir
     }
