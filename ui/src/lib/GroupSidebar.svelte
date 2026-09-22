@@ -17,6 +17,13 @@
   // on a phone beside the desk the whole chat in its own tab is the common
   // case rather than the exception.
   //
+  // At the foot of it, ruled off from the views, is the way into Settings.
+  // Not one of the rows above it and never selected: those say what the chat
+  // is showing, this opens a dialog over the window and comes back. It lives
+  // here because this is the app's one list of places, and because the header
+  // is the Start button's bar and nothing should compete with that during a
+  // show.
+  //
   // The sidebar's width is draggable and remembered per screen; see
   // `sidebar.ts` for why it is not in the configuration.
   //
@@ -44,9 +51,17 @@
     /// the header's burger is what binds to it; on the desk the sidebar is
     /// simply there and this says nothing.
     open?: boolean;
+    /// Opens the Settings dialog, from the button at the foot of the list.
+    opensettings: () => void;
   }
 
-  let { groups, channels, selected = $bindable(), open = $bindable(false) }: Props = $props();
+  let {
+    groups,
+    channels,
+    selected = $bindable(),
+    open = $bindable(false),
+    opensettings,
+  }: Props = $props();
 
   /// Whether this window is too narrow for a column beside the chat.
   let narrow = $state(false);
@@ -71,6 +86,10 @@
   };
 
   const ALL_CHANNELS_NAME = "All channels";
+
+  /// Where the cog's teeth sit, in degrees. Eight of them, which is as many
+  /// as read as teeth rather than as a ring at 14 px.
+  const TEETH = [0, 45, 90, 135, 180, 225, 270, 315];
 
   /// How far the drag handle moves the edge per arrow key. Coarse enough to
   /// get somewhere in a few presses, fine enough to land on a width: the
@@ -249,8 +268,39 @@
   {/each}
 
   {#if groups.length === 0}
-    <p class="empty">Groups are made on the Settings page.</p>
+    <p class="empty">Groups are made in Settings.</p>
   {/if}
+
+  <!-- Pushed to the bottom and ruled off, so it reads as the thing that is
+       not a view. On a phone it also closes the drawer it was pressed in:
+       what it opens is about to stand over that drawer anyway. -->
+  <div class="foot">
+    <button
+      class="settings"
+      onclick={() => {
+        opensettings();
+        open = false;
+      }}
+      aria-haspopup="dialog"
+      title="Settings (⌘,)"
+    >
+      <span>Settings</span>
+      <!-- Drawn rather than an emoji, for the reason the detach glyph and the
+           burger are: it has to take its weight and its colour from the row it
+           is in, at every font size and in either theme. Teeth as blocks
+           around a ring, not spokes radiating from a hub — spokes are a sun,
+           which is what the first attempt at this looked like. -->
+      <svg class="cog" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <g fill="currentColor">
+          {#each TEETH as angle}
+            <rect x="7.2" y="1" width="1.6" height="2.8" rx="0.4" transform="rotate({angle} 8 8)" />
+          {/each}
+        </g>
+        <circle cx="8" cy="8" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+        <circle cx="8" cy="8" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2" />
+      </svg>
+    </button>
+  </div>
 </nav>
 
 <!-- The edge, as something to take hold of. A separator rather than a slider,
@@ -453,6 +503,51 @@
     color: var(--text-dim);
   }
 
+  /* The foot of the list, wherever the list ends: `margin-top: auto` puts it
+     at the bottom edge of a short sidebar and directly under the last group
+     of a long one, and the rule above it is what says it is not one of
+     them. */
+  .foot {
+    margin-top: auto;
+    padding-top: 0.4rem;
+    border-top: 1px solid var(--border);
+  }
+
+  /* A row in the shape of the views above it, in the dim colour the app uses
+     for what is furniture rather than content — it is reached on purpose,
+     once, and must not draw the eye off the group that is flashing. The word
+     at the left where every row above it starts, the cog at the right edge
+     where those rows carry their channel count — the two columns the sidebar
+     already has, rather than a third position halfway along. */
+  .settings {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    border-radius: 0.3rem;
+    padding: 0.35rem 0.5rem;
+    font: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .settings:hover {
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  /* Against the right edge, in the column the counts are in. `flex: none`
+     because a flex item with no explicit size would otherwise be stretched to
+     the line height. */
+  .cog {
+    flex: none;
+    margin-left: auto;
+  }
+
   /* --- The drawer (narrow) ----------------------------------------------
 
      Over the chat rather than beside it, and over the chat *only*: the pane
@@ -530,5 +625,10 @@
 
   .drawer .detach {
     padding: 0.55rem 0.6rem;
+  }
+
+  .drawer .settings {
+    padding: 0.55rem 0.5rem;
+    font-size: 0.95rem;
   }
 </style>

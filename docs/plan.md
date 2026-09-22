@@ -141,7 +141,7 @@ stream from the end of a spoken segment to the text appearing. The channel
 count is not capped: a channel the interface does not have is carried rather
 than refused, and what decides how many channels keep up is how many decodes
 run at once, which is an operator's to set on the Models page.
-Around it: a Settings page holding the device, the channel map — whose labels
+Around it: a Settings dialog holding the device, the channel map — whose labels
 and languages can be changed while the session runs, without stopping capture —
 the global vocabulary, the groups and the rules that fire on them, and the
 three detection thresholds, which move the audio of a session that is already
@@ -495,20 +495,24 @@ channels produced no visible lag on screen, which is not the same as a number.
 
 ### P7 — Chat UI (Svelte) — **Done**
 
-Two pages. **Settings** holds the input device, the editable channel list
+One page and a dialog over it. **Settings** holds the input device, the editable channel list
 (device channel, label, language, colour), the global vocabulary, the alert
 terms, the groups with their membership, the profiles and the model manager.
 **Chat** holds a group sidebar, a meter per stream in the selected view — fed
 by the session while one runs and by the monitor before it starts, so the lines
 can be checked without pressing Start — and the lines themselves, each with its
 channel's colour down the left edge and its label, timestamp, language badges
-and measured latency, with a "jump to latest" button. **⌘1** and **⌘2** switch
-between the two pages, **⌘,** opens Settings as it does in every other Mac
-application, and **⌘T** starts capture or stops it while it runs — one key for
+and measured latency, with a "jump to latest" button. Settings is a dialog over
+that chat rather than a second tab — it is opened for an errand and closed
+again, and the lines keep arriving behind it — and it is reached from the foot
+of the group sidebar, which is the window's one list of places. **⌘,** opens it
+as it does in every other Mac application, **⌘1** and **⌘2** close and open it,
+and Escape closes it, and **⌘T** starts capture or stops it while it runs — one key for
 both, because it is pressed in the dark at the top of a show and again at the
 end of it. ⌘T is refused in exactly the cases the Start button is disabled in.
-Start/Stop is in the header and belongs to neither page: an operator who has
-to find the right page before they can stop capture has already lost.
+Start/Stop is in the header, which the dialog deliberately does not cover: an
+operator who has to close a dialog before they can stop capture has already
+lost.
 
 **A bubble is an utterance, not a segment.** Consecutive segments of the same
 channel are merged up to a silence of 1.5 s, with ceilings on length and
@@ -567,7 +571,7 @@ DOM window itself does not turn over: it is always the newest 200 bubbles,
 because which lines are rendered is not a question of which way round they are
 shown.
 
-**The Settings page is split by scope, not by topic.** Its scoped sections sit
+**Settings is split by scope, not by topic.** Its scoped sections sit
 in a rail on the left under a heading naming what each belongs to: Audio and
 Groups under the *profile* (listed under the active profile's name), Vocabulary
 and View under *all profiles*, Models and the remote client under *this

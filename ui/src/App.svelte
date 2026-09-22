@@ -75,14 +75,17 @@
     type WebhookStatus,
   } from "./lib/bridge";
 
-  // Two pages: the live chat, and the Settings page that holds everything
-  // about how the session is configured. Start/Stop belongs to neither — it is
-  // session-wide and stays in the header, reachable from both.
+  // One page — the live chat — and a Settings dialog over it, which holds
+  // everything about how the session is configured. A dialog rather than the
+  // second half of a tab strip: configuring is an errand that is finished and
+  // left, while the chat is what the window is for, and an operator who opens
+  // Settings mid-show should not have the arriving lines taken off the screen
+  // to do it. Start/Stop belongs to neither — it is session-wide and stays in
+  // the header; the dialog covers that header while it is open, which is why
+  // ⌘T below is answered whatever is on screen.
   //
   // Still to come in P7: the virtualised list. An hour across eight streams is
   // tens of thousands of nodes.
-
-  type View = "chat" | "settings";
 
   /// How long after the last keystroke the configuration is written.
   ///
@@ -100,21 +103,26 @@
   /// two-digit channel number is one open and not two.
   const METER_DEBOUNCE_MS = 250;
 
-  let view = $state<View>("chat");
+  /// Whether the Settings dialog is standing over the chat.
+  let settings = $state(false);
 
   /// The window's keyboard shortcuts.
   ///
   /// Three of them, all on the modifier key, and all for things an operator
-  /// does with one hand while the other is on a fader: switch between the two
-  /// pages, and start or stop capture.
+  /// does with one hand while the other is on a fader: open or leave Settings,
+  /// and start or stop capture.
   ///
-  /// - **⌘1** — Chat, and **⌘2** — Settings, the pair every tabbed Mac
-  ///   application has, in the order the tabs are in.
-  /// - **⌘,** — Settings as well, because that is where a Mac user's hand
-  ///   goes for a setup page. It opens and never toggles: a second press that
-  ///   threw the operator back into the chat would be a different action
-  ///   wearing the same key.
-  /// - **⌘T** — Start, or Stop while a session runs. One key for both,
+  /// - **⌘,** — Settings, because that is where a Mac user's hand goes for a
+  ///   setup page, and because the button itself is at the foot of the
+  ///   sidebar, which on a narrow window is behind a burger. It opens and
+  ///   never toggles: a second press that threw the operator back into the
+  ///   chat would be a different action wearing the same key. Escape, inside
+  ///   the dialog, is what closes it.
+  /// - **⌘1** — back to the chat, and **⌘2** — Settings, kept from the tab
+  ///   strip this dialog replaced: they are in the fingers of anybody who has
+  ///   used the app, and they cost nothing.
+  /// - **⌘T** — Start, or Stop while a session runs, with the Settings
+  ///   dialog open as well as without it. One key for both,
   ///   because it is pressed in the dark at the top of a show and again at
   ///   the end of it, and hunting for the second of two keys is the part that
   ///   goes wrong. It is refused in exactly the cases the button is disabled
@@ -129,11 +137,11 @@
 
     switch (event.key) {
       case "1":
-        view = "chat";
+        settings = false;
         break;
       case "2":
       case ",":
-        view = "settings";
+        settings = true;
         break;
       case "t":
       case "T":
@@ -214,11 +222,11 @@
   /// read, because both ends close it: the burger, and picking a view in it.
   let sidebarOpen = $state(false);
 
-  // The drawer belongs to the chat. Leaving for Settings with it open would
-  // leave it standing over a page it is not about, waiting to be found again
-  // on the way back.
+  // The drawer belongs to the chat. Opening Settings over it would leave it
+  // standing under a dialog it is not about, waiting to be found again once
+  // the dialog is gone.
   $effect(() => {
-    if (view !== "chat") sidebarOpen = false;
+    if (settings) sidebarOpen = false;
   });
 
   let active = $derived(profiles.find((p) => p.key === activeKey) ?? null);
@@ -990,7 +998,7 @@
   const start = async () => {
     if (problem) {
       status = { state: "failed", message: problem };
-      view = "settings";
+      settings = true;
       return;
     }
 
@@ -1011,7 +1019,9 @@
         tuning: clampTuning(tuning),
       });
       noteSession(status);
-      view = "chat";
+      // The errand the dialog was open for is done — capture is running, and
+      // what the window is for is behind it.
+      settings = false;
     } catch (e) {
       status = { state: "failed", message: String(e) };
     }
@@ -1086,25 +1096,6 @@
   <header class="bar">
     <h1>Fluestr</h1>
 
-    <nav class="tabs">
-      <button
-        class="tab"
-        class:active={view === "chat"}
-        onclick={() => (view = "chat")}
-        title="Chat (⌘1)"
-      >
-        Chat
-      </button>
-      <button
-        class="tab"
-        class:active={view === "settings"}
-        onclick={() => (view = "settings")}
-        title="Settings (⌘2, ⌘,)"
-      >
-        Settings
-      </button>
-    </nav>
-
     <div class="right">
       <!-- Which setup Start would start, beside the button that starts it.
            The name lives in Settings, three clicks away, and an operator who
@@ -1158,40 +1149,33 @@
     </div>
   {/if}
 
-  {#if view !== "settings"}
-    <div class="bar status">
-      {#if status.state === "running"}
-        <span class="ok">●</span>
-        <!-- Four short facts, in the width of one bar — see `statusLine`. -->
-        <span title={statusDetail}>{statusLine}</span>
-      {:else if status.state === "starting"}
-        <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
-      {:else if status.state === "failed"}
-        <span class="error">{status.message}</span>
-      {:else if status.state === "stopped"}
-        <span class="dim">Session ended.</span>
-      {:else if problem}
-        <span class="dim">{problem}</span>
-      {:else}
-        <span class="dim">Press Start to transcribe all configured channels.</span>
-      {/if}
+  <div class="bar status">
+    {#if status.state === "running"}
+      <span class="ok">●</span>
+      <!-- Four short facts, in the width of one bar — see `statusLine`. -->
+      <span title={statusDetail}>{statusLine}</span>
+    {:else if status.state === "starting"}
+      <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
+    {:else if status.state === "failed"}
+      <span class="error">{status.message}</span>
+    {:else if status.state === "stopped"}
+      <span class="dim">Session ended.</span>
+    {:else if problem}
+      <span class="dim">{problem}</span>
+    {:else}
+      <span class="dim">Press Start to transcribe all configured channels.</span>
+    {/if}
 
-      <!-- Clear first, then the meters. The button is a control and the
-           meters are a reading, and the two are not looked for in the same
-           way: a control is reached for, a number is glanced at. Putting the
-           reading at the very end of the bar also stops the button moving
-           sideways as the numbers in it change width. -->
-      <div class="right">
-        {#if view === "chat"}
-          <ClearCommunication
-            empty={messages.length === 0}
-            clear={clearCommunication}
-          />
-        {/if}
-        <ResourceMeter {usage} />
-      </div>
+    <!-- Clear first, then the meters. The button is a control and the
+         meters are a reading, and the two are not looked for in the same
+         way: a control is reached for, a number is glanced at. Putting the
+         reading at the very end of the bar also stops the button moving
+         sideways as the numbers in it change width. -->
+    <div class="right">
+      <ClearCommunication empty={messages.length === 0} clear={clearCommunication} />
+      <ResourceMeter {usage} />
     </div>
-  {/if}
+  </div>
 
   <!-- On a narrow window the sidebar is not a column beside the chat but a
        drawer over it, and this is the line it is reduced to: the burger that
@@ -1204,7 +1188,7 @@
        The name is the half that matters — a burger alone would leave "which
        of my groups am I reading?" to be answered by looking at the channel
        colours in the bubbles. -->
-  {#if narrow && view === "chat"}
+  {#if narrow}
     <div class="bar viewbar">
       <button
         class="burger"
@@ -1229,7 +1213,78 @@
     </div>
   {/if}
 
-  {#if view === "settings"}
+  <div class="chat">
+    <GroupSidebar
+      {groups}
+      {channels}
+      bind:selected={selectedGroup}
+      bind:open={sidebarOpen}
+      opensettings={() => (settings = true)}
+    />
+
+    <div class="stream">
+      {#if channels.length > 0}
+        <!-- The meters follow the same view — eight bars for a
+             three-channel group are five things to read past. The filtering
+             happens by stream id inside the component, because the stream id
+             *is* the position in `channels`.
+
+             Shown before Start as well, off the monitor (P8): the bars are
+             how an operator sees that the interface is plugged in and that
+             somebody is talking on the line, and that is checked before the
+             session, not after it.
+
+             Mounted whenever the profile has channels, and not only while
+             something is feeding it, because the two sources hand over
+             through a gap: Start takes the device off the monitor before
+             its own capture is up, and Stop gives it back a debounce
+             later. Tied to either source the strip would vanish and come
+             back on every Start and every Stop — and the chat below it
+             would jump by the height of it, twice a show. Bars with
+             nothing arriving read as a quiet line, which is what it is. -->
+        <StreamMeters
+          {channels}
+          {levels}
+          {overloaded}
+          {visible}
+          {absent}
+          {webhooks}
+          gain={setGain}
+          mute={setMute}
+        />
+      {/if}
+
+      {#if visible !== null && visible.size === 0}
+        <p class="empty">
+          This group has no channels yet. Add some in Settings.
+        </p>
+      {:else}
+        <!-- Every new bubble flashes, in every view: it is how the line
+             that just arrived is told from the ones above it. What a view's
+             own setting adds is the loud request — the whole window in dark
+             orange — and that is the attention request's business, not the
+             chat's. -->
+        <ChatList
+          messages={shown}
+          {colors}
+          starts={sessionStarts}
+          direction={chatSort}
+          {running}
+          startHint={isRemote
+            ? "Press Start above to begin transcribing."
+            : "Press ⌘T, or Start above, to begin transcribing."}
+        />
+      {/if}
+    </div>
+  </div>
+
+  <!-- Settings, over the chat rather than in place of it: everything here is
+       set between shows or in one quick errand during one, and the lines
+       arriving behind the dialog are what the window is for. Mounted only
+       while it is open, so a page of forms is not sitting in the document
+       during a show; which section was last open is remembered inside the
+       component. -->
+  {#if settings}
     <SettingsPage
       {devices}
       bind:profiles
@@ -1249,78 +1304,15 @@
       {meterError}
       {problem}
       openGuide={() => (guide = true)}
+      onclose={() => (settings = false)}
     />
-  {:else}
-    <div class="chat">
-      <GroupSidebar
-        {groups}
-        {channels}
-        bind:selected={selectedGroup}
-        bind:open={sidebarOpen}
-      />
-
-      <div class="stream">
-        {#if channels.length > 0}
-          <!-- The meters follow the same view — eight bars for a
-               three-channel group are five things to read past. The filtering
-               happens by stream id inside the component, because the stream id
-               *is* the position in `channels`.
-
-               Shown before Start as well, off the monitor (P8): the bars are
-               how an operator sees that the interface is plugged in and that
-               somebody is talking on the line, and that is checked before the
-               session, not after it.
-
-               Mounted whenever the profile has channels, and not only while
-               something is feeding it, because the two sources hand over
-               through a gap: Start takes the device off the monitor before
-               its own capture is up, and Stop gives it back a debounce
-               later. Tied to either source the strip would vanish and come
-               back on every Start and every Stop — and the chat below it
-               would jump by the height of it, twice a show. Bars with
-               nothing arriving read as a quiet line, which is what it is. -->
-          <StreamMeters
-            {channels}
-            {levels}
-            {overloaded}
-            {visible}
-            {absent}
-            {webhooks}
-            gain={setGain}
-            mute={setMute}
-          />
-        {/if}
-
-        {#if visible !== null && visible.size === 0}
-          <p class="empty">
-            This group has no channels yet. Add some on the Settings page.
-          </p>
-        {:else}
-          <!-- Every new bubble flashes, in every view: it is how the line
-               that just arrived is told from the ones above it. What a view's
-               own setting adds is the loud request — the whole window in dark
-               orange — and that is the attention request's business, not the
-               chat's. -->
-          <ChatList
-            messages={shown}
-            {colors}
-            starts={sessionStarts}
-            direction={chatSort}
-            {running}
-            startHint={isRemote
-              ? "Press Start above to begin transcribing."
-              : "Press ⌘T, or Start above, to begin transcribing."}
-          />
-        {/if}
-      </div>
-    </div>
   {/if}
 
-  <!-- Over both pages, because it is about neither: a machine with no model
-       has nothing to show in the chat and no reason to be reading Settings
-       yet. Mounted last so it is over the header as well — Start is the one
-       button on this window that cannot work until the guide's first two
-       steps are done. -->
+  <!-- Over the chat and over Settings alike, because it is about neither: a
+       machine with no model has nothing to show in the chat and no reason to
+       be reading Settings yet. Mounted last so it is over the header as
+       well — Start is the one button on this window that cannot work until
+       the guide's first two steps are done. -->
   {#if guide}
     <SetupGuide
       {devices}
@@ -1420,32 +1412,6 @@
     letter-spacing: -0.01em;
   }
 
-  .tabs {
-    display: flex;
-    gap: 0.2rem;
-  }
-
-  .tab {
-    background: transparent;
-    color: var(--text-dim);
-    border: 1px solid transparent;
-    border-radius: 0.3rem;
-    padding: 0.3rem 0.8rem;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  .tab:hover {
-    color: var(--text);
-  }
-
-  .tab.active {
-    background: var(--bg);
-    border-color: var(--border);
-    color: var(--text);
-    font-weight: 600;
-  }
 
   .chat {
     display: flex;
@@ -1543,12 +1509,12 @@
 
      The same 45 rem as `layout.ts` matches on, written out because a media
      query cannot read a constant. The header is the bar that has to give: it
-     carries a title, two tabs, a profile name and Start, and on a phone in
+     carries a title, a profile name, Auto-start and Start, and on a phone in
      portrait that is two lines of furniture above a chat.
 
-     What goes is the title, and only the title. The app is named in the tab
-     strip and in the window's own chrome, and every other thing in the bar is
-     either a place to go or the control the whole session turns on. */
+     What goes is the title, and only the title. The app is named in the
+     window's own chrome, and what is left in the bar is the setup that would
+     start and the control the whole session turns on. */
   @media (max-width: 45rem) {
     h1 {
       display: none;

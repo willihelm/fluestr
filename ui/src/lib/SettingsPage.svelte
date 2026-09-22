@@ -21,15 +21,16 @@
   /// Which section was open last time Settings was left.
   ///
   /// Module-level rather than component state because `App.svelte` unmounts
-  /// this page whenever the chat is shown: an operator who flips to the chat
-  /// to check a level and comes back should land where they were, not at the
-  /// top of the first section again.
+  /// the dialog whenever it is closed: an operator who shuts it to check a
+  /// level and opens it again should land where they were, not at the top of
+  /// the first section again.
   let lastSection: Section = "audio";
 </script>
 
 <script lang="ts">
-  // Settings: everything about how the session is *configured*, away from the
-  // live view.
+  // Settings: everything about how the session is *configured*, in a dialog
+  // over the live view rather than in place of it — the chat keeps running
+  // behind it, which is the point of doing this during a show at all.
   //
   // The page is split in two: **General** — the models, the vocabulary, the
   // view and the listener, which stay behind when a setup travels — and
@@ -44,8 +45,10 @@
   // Delete under the cursor all evening.
   //
   // What is deliberately not here is Start/Stop: it is session-wide and stays
-  // in the header, reachable from either page, because an operator who has to
-  // find the right page before they can stop capture has already lost.
+  // in the header. The dialog is modal and covers that header, so the way to
+  // stop capture from inside it is ⌘T, which the window's own handler answers
+  // whatever is on screen — and failing that, Escape, which is one press and
+  // puts the header back.
 
   import ProfileSection from "./ProfileSection.svelte";
   import StreamSetup from "./StreamSetup.svelte";
@@ -139,6 +142,11 @@
     /// the order a machine needs them — which is worth reaching a second time,
     /// by somebody setting up a new house rather than a new machine.
     openGuide?: (() => void) | null;
+    /// Closes the dialog. Called by the Close button, by Escape and by a
+    /// click on the scrim — the three ways every dialog on this machine is
+    /// left, and an operator should not have to find out which one this one
+    /// answers to.
+    onclose: () => void;
   }
 
   let {
@@ -160,6 +168,7 @@
     meterError = null,
     problem,
     openGuide = null,
+    onclose,
   }: Props = $props();
 
   let section = $state<Section>(lastSection);
@@ -304,11 +313,29 @@
 
 <svelte:window
   onkeydown={(event) => {
-    if (event.key === "Escape" && railOpen) railOpen = false;
+    if (event.key !== "Escape") return;
+    // One thing at a time, outermost last: Escape with the drawer over the
+    // section shuts the drawer, and only a second press leaves Settings. The
+    // other way round it would take the page out from under somebody who was
+    // aiming at the drawer.
+    if (railOpen) railOpen = false;
+    else onclose();
   }}
 />
 
-<div class="page">
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="scrim" onclick={onclose}></div>
+
+<div class="page" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <header class="title">
+    <h1 id="settings-title">Settings</h1>
+    <!-- Saving is the debounce's business and happens as things are typed, so
+         there is no OK to pair this with: Close is the only way out and it
+         does not decide anything. -->
+    <button class="close" onclick={onclose} title="Close (Esc)">Close</button>
+  </header>
+
   <!-- The one thing that is worth the top of the page whichever section is
        open. Never swallowed and never buried in the section that happens to
        have caused it: an operator who builds a setup believing it is stored
@@ -503,11 +530,75 @@
 </div>
 
 <style>
+  /* Over the window, including the header, the way the setup guide's is —
+     except that this one is dismissed by a click, because everything behind
+     it is worth reaching and nothing here has to be finished. Stop is behind
+     it for as long as it is open, which is what ⌘T and Escape are for. */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 30;
+  }
+
+  /* One size whichever section is open, and `height` rather than
+     `max-height`, for the guide's reason: a dialog that resized itself around
+     Models and then around the channel list would move the rail out from
+     under the cursor on every pick. Wide enough for the channel rows, which
+     carry a meter, a trim knob and a language picker beside the 14 rem rail;
+     capped by the viewport, so on a phone it is the screen with a hairline of
+     scrim around it. */
   .page {
-    flex: 1;
+    position: fixed;
+    z-index: 31;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(64rem, calc(100vw - 2rem));
+    height: min(44rem, calc(100dvh - 2rem));
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, 0.45);
+  }
+
+  /* The dialog's own bar, in the shape of the window's: what is on screen is
+     said on the left and the way out is on the right, which is where every
+     other Close in this app is. */
+  .title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex: none;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .title h1 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .close {
+    margin-left: auto;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.25rem 0.7rem;
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .close:hover {
+    color: var(--text);
   }
 
   .body {
@@ -533,10 +624,10 @@
 
   /* --- The rail ---------------------------------------------------------
 
-     Vertical rather than a row of tabs across the top, for two reasons: the
-     header already has a row of tabs (Chat / Settings) and a second row under
-     it reads as a continuation of the first, and only a vertical list has room
-     for the two headings the sections sit under. */
+     Vertical rather than a row of tabs across the top: only a vertical list
+     has room for the two headings the sections sit under, and a row of eight
+     names directly under the dialog's own title bar reads as a second title
+     bar. */
   .rail {
     flex: none;
     width: 14rem;
@@ -762,6 +853,23 @@
   }
 
   @media (max-width: 45rem) {
+    /* The whole screen, with no corners and no scrim showing round the edge:
+       at this width the dialog is not something standing on the page, it is
+       where the operator is until they close it. */
+    .page {
+      width: 100vw;
+      height: 100dvh;
+      border: none;
+      border-radius: 0;
+    }
+
+    .title {
+      padding: 0.45rem 0.7rem;
+      padding-top: max(0.45rem, var(--safe-top));
+      padding-left: max(0.7rem, var(--safe-left));
+      padding-right: max(0.7rem, var(--safe-right));
+    }
+
     /* Rows a thumb can hit, and a form that uses the width it was given back
        by the rail leaving the row. */
     .item {
