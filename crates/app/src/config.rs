@@ -564,6 +564,21 @@ pub struct Config {
     /// its absence must keep meaning.
     #[serde(default)]
     pub auto_start: bool,
+    /// Whether the first-run setup guide has been walked, or left.
+    ///
+    /// Not "has a model": that question is asked of the disk on every start
+    /// and answered by the model manager. This is the narrower one the guide
+    /// itself needs — *has this operator been shown the way through* — and the
+    /// two are different the moment somebody deletes a model in Settings, when
+    /// the right answer is the section they are already standing in rather
+    /// than a welcome screen.
+    ///
+    /// `#[serde(default)]` — false — because a file written before the guide
+    /// existed cannot say. An installation that is already set up is not made
+    /// to sit through it: the app settles the flag at startup when it finds a
+    /// working model, and only shows the guide to a machine that has neither.
+    #[serde(default)]
+    pub setup_done: bool,
     pub profiles: Vec<Profile>,
 }
 
@@ -596,6 +611,7 @@ impl Default for Config {
             chat_sort: SortDirection::default(),
             tuning: Tuning::default(),
             auto_start: false,
+            setup_done: false,
             profiles: Vec::new(),
         }
     }
@@ -909,6 +925,7 @@ mod tests {
                 speech_threshold_percent: 60,
             },
             auto_start: true,
+            setup_done: true,
             profiles: vec![
                 Profile {
                     name: "Probebühne".into(),
@@ -1359,6 +1376,7 @@ mod tests {
                 "modelPath",
                 "profiles",
                 "remote",
+                "setupDone",
                 "tuning",
                 "vadModel",
                 "version",

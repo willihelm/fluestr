@@ -132,6 +132,7 @@ for now, with the reason recorded in the package.
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
 | P20 | Streaming recognition as a second engine | **Open** | Everything — it is a measurement before it is a feature |
+| P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that is P13's acceptance |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -1027,7 +1028,8 @@ map. `just model` and `just vad-model` are kept for the integration tests and
 `just slice`, which have no app directory to resolve against.
 
 The remaining acceptance half — a machine that has never run this, guided to
-its first transcription — needs P13.
+its first transcription — is P21's guide, and it still needs P13 to be walked
+on a machine that is not this one.
 
 ### P12 — Settings & configuration persistence — **Done**
 
@@ -1920,6 +1922,68 @@ ignores this says nothing. The second risk is that partial text which visibly
 rewrites itself is worse to work beside than text that arrives 500 ms later and
 stays put; that is a judgement for the house, not for a benchmark, and it
 should be made on a running screen before any of this is built.
+
+---
+
+### P21 — First-run setup guide — **Done**
+
+**Accepted when:** somebody who has never seen this app opens it, and reaches a
+first transcription without opening the Settings page on their own and without
+being told which of three models to pick.
+
+`SetupGuide.svelte`, over both pages, in five steps: what the app is, the
+models, the audio interface and its channels, groups, and what to press. What
+it replaces is a fresh install whose entire onboarding was one sentence in the
+status bar — "no speech model installed — download one on the Settings page" —
+which is correct, and which asks a new user to find a section they have no
+reason to know exists.
+
+Four decisions worth keeping in view:
+
+- **Silero is fetched, not offered.** There is one entry in the catalogue, it
+  is 0.9 MB against the speech model's 190, and without it whisper captions
+  room noise and silence as plausible sentences — which, to somebody who has
+  had the app for ten minutes, reads as the app making things up. So the model
+  step starts the download itself and reports it; the only decision left is the
+  Retry button when it fails. A choice with one sensible answer is not a
+  choice, it is a step somebody can get wrong. The speech model *is* a choice —
+  three sizes, the recommended one already selected, one line each on when to
+  pick the others.
+- **The channel and group steps are the Settings page's own sections.**
+  `StreamSetup` and `GroupMembership` are mounted inside the guide as they are,
+  bound to the same profile and saved by the same debounce. A gentler copy of
+  the channel editor would be a second place for the channel map to be wrong,
+  and it would teach a page that stops existing the moment the guide closes —
+  the point of walking these is that the operator has now seen where they live.
+  The order is the machine's and not the rail's: no channel can be patched
+  before an interface is chosen, and a group is a view onto channels that have
+  to exist first.
+- **`setupDone` is stored, and it is not "has a model".** The disk is asked
+  about models on every start; this flag is the narrower question of whether
+  anybody was ever shown the way through. The two part company the moment
+  somebody deletes a model in Settings — they are standing in the section that
+  fixes it and do not need a welcome screen thrown over it. A file written
+  before the guide existed cannot say, so the app settles the flag silently
+  when it finds a working model and a VAD, and shows the guide only to a
+  machine that has neither. It is never shown on the LAN remote (P16): the
+  models and the interface are the host's, and a phone that just joined a
+  running production is not the thing being set up.
+- **It can be left, from any step.** Escape, the scrim and "Skip setup" all do
+  the same thing, and all of them mark it done — a guide that returns on every
+  start is one that gets clicked through unread. The offline way in is a `.bin`
+  carried in on a stick, and a guide that could not be dismissed would stand
+  between that operator and the Settings page they need. It is one button away
+  again from the foot of the Settings rail, which starts it directly rather
+  than opening a page with a button on it — it is an errand, not a section, and
+  it moved there from the bottom of the model picker, where nobody found it.
+  That is also the way in for somebody setting up a new *house* rather than a
+  new machine.
+
+**Outstanding, and deliberately so:** the guide has been walked on a machine
+that already had the app. What it has not had is the case it exists for — a
+first launch on a machine that has never seen it, which needs a build somebody
+can install, so it is the same acceptance half P11 is waiting on and it belongs
+to P13.
 
 ---
 

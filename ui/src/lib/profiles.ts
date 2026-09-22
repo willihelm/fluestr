@@ -367,6 +367,11 @@ export const toStoredConfig = (
   /// attended when it is switched on is a property of where it stands, not of
   /// the production currently patched into it.
   autoStart: boolean = false,
+  /// Whether the first-run setup guide has been walked, or left. Beside the
+  /// profiles for the model's reason: it is a fact about this installation —
+  /// whether the person in front of it has been shown the way through — and
+  /// not about any production carried to it.
+  setupDone: boolean = false,
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -400,6 +405,7 @@ export const toStoredConfig = (
   // mid-number is exactly the state the last-ditch save catches.
   tuning: clampTuning(tuning),
   autoStart,
+  setupDone,
   profiles: profiles.map(toStored),
 });
 
@@ -435,6 +441,7 @@ export const fromStoredConfig = (
   chatSort: SortDirection;
   tuning: Tuning;
   autoStart: boolean;
+  setupDone: boolean;
 } => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
@@ -465,6 +472,11 @@ export const fromStoredConfig = (
     // A file written before this existed describes a machine that had to be
     // started by hand, which is what its absence must keep meaning.
     autoStart: stored.autoStart ?? false,
+    // A file written before the guide existed cannot say whether anybody was
+    // ever shown it. `false` is the honest reading, and the app settles it at
+    // startup rather than greeting a working installation with a welcome
+    // screen — see `App.svelte`.
+    setupDone: stored.setupDone ?? false,
   };
 };
 

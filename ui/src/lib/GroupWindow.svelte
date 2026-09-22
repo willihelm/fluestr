@@ -370,11 +370,15 @@
          with the session would move the chat under it on every Start and
          every Stop. Bars with nothing arriving read as a quiet line. -->
     <StreamMeters {channels} {levels} {overloaded} {visible} {absent} {webhooks} />
+    <!-- No `startHint`: this window has no Start button and the main
+         window's shortcut does not reach it, so what it can usefully say is
+         where the session is started and not which key would do it. -->
     <ChatList
       messages={shown}
       {colors}
       starts={sessionStarts}
       direction={chatSort}
+      running={status.state === "running"}
     />
   {/if}
 </main>

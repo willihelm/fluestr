@@ -5,6 +5,7 @@
   import SettingsPage from "./lib/SettingsPage.svelte";
   import GroupSidebar from "./lib/GroupSidebar.svelte";
   import ClearCommunication from "./lib/ClearCommunication.svelte";
+  import SetupGuide from "./lib/SetupGuide.svelte";
   import ResourceMeter from "./lib/ResourceMeter.svelte";
   import { toConfig, validate, absentChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
@@ -37,6 +38,7 @@
     connectionState,
     isRemote,
     listDevices,
+    listModels,
     loadConfig,
     onCleared,
     onConfigChanged,
@@ -177,6 +179,18 @@
   // in the startup effect below, and never again — an operator who stops the
   // session mid-evening has not asked the app to start it back up on its own.
   let autoStart = $state(false);
+  // Whether the first-run guide has been walked, or left. Stored rather than
+  // worked out from the state of the machine: "has a model" is asked of the
+  // disk on every start and is a different question — an operator who removes
+  // a model in Settings is standing in the section that fixes it, and does not
+  // need a welcome screen thrown over it.
+  let setupDone = $state(false);
+  /// Whether the guide is on screen right now.
+  ///
+  /// Not simply `!setupDone`: it is also opened from the Settings page by
+  /// somebody who wants it back, and closing it is a separate act from the
+  /// flag being written.
+  let guide = $state(false);
   // Whether this view can still reach the app. Always "connected" in the app's
   // own windows; on a remote it is the difference between a live chat and a
   // frozen picture of one, which has to be said rather than looked like
@@ -503,6 +517,7 @@
             chatSort: DEFAULT_DIRECTION,
             tuning: { ...DEFAULT_TUNING },
             autoStart: false,
+            setupDone: false,
           };
 
       if (restored.profiles.length === 0) {
@@ -533,8 +548,40 @@
       remote = restored.remote;
       tuning = restored.tuning;
       autoStart = restored.autoStart;
+      setupDone = restored.setupDone;
 
       loaded = true;
+
+      // Who gets the guide, decided once and here rather than by a component
+      // that would have to ask again on every render.
+      //
+      // A file written before the guide existed says nothing, and most of
+      // those machines are set up and running — greeting them with a welcome
+      // screen would be the app forgetting a setup that is plainly there. So
+      // the question asked of an installation that has never answered it is
+      // the one the guide is actually for: **can this machine transcribe?**
+      // If it can, the flag is settled silently and the operator never sees
+      // this; if it cannot, they see it once.
+      //
+      // Never on the LAN remote (P16). The models are downloaded onto the host
+      // machine and the interface is plugged into the host machine; a phone
+      // that has just connected to a running production is not the thing being
+      // set up, and a wizard over the chat is the last thing it needs.
+      if (!setupDone && !isRemote) {
+        try {
+          const state = await listModels();
+          // Speech detection counts as well as the model. It is 0.9 MB and the
+          // app is much worse without it, so a machine missing it has not
+          // finished being set up even though it would start.
+          if (state.problem === null && state.vad) setupDone = true;
+          else guide = true;
+        } catch {
+          // No model directory at all: nothing can be downloaded and the guide
+          // would only be able to say so. The Settings page says it in the
+          // place that can act on it.
+          setupDone = true;
+        }
+      }
 
       await catchUp();
 
@@ -660,6 +707,7 @@
       chatSort,
       tuning,
       autoStart,
+      setupDone,
     );
     latest = config;
 
@@ -719,6 +767,12 @@
     chatSort = restored.chatSort;
     tuning = restored.tuning;
     autoStart = restored.autoStart;
+    // Adopted like everything else: the guide is walked in one window, and a
+    // second one still showing it would be asking for a setup that has just
+    // been made. It closes the guide but never reopens it — a peer that has
+    // not been set up is not this window's errand.
+    setupDone = restored.setupDone;
+    if (setupDone) guide = false;
   };
 
   // The compiled rules live on the backend, where every transcript is
@@ -988,6 +1042,30 @@
     clearOnBackend().catch((e) => console.warn("the chat was not cleared:", e));
   };
 
+  /// Points the active profile at an interface, from the setup guide.
+  ///
+  /// Both halves at once, the way the Settings page's own picker does it: the
+  /// id is what the profile is keyed on and what starting a session sends, and
+  /// the name is stored beside it so the device can still be named on a
+  /// machine it is not plugged into.
+  const pickDevice = (id: string) => {
+    const option = devices.find((d) => d.id === id);
+    if (!option || !active) return;
+    active.device = option.name;
+    active.deviceId = option.id;
+  };
+
+  /// Closes the guide, whether it was finished or left.
+  ///
+  /// Either way it is done: a guide that comes back on every start is a guide
+  /// that gets clicked through without being read, and it is one button away
+  /// on the Settings page for anybody who wants it again. The flag is saved by
+  /// the same debounce as everything else on this page.
+  const closeGuide = () => {
+    guide = false;
+    setupDone = true;
+  };
+
   const clearLocally = () => {
     messages = [];
     // The zero points are only there to time the lines that were just thrown
@@ -1170,6 +1248,7 @@
       {levels}
       {meterError}
       {problem}
+      openGuide={() => (guide = true)}
     />
   {:else}
     <div class="chat">
@@ -1227,10 +1306,31 @@
             {colors}
             starts={sessionStarts}
             direction={chatSort}
+            {running}
+            startHint={isRemote
+              ? "Press Start above to begin transcribing."
+              : "Press ⌘T, or Start above, to begin transcribing."}
           />
         {/if}
       </div>
     </div>
+  {/if}
+
+  <!-- Over both pages, because it is about neither: a machine with no model
+       has nothing to show in the chat and no reason to be reading Settings
+       yet. Mounted last so it is over the header as well — Start is the one
+       button on this window that cannot work until the guide's first two
+       steps are done. -->
+  {#if guide}
+    <SetupGuide
+      {devices}
+      {deviceChannels}
+      {pickDevice}
+      profile={active}
+      bind:models
+      {levels}
+      ondone={closeGuide}
+    />
   {/if}
 </main>
 

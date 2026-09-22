@@ -61,9 +61,12 @@ Without the VAD model the app still runs, but whisper captions room noise and
 silence as well — as `[BREAK]`, `(music)`, or as plausible sentences that were
 never spoken. The sidecar warns when it starts without one.
 
-In the app: pick a device, pick a channel, press Start. The first start on a
-machine takes about eight seconds because macOS compiles the Metal shaders
-once; afterwards it is a fraction of a second.
+In the app: the first start opens a setup guide — it downloads the speech
+model, fetches the Silero speech detector without asking, and walks the audio
+interface, its channels and the groups. It can be skipped, and it is at the
+foot of the Settings rail afterwards. Then pick a device, pick a channel, press Start.
+The first start on a machine takes about eight seconds because macOS compiles
+the Metal shaders once; afterwards it is a fraction of a second.
 
 Two environment variables override the stand-ins for work packages that do not
 exist yet:

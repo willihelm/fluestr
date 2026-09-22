@@ -758,6 +758,14 @@ describe("adopting a configuration", () => {
       "Standby, Cue, Go.",
       { model: "small-q5_1", vadModel: "silero-v5.1.2", modelPath: null, workers: 4 },
       { enabled: true, address: "192.168.178.27", port: 8787, key: "k7p4m2rq" },
+      // Every one of the trailing fields set to something other than its
+      // default, because that is the only way this test can see them: a field
+      // `fromStoredConfig` drops but both sides default the same way round
+      // trips perfectly and is still the bug described above.
+      "newest-top",
+      { silenceTimeoutMs: 350, maxSegmentMs: 4_000, speechThresholdPercent: 60 },
+      true,
+      true,
     );
   };
 
@@ -770,6 +778,10 @@ describe("adopting a configuration", () => {
       read.vocabulary ?? "",
       read.models,
       read.remote,
+      read.chatSort,
+      read.tuning,
+      read.autoStart,
+      read.setupDone,
     );
 
     expect(canonical(written)).toBe(canonical(stored));
@@ -832,6 +844,10 @@ describe("adopting a configuration", () => {
         read.vocabulary ?? "",
         read.models,
         read.remote,
+        read.chatSort,
+        read.tuning,
+        read.autoStart,
+        read.setupDone,
       );
       expect(canonical(next)).toBe(canonical(stored));
       stored = next;

@@ -49,9 +49,23 @@
     /// of the configuration, and the component that renders the chat is not
     /// the one that talks to the backend.
     direction: SortDirection;
+    /// Whether a session is capturing right now.
+    ///
+    /// Only the empty chat cares, and it cares a lot: "nothing transcribed
+    /// yet" over a session that was never started reads as an app that is
+    /// listening and hearing nothing, which is the same picture a dead
+    /// interface makes. Required rather than defaulted — a view that renders
+    /// the chat knows this, and guessing it wrong is exactly the confusion
+    /// this prop exists to remove.
+    running: boolean;
+    /// How to start one from this window, for that empty state. `null` where
+    /// there is nothing to press — a detached group window has no Start of its
+    /// own, and naming a key that does nothing there is worse than saying
+    /// where the button is.
+    startHint?: string | null;
   }
 
-  let { messages, colors, starts, direction }: Props = $props();
+  let { messages, colors, starts, direction, running, startHint = null }: Props = $props();
 
   // --- Search and filter (P9) ---------------------------------------------
   //
@@ -524,7 +538,13 @@
 
 <div class="chat" bind:this={container} onscroll={onScroll}>
   {#if messages.length === 0}
-    <p class="empty">Nothing transcribed yet. Speak into one of the channels.</p>
+    <p class="empty">
+      {#if running}
+        Nothing transcribed yet. Speak into one of the channels.
+      {:else}
+        {startHint ?? "No session is running — start one in the main window."}
+      {/if}
+    </p>
   {:else if listed.length === 0}
     <!-- The chat is not empty, the view is — which is a different thing to be
          told, because it has a cause the operator can undo. -->

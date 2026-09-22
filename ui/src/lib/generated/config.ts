@@ -186,7 +186,23 @@ tuning: Tuning,
  * describes a machine that had to be started by hand, and that is what
  * its absence must keep meaning.
  */
-autoStart: boolean, profiles: Array<StoredProfile>, };
+autoStart: boolean, 
+/**
+ * Whether the first-run setup guide has been walked, or left.
+ *
+ * Not "has a model": that question is asked of the disk on every start
+ * and answered by the model manager. This is the narrower one the guide
+ * itself needs — *has this operator been shown the way through* — and the
+ * two are different the moment somebody deletes a model in Settings, when
+ * the right answer is the section they are already standing in rather
+ * than a welcome screen.
+ *
+ * `#[serde(default)]` — false — because a file written before the guide
+ * existed cannot say. An installation that is already set up is not made
+ * to sit through it: the app settles the flag at startup when it finds a
+ * working model, and only shows the guide to a machine that has neither.
+ */
+setupDone: boolean, profiles: Array<StoredProfile>, };
 
 /**
  * A named view onto some of the channels.

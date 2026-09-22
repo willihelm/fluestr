@@ -134,6 +134,11 @@
     /// status bar shows. Every one of them is about the device or the channel
     /// map, which is what marks the Audio section rather than the page.
     problem: string | null;
+    /// Opens the first-run setup guide again, or `null` in a view that does
+    /// not have one. It walks the models, the channel map and the groups in
+    /// the order a machine needs them — which is worth reaching a second time,
+    /// by somebody setting up a new house rather than a new machine.
+    openGuide?: (() => void) | null;
   }
 
   let {
@@ -154,6 +159,7 @@
     levels = null,
     meterError = null,
     problem,
+    openGuide = null,
   }: Props = $props();
 
   let section = $state<Section>(lastSection);
@@ -376,6 +382,28 @@
           {/each}
         </div>
       {/each}
+
+      <!-- Under the sections rather than among them, because it is not one: it
+           opens a dialog over the page and comes back here when it is done.
+           At the foot of the rail for the same reason a preferences window
+           keeps its odd one out there — it is reached on purpose, once, and it
+           must not sit in the way of the eight things that are reached daily.
+           Only where there is a guide to run: the remote does not have one. -->
+      {#if openGuide}
+        <div class="foot">
+          <button
+            class="item"
+            onclick={() => {
+              openGuide();
+              // The drawer was opened to get here, and what it opened is now
+              // standing over it.
+              railOpen = false;
+            }}
+          >
+            <span>Setup guide</span>
+          </button>
+        </div>
+      {/if}
     </nav>
 
     <!-- Every section stays mounted and inactive ones are hidden, rather than
@@ -596,6 +624,14 @@
 
   .sheet[hidden] {
     display: none;
+  }
+
+  /* Pushed to the bottom of the rail and ruled off from the sections above
+     it, so it reads as the thing that is not one of them. */
+  .foot {
+    margin-top: auto;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--border);
   }
 
   label {
