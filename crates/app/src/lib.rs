@@ -631,7 +631,12 @@ pub fn run() {
                 if let Ok(path) = state.config_path() {
                     let wanted = config::load(&path).remote;
                     if wanted.enabled {
-                        remote::apply(&handle, &wanted);
+                        // Nothing is serving yet, so `apply` has nothing to
+                        // wait for and this returns at once. Blocked on
+                        // rather than spawned so that an app which comes up
+                        // with the remote on is serving by the time the
+                        // window opens.
+                        tauri::async_runtime::block_on(remote::apply(&handle, &wanted));
                     }
                 }
             }

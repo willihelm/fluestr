@@ -757,7 +757,7 @@ describe("adopting a configuration", () => {
       profile.key,
       "Standby, Cue, Go.",
       { model: "small-q5_1", vadModel: "silero-v5.1.2", modelPath: null, workers: 4 },
-      { enabled: true, address: "192.168.178.27", port: 8787 },
+      { enabled: true, address: "192.168.178.27", port: 8787, key: "k7p4m2rq" },
     );
   };
 
@@ -786,6 +786,7 @@ describe("adopting a configuration", () => {
       enabled: true,
       address: "192.168.178.27",
       port: null as unknown as number,
+      key: "",
     });
 
     expect(written.remote?.port).toBe(8787);
@@ -797,6 +798,7 @@ describe("adopting a configuration", () => {
       enabled: true,
       address: "192.168.178.27",
       port: 80,
+      key: "",
     });
 
     expect(low.remote?.port).toBe(1024);

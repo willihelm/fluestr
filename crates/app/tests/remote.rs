@@ -44,8 +44,10 @@ async fn a_browser_reaches_the_same_commands_over_the_socket() {
             enabled: true,
             address: "127.0.0.1".into(),
             port: PORT,
+            key: String::new(),
         },
-    );
+    )
+    .await;
     assert!(status.running, "not serving: {:?}", status.error);
     assert_eq!(status.url.as_deref(), Some("http://127.0.0.1:18787/"));
 
@@ -82,7 +84,7 @@ async fn a_browser_reaches_the_same_commands_over_the_socket() {
         "unhelpful error: {answer}"
     );
 
-    remote::apply(&handle, &RemoteConfig::default());
+    remote::apply(&handle, &RemoteConfig::default()).await;
 }
 
 /// Events reach the browser the same way they reach a window: the app emits
@@ -106,8 +108,10 @@ async fn an_event_reaches_the_browser_that_caused_it() {
             // A port of its own: the tests in this file run at the same time,
             // and one listener per address and port is all there is.
             port: PORT + 1,
+            key: String::new(),
         },
-    );
+    )
+    .await;
     assert!(status.running, "not serving: {:?}", status.error);
 
     let (mut socket, _) = connect_to(PORT + 1).await;
@@ -139,7 +143,7 @@ async fn an_event_reaches_the_browser_that_caused_it() {
         }
     }
 
-    remote::apply(&handle, &RemoteConfig::default());
+    remote::apply(&handle, &RemoteConfig::default()).await;
 }
 
 /// Switching the remote off drops what it was serving, immediately.
@@ -160,8 +164,10 @@ async fn switching_the_remote_off_drops_the_browsers_it_was_serving() {
             enabled: true,
             address: "127.0.0.1".into(),
             port: PORT + 2,
+            key: String::new(),
         },
-    );
+    )
+    .await;
     assert!(status.running, "not serving: {:?}", status.error);
 
     let (mut socket, _) = connect_to(PORT + 2).await;
@@ -173,7 +179,7 @@ async fn switching_the_remote_off_drops_the_browsers_it_was_serving() {
         .expect("sending a call");
     assert_eq!(next_result(&mut socket).await["ok"], true);
 
-    let status = remote::apply(&handle, &RemoteConfig::default());
+    let status = remote::apply(&handle, &RemoteConfig::default()).await;
     assert!(!status.running);
 
     // The socket ends. Not "stops carrying events" — ends, so the page knows
@@ -208,8 +214,10 @@ async fn a_page_from_another_site_cannot_open_the_socket() {
             enabled: true,
             address: "127.0.0.1".into(),
             port,
+            key: String::new(),
         },
-    );
+    )
+    .await;
     assert!(status.running, "not serving: {:?}", status.error);
 
     // Up first, so that what follows is a refusal rather than a listener that
@@ -244,7 +252,7 @@ async fn a_page_from_another_site_cannot_open_the_socket() {
         .expect("the page this app serves was refused its own socket");
 
     let _ = accepted.close(None).await;
-    remote::apply(&handle, &RemoteConfig::default());
+    remote::apply(&handle, &RemoteConfig::default()).await;
 }
 
 type Socket =
@@ -302,4 +310,289 @@ async fn next_frame(socket: &mut Socket, within: Duration) -> serde_json::Value 
             return serde_json::from_str(&text).expect("a JSON frame");
         }
     }
+}
+
+/// The optional key, end to end: refused without it, let in with it, and the
+/// address the operator scans carries it.
+///
+/// The whole of the ceremony is meant to be scanning a QR code, so what is
+/// pinned here is that the key really is in the URL, that the page can trade
+/// it for a cookie at `/auth`, and that the cookie — and nothing else — is
+/// what opens the socket.
+#[tokio::test]
+async fn a_key_stands_in_front_of_the_socket() {
+    const KEY: &str = "k7p4m2rq";
+
+    let app = mock();
+    let handle = app.handle().clone();
+
+    let port = PORT + 5;
+    let status = remote::apply(
+        &handle,
+        &RemoteConfig {
+            enabled: true,
+            address: "127.0.0.1".into(),
+            port,
+            key: KEY.into(),
+        },
+    )
+    .await;
+    assert!(status.running, "not serving: {:?}", status.error);
+    assert_eq!(
+        status.url.as_deref(),
+        Some(format!("http://127.0.0.1:{port}/#k={KEY}").as_str()),
+        "the key has to be in the address the operator scans"
+    );
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::new();
+    serving(&client, &base).await;
+
+    // Nothing to go on: the socket is not opened.
+    assert!(
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws"))
+            .await
+            .is_err(),
+        "the socket was opened without the key"
+    );
+
+    // Which is what the page asks about before it tries, because a refused
+    // upgrade tells a browser nothing it could act on.
+    let state = get(&client, &format!("{base}/auth")).await;
+    assert_eq!(state["required"], true);
+    assert_eq!(state["unlocked"], false);
+
+    let refused = client
+        .post(format!("{base}/auth"))
+        .body("not the key")
+        .send()
+        .await
+        .expect("offering a key");
+    assert_eq!(refused.status().as_u16(), 403);
+
+    let accepted = client
+        .post(format!("{base}/auth"))
+        .body(KEY)
+        .send()
+        .await
+        .expect("offering the key");
+    assert_eq!(accepted.status().as_u16(), 204);
+
+    let cookie = accepted
+        .headers()
+        .get("set-cookie")
+        .expect("a cookie was set")
+        .to_str()
+        .expect("a readable cookie")
+        .split(';')
+        .next()
+        .expect("a name and a value")
+        .to_string();
+    // Derived from the key rather than being it, so a jar that is read does
+    // not give the key up.
+    assert!(
+        !cookie.contains(KEY),
+        "the key itself was put in the cookie: {cookie}"
+    );
+
+    let mut request = format!("ws://127.0.0.1:{port}/ws")
+        .into_client_request()
+        .expect("a request");
+    request
+        .headers_mut()
+        .insert("cookie", cookie.parse().expect("a cookie header"));
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("the key was offered and the socket still refused");
+
+    let _ = socket.close(None).await;
+    remote::apply(&handle, &RemoteConfig::default()).await;
+}
+
+/// Waits until the listener answers at all. It comes up on Tauri's runtime,
+/// which this test does not share.
+async fn serving(client: &reqwest::Client, base: &str) {
+    for _ in 0..50 {
+        if client.get(format!("{base}/auth")).send().await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the listener never answered");
+}
+
+/// One JSON request. Spelled out rather than through reqwest's `json`, which
+/// is behind a feature this app does not build with.
+async fn get(client: &reqwest::Client, url: &str) -> serde_json::Value {
+    let body = client
+        .get(url)
+        .send()
+        .await
+        .expect("a request")
+        .text()
+        .await
+        .expect("a body");
+    serde_json::from_str(&body).expect("json")
+}
+
+/// Replacing the key does not take the listener down and put it up again.
+///
+/// It used to. Dropping a listener only *starts* its shutdown — the serving
+/// task still owns the socket until it returns — so rebinding the same address
+/// and port in the same breath lands on a port that is still held, and the
+/// operator is told the port they have always used is already in use by an app
+/// that is the one using it. The key is published into the running server
+/// instead, and the browsers that were let in with the old one are dropped on
+/// their own.
+#[tokio::test]
+async fn replacing_the_key_does_not_rebind_the_port() {
+    let app = mock();
+    let handle = app.handle().clone();
+
+    let port = PORT + 6;
+    let with_key = |key: &str| RemoteConfig {
+        enabled: true,
+        address: "127.0.0.1".into(),
+        port,
+        key: key.into(),
+    };
+
+    let status = remote::apply(&handle, &with_key("FIRSTKEY")).await;
+    assert!(status.running, "not serving: {:?}", status.error);
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::new();
+    serving(&client, &base).await;
+
+    // A browser that is in on the old key.
+    let cookie = let_in(&client, &base, "FIRSTKEY").await;
+    let mut socket = connect_with(port, &cookie).await;
+
+    let status = remote::apply(&handle, &with_key("SECONDKY")).await;
+    assert!(
+        status.running,
+        "the listener went down when the key changed: {:?}",
+        status.error
+    );
+    assert_eq!(
+        status.error, None,
+        "changing the key reported a problem with the port"
+    );
+    // The new key is in the address, so the QR code on the Settings page is
+    // the new one too.
+    assert_eq!(
+        status.url.as_deref(),
+        Some(format!("http://127.0.0.1:{port}/#k=SECONDKY").as_str())
+    );
+
+    // The browser that was in on the old key is put out.
+    let dropped = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(frame) = socket.next().await {
+            match frame {
+                Ok(Message::Close(_)) | Err(_) => return true,
+                Ok(_) => continue,
+            }
+        }
+        true
+    })
+    .await;
+    assert!(
+        dropped.unwrap_or(false),
+        "a browser let in with the old key stayed connected"
+    );
+
+    // And the old key does not get back in, while the new one does.
+    assert_eq!(
+        client
+            .post(format!("{base}/auth"))
+            .body("FIRSTKEY")
+            .send()
+            .await
+            .expect("offering the old key")
+            .status()
+            .as_u16(),
+        403
+    );
+    let cookie = let_in(&client, &base, "SECONDKY").await;
+    let mut socket = connect_with(port, &cookie).await;
+    let _ = socket.close(None).await;
+
+    remote::apply(&handle, &RemoteConfig::default()).await;
+}
+
+/// Offers a key and returns the cookie it was given.
+async fn let_in(client: &reqwest::Client, base: &str, key: &str) -> String {
+    let answer = client
+        .post(format!("{base}/auth"))
+        .body(key.to_string())
+        .send()
+        .await
+        .expect("offering the key");
+    assert_eq!(answer.status().as_u16(), 204, "the key was refused");
+    answer
+        .headers()
+        .get("set-cookie")
+        .expect("a cookie was set")
+        .to_str()
+        .expect("a readable cookie")
+        .split(';')
+        .next()
+        .expect("a name and a value")
+        .to_string()
+}
+
+async fn connect_with(port: u16, cookie: &str) -> Socket {
+    let mut request = format!("ws://127.0.0.1:{port}/ws")
+        .into_client_request()
+        .expect("a request");
+    request
+        .headers_mut()
+        .insert("cookie", cookie.parse().expect("a cookie header"));
+    let (socket, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("the socket was refused a browser that had been let in");
+    socket
+}
+
+/// Switching the listener off and straight back on binds the same port again.
+///
+/// The other half of the same bug: two saves in quick succession — which is
+/// what the Settings page's debounce produces — used to have the second one
+/// bind a port the first one's task had not let go of yet. `apply` waits for
+/// it now; without that wait this test reports "port is already in use" about
+/// this app's own port.
+#[tokio::test]
+async fn it_can_be_switched_off_and_straight_back_on() {
+    let app = mock();
+    let handle = app.handle().clone();
+
+    let port = PORT + 7;
+    let on = RemoteConfig {
+        enabled: true,
+        address: "127.0.0.1".into(),
+        port,
+        key: String::new(),
+    };
+
+    let status = remote::apply(&handle, &on).await;
+    assert!(status.running, "not serving: {:?}", status.error);
+    // Up for real, so that what follows is a listener being taken down rather
+    // than one that had not finished coming up.
+    let (mut socket, _) = connect_to(port).await;
+    let _ = socket.close(None).await;
+
+    // No pause between them. That is the case: the debounce hands `apply` two
+    // configurations back to back.
+    remote::apply(&handle, &RemoteConfig::default()).await;
+    let status = remote::apply(&handle, &on).await;
+
+    assert_eq!(
+        status.error, None,
+        "binding the same port again failed right after it was released"
+    );
+    assert!(status.running, "the listener did not come back up");
+
+    let (mut socket, _) = connect_to(port).await;
+    let _ = socket.close(None).await;
+    remote::apply(&handle, &RemoteConfig::default()).await;
 }

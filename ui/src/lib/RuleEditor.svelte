@@ -31,9 +31,9 @@
   //
   // **The webhook is written on the machine and nowhere else.** Every other
   // field on this card is editable from the LAN remote, because the remote is
-  // a peer (P16). A destination is not: the remote has no authentication by
-  // decision, and an arbitrary URL writable from a browser form means anyone
-  // on the house network can point crew speech at an off-site endpoint. So the
+  // a peer (P16). A destination is not: the remote's key is a shared lock
+  // rather than an identity, and an arbitrary URL writable from a browser form
+  // means anyone who got in can point crew speech off-site. So the
   // URL, the method, the headers and the body exist only in the app's own
   // window; the remote sees *that* a rule calls out, can switch it off, and
   // can edit its trigger. Everything below that branches on `isRemote` is that
@@ -385,10 +385,10 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
           {:else if isRemote && callsOut(rule)}
             <!-- The remote sees that the rule calls out and can switch it off.
                  It has no box to change the destination with, and that is the
-                 whole of P19's decision — the remote has no authentication,
-                 and an arbitrary URL writable from a browser form on the house
-                 network is a different proposition from the read-mostly
-                 remote that decision was made for. -->
+                 whole of P19's decision — the remote's key says who may reach
+                 the session, not which of the people holding it is typing, and
+                 an arbitrary URL writable from a browser form is a different
+                 proposition from the remote that decision was made for. -->
             <p class="hint out">
               This rule calls a webhook. The request is set up on the machine running the
               session — untick the action above to stop it from here.

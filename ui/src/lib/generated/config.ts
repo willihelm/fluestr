@@ -300,9 +300,10 @@ rules: Array<StoredRule>, };
  */
 export type StoredRemote = { 
 /**
- * Off by default, and the operator turns it on for the evening. With no
- * authentication in front of it, "not listening" is the safe state and
- * has to be the one a fresh install is in.
+ * Off by default, and the operator turns it on for the evening. Even
+ * with a key in front of it, "not listening" is the safe state and has to
+ * be the one a fresh install is in: the key is a lock on a door, and the
+ * door is still better shut when nobody is expected through it.
  */
 enabled: boolean, 
 /**
@@ -312,7 +313,22 @@ enabled: boolean,
  * once is an app that is on the venue's guest wifi without anyone having
  * said so. Empty is "nothing picked yet", which cannot be enabled.
  */
-address: string, port: number, };
+address: string, port: number, 
+/**
+ * What a browser has to offer before the socket is opened for it, or
+ * empty for a listener anyone on the chosen address may drive.
+ *
+ * Stored as it is typed rather than hashed, and that is not an oversight:
+ * it is a shared key an operator has to be able to read off this screen,
+ * put in a QR code and say out loud across a room. There is no account
+ * here to protect — the thing being protected is on the other side of it.
+ *
+ * `#[serde(default)]` — empty, so open — because a file written before
+ * this existed describes a listener that had no key, and reading its
+ * absence as "ask for one" would lock an operator out of their own setup
+ * at an update.
+ */
+key: string, };
 
 /**
  * One rule: a trigger, and what it does (P19).

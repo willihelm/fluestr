@@ -10,6 +10,7 @@
 import { mount } from "svelte";
 import App from "./App.svelte";
 import GroupWindow from "./lib/GroupWindow.svelte";
+import RemoteGate from "./lib/RemoteGate.svelte";
 import { currentGroup } from "./lib/windows";
 import { watchForAttention } from "./lib/flash";
 import { isRemote } from "./lib/transport";
@@ -25,6 +26,10 @@ const group = currentGroup();
 // none of this.
 if (isRemote) watchForAttention();
 
+// Through the gate, always, whichever view this page is. It is transparent in
+// the app and on a listener with no key — see `RemoteGate.svelte` — and it is
+// what puts the key screen in front of a browser that has nothing to get in
+// with.
 export default group === null
-  ? mount(App, { target })
-  : mount(GroupWindow, { target, props: { group } });
+  ? mount(RemoteGate, { target, props: { view: App } })
+  : mount(RemoteGate, { target, props: { view: GroupWindow, props: { group } } });

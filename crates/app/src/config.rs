@@ -653,6 +653,15 @@ impl Config {
 
         self.tuning.clamp();
 
+        // A key with a space on the end is the key without it, and the two
+        // have to be one string here: `save_config` decides whether a save
+        // changed anything by comparing tidied configurations, and a field
+        // only one side trims is a field that makes every save look like a
+        // change. Trimmed on the frontend's side too — see `toStoredConfig`.
+        if self.remote.key.trim().len() != self.remote.key.len() {
+            self.remote.key = self.remote.key.trim().to_string();
+        }
+
         self.version = VERSION;
     }
 
@@ -891,6 +900,7 @@ mod tests {
                 enabled: true,
                 address: "192.168.1.20".into(),
                 port: 8787,
+                key: "k7p4m2rq".into(),
             },
             chat_sort: SortDirection::NewestTop,
             tuning: Tuning {
@@ -1386,7 +1396,7 @@ mod tests {
                 "words"
             ]
         );
-        assert_eq!(keys(&json["remote"]), ["address", "enabled", "port"]);
+        assert_eq!(keys(&json["remote"]), ["address", "enabled", "key", "port"]);
     }
 
     /// An object's field names, sorted — the same order the frontend's

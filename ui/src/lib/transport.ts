@@ -14,6 +14,12 @@
 // What differs is only what a browser has no equivalent for: a native file
 // dialog, the platform's attention request, and a second OS window. Those are
 // not here — see `windows.ts` and `bridge.ts`.
+//
+// The optional key is also only a remote concern, and it is arranged so that
+// the usual case costs nothing: it rides in the URL's fragment, which is what
+// the Settings page puts in the QR code, and this module trades it for a
+// cookie once and then wipes it out of the address bar. A phone is asked for
+// the key exactly never after the first scan.
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit as tauriEmit, listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -47,6 +53,118 @@ const connectionWatchers = new Set<(state: Connection) => void>();
 const reconnectWatchers = new Set<() => void>();
 
 let connection: Connection = isRemote ? "connecting" : "connected";
+
+// --- The key (remote only) ------------------------------------------------
+
+/// Whether this page may open the socket at all.
+///
+/// `"open"` in the app and on a listener that has no key, which is the state
+/// everything above this module is written for. `"needed"` is the one case
+/// with a screen of its own — see `RemoteKey.svelte`.
+export type Lock = "checking" | "open" | "needed";
+
+/// The key the link carried.
+///
+/// Read once, at the moment this module is first evaluated, and taken out of
+/// the address bar in the same breath. That is the whole reason it is in the
+/// fragment: a key left in the address is a key in the browser's history, in
+/// the next screenshot of this page and in whatever gets sent to a colleague
+/// who asks what it looks like on their phone. Kept here instead, because the
+/// app may not be answering yet and the key is still needed when it is.
+const linkKey = isRemote ? takeKeyFromLink() : null;
+
+function takeKeyFromLink(): string | null {
+  try {
+    const hash = window.location.hash;
+    if (!hash.startsWith("#")) return null;
+    const found = new URLSearchParams(hash.slice(1)).get("k");
+    if (!found) return null;
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    return found;
+  } catch (e) {
+    // A browser that refuses `replaceState` still has a usable key; it just
+    // keeps showing it. Better than not connecting.
+    console.warn("the key could not be taken out of the address:", e);
+    return null;
+  }
+}
+
+let lock: Lock = isRemote ? "checking" : "open";
+const lockWatchers = new Set<(state: Lock) => void>();
+
+export const lockState = () => lock;
+
+/// Follows the lock, and is called back at once with the state as it stands —
+/// like `onConnection`, and for its reason.
+export const onLock = (fn: (state: Lock) => void): (() => void) => {
+  lockWatchers.add(fn);
+  fn(lock);
+  return () => lockWatchers.delete(fn);
+};
+
+const setLock = (state: Lock) => {
+  if (lock === state) return;
+  lock = state;
+  for (const watcher of lockWatchers) watcher(state);
+};
+
+/// Trades a key for the cookie that opens the socket.
+///
+/// `null` when it worked; otherwise what to tell the operator. Exported
+/// because the key screen calls it — the automatic path below calls it too,
+/// with whatever the link carried, and there is one implementation of it.
+export const offerKey = async (key: string): Promise<string | null> => {
+  let answer: Response;
+  try {
+    answer = await fetch("/auth", { method: "POST", body: key });
+  } catch {
+    return "Intercom2Chat did not answer.";
+  }
+
+  if (answer.ok) {
+    setLock("open");
+    connect();
+    return null;
+  }
+  // The rate limit in front of the key. Said plainly, because the alternative
+  // is a key that is right being refused with "that is not the key".
+  if (answer.status === 429) {
+    return "Too many wrong keys from this machine. Wait a minute and try again.";
+  }
+  return "That is not the key.";
+};
+
+/// Whether the socket may be opened, asking the app if need be.
+///
+/// Asked *before* every connection and every reconnection rather than once at
+/// startup. A refused upgrade is not something a browser will say anything
+/// useful about — `onclose` gives 1006 and no status, so "wrong key" and
+/// "network gone" arrive as the same event — and this is what tells them
+/// apart. It is also what turns a key replaced mid-show into the key screen
+/// instead of a page that retries forever.
+const admitted = async (): Promise<boolean> => {
+  let state: { required?: boolean; unlocked?: boolean };
+  try {
+    const answer = await fetch("/auth", { cache: "no-store" });
+    state = await answer.json();
+  } catch {
+    // The app is not answering at all, which is not a locked page but a dark
+    // one. Let the socket try and fail: its failure is what drives the
+    // "not connected" banner, and this must not replace that with a key
+    // screen that no key will get past.
+    return true;
+  }
+
+  if (!state.required || state.unlocked) {
+    setLock("open");
+    return true;
+  }
+
+  if (linkKey && (await offerKey(linkKey)) === null) return true;
+
+  setLock("needed");
+  return false;
+};
 
 /// The current state, for a view that mounts after the socket has settled.
 export const connectionState = () => connection;
@@ -120,8 +238,34 @@ const socketUrl = () => {
   return `${scheme}//${window.location.host}/ws`;
 };
 
+/// Whether a connection is already on its way up.
+///
+/// The check in front of the socket is a round trip, so `socket` is still
+/// `null` while it runs and everything that calls `connect` — a queued call,
+/// the reconnect timer — would start a second one.
+let opening = false;
+
+/// Opens the socket, once the app has said this page may have one.
 const connect = () => {
-  if (!isRemote || socket) return;
+  if (!isRemote || socket || opening) return;
+  opening = true;
+  admitted()
+    .then((may) => {
+      opening = false;
+      if (may) open();
+      // Otherwise nothing is retried: the key screen is up, and what starts
+      // the next attempt is the operator offering a key.
+    })
+    .catch((e) => {
+      opening = false;
+      console.warn("the app could not be asked whether this page may connect:", e);
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, RECONNECT_MAX_MS);
+    });
+};
+
+const open = () => {
+  if (socket) return;
 
   // "lost" is kept until the socket is actually open again: the banner it
   // drives is what tells a remote operator that what they are looking at has

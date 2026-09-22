@@ -46,6 +46,7 @@ export const NO_REMOTE: StoredRemote = {
   enabled: false,
   address: "",
   port: REMOTE_DEFAULT_PORT,
+  key: "",
 };
 
 /// What a configuration that has never held the detection thresholds is read
@@ -389,7 +390,11 @@ export const toStoredConfig = (
   // an operator has cleared holds `null` until it is left. This save can
   // happen before that — the window closing is the case the last-ditch save
   // exists for — and `null` fails the backend's `u16` outright.
-  remote: { ...remote, port: clampPort(remote.port) },
+  // The key is trimmed on both sides — see `sanitise` in `config.rs`. A field
+  // only one side tidies is a field that makes every save look like somebody
+  // else's change, which is how the Settings page ends up rebuilding the box
+  // being typed in.
+  remote: { ...remote, port: clampPort(remote.port), key: (remote.key ?? "").trim() },
   chatSort,
   // Clamped here as well as in the boxes, for the port's reason: a box left
   // mid-number is exactly the state the last-ditch save catches.

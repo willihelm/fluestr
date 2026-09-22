@@ -10,7 +10,17 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-21. P20 was written down the same day: a
+**Status of this document:** 2026-09-22. The LAN remote got the key P16 had
+left as "one middleware in front of the socket when it is wanted". It is
+optional and it travels in the link the Settings page already draws as a QR
+code, so the ceremony is scanning: the page trades the key for a cookie that
+lasts 400 days and is never asked again. That is the shape the user asked for —
+remote is the normal way of working, so anything that has to be typed per
+session would not survive contact with a show — and what it buys is a listener
+that is defensible on a network the operator does not own. What it is not is
+encryption: the transport is plain http, the key crosses it in the clear once,
+and the package says so rather than implying more. Before that, on 2026-09-21,
+P20 was written down: a
 package for the question of whether a streaming recogniser — one that carries
 state frame by frame instead of waiting for a segment — belongs here as a
 second engine. It is open and it is a measurement first, because the wait for
@@ -103,7 +113,7 @@ for now, with the reason recorded in the package.
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Deferred** | Set aside by the user: tested in the house rather than on a bench |
 | P15 | Vocabulary & prompt management | **Partial** | One global box, stored, but not named lists; no baseline left to measure it against |
-| P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. No authentication — by decision |
+| P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. The key is a lock, not encryption — the transport is plain http |
 | P17 | Alert terms & visual attention | **Done** | Subsumed by P19: the terms and the flash flags are rules now, and an existing file is migrated into them |
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
@@ -1296,15 +1306,51 @@ highlights, every channel and group, levels, stream health, session state and
 the configuration; and it can start and stop, clear communication, and edit
 channels, groups, vocabulary, alert terms and profiles.
 
-**Security as it stands.** There is no authentication yet. Anyone who reaches
-the chosen interface can control the session, which is why the listener is off
-by default and the interface is picked deliberately. The transport is arranged
-so that a token check is one middleware in front of the socket when it is
-wanted, not a redesign. What that does *not* cover, and is therefore checked
-already: a WebSocket upgrade is not subject to the same-origin policy, so the
-socket refuses an upgrade whose stated origin is not the address this app is
-serving on — otherwise any page anybody on the network opened could drive the
-session out of the operator's own browser.
+**Security as it stands.** One optional key, and it travels in the link. The
+listener generates a key the first time it is switched on — eight characters of
+Crockford's base 32, which is short enough to read off a screen — and puts it in
+the fragment of the URL the Settings page shows and encodes as a QR code. The
+page scanning it trades the key for an `HttpOnly` cookie at `POST /auth` and
+then wipes it out of the address bar, so it is in no history, no log and no
+screenshot. The cookie lasts 400 days, which is the longest any browser honours,
+because an operator who is asked for a key on the morning of a show is an
+operator who turns the key off. The box *is* the setting — empty is the open
+listener it was before, filled is one that asks — because a switch beside a box
+can disagree with it, and then "on, and empty" has to mean something.
+
+The socket is the only thing gated: everything the remote can do goes through
+it, and the bundle itself has to load before it can offer anything. `POST /auth`
+is rate-limited per address — ten wrong keys and that address waits a minute —
+which is what makes forty bits enough. Replacing the key does *not* rebind the listener: the running
+server reads it out of a `watch`, and the browsers let in with the old one are
+dropped through a second channel, so *New key* is the button for a phone left
+in a green room without being a button that takes the port down. Rebinding
+would not have worked anyway — see below.
+
+**Taking the listener down is asynchronous, and `apply` waits for it.** Dropping
+a listener only asks its serving task to stop; the task owns the socket until it
+returns, so binding the same address and port in the same breath fails with
+"port is already in use" — this app complaining about itself, at the operator.
+`apply` is therefore `async` and awaits the old task: a blocking wait cannot
+work, because the task it waits for runs on the same runtime and a blocked
+thread is a task that never finishes. That is what `it_can_be_switched_off_and_straight_back_on`
+pins down; it fails against a blocking wait.
+
+**What the key is not** is a guarantee. The transport is plain http, so the key
+crosses the network in the clear the first time a browser offers it: it keeps
+out somebody on the venue's guest wifi who types in the address, not somebody
+reading the wire. TLS would close that, and only behind a self-signed
+certificate — a browser warning that has to be clicked through on every scan is
+how an operator learns to click through warnings, and it would cost this
+feature the one property it is built around. So the listener stays off by
+default, the interface is still picked deliberately, and the limit is written
+down here rather than papered over.
+
+What none of that covers, and is therefore checked separately: a WebSocket
+upgrade is not subject to the same-origin policy, so the socket refuses an
+upgrade whose stated origin is not the address this app is serving on —
+otherwise any page anybody on the network opened could drive the session out of
+the operator's own browser.
 
 **Every mutation exists exactly once**, in `crates/app/src/commands.rs` as one
 arm of a `Command` enum. The Tauri bridge is a single `command` that hands its
@@ -1701,9 +1747,11 @@ crew communication", not an oversight, and it is what makes the rest of this
 paragraph necessary rather than cautious.
 
 The question P19 parked was *who may write such a destination*. The rule editor
-is reachable from the LAN remote, and the remote has no authentication by
-decision. An arbitrary URL writable from there means anyone on the house
-network can point crew speech at an off-site endpoint from a browser form,
+is reachable from the LAN remote, and the remote's key is a lock on a door
+rather than an identity — it is optional, it is shared, and it says nothing
+about *which* of the people who have it is typing. An arbitrary URL writable
+from there means anyone who got in can point crew speech at an off-site
+endpoint from a browser form,
 which is a different proposition from the read-mostly remote that decision was
 made for. So: **a webhook action is written host-only.** The remote may see a
 rule that has one, switch it off and edit its trigger; it may not create or
@@ -1740,11 +1788,12 @@ and the URL box is absent from the rule editor served to the remote. ✔
 **What the webhook is not.** The host-only rule is a rule about the *editor*,
 which is what the threat it was written against is — an operator, or anyone
 else on the house network, typing a destination into the form the app serves.
-It is not enforced on the wire: a browser that sends a crafted `save_config`
-frame can still put a URL on a rule, because the remote has no authentication
-and the configuration round-trips through it whole. That is the same gap P16
-already has and the same one its authentication closes; nothing here widens
-it, and nothing here waits for it.
+It is not enforced on the wire: a browser that has been let in and sends a
+crafted `save_config` frame can still put a URL on a rule, because the
+configuration round-trips through it whole. P16's key does not close that — it
+decides who reaches the socket, not what a peer that reached it may write —
+and closing it would mean the remote's configuration is no longer the same
+configuration. Nothing here widens the gap, and nothing here waits on it.
 
 ---
 

@@ -15,14 +15,21 @@
   // has to be able to see. So the status is reported separately and shown
   // beside the switch.
   //
-  // The warning is not decoration. There is no authentication yet: anyone who
-  // reaches the chosen address can start and stop the session and change the
-  // setup. That is survivable on a house network the operator controls and is
-  // not survivable on a venue's guest wifi, and the only thing standing
-  // between the two is the address picked here — which is why one is picked,
-  // deliberately, instead of the app serving every interface at once.
+  // The key is optional and on by default, and the point of the whole design
+  // is that having one costs nothing: it is generated, it goes into the QR
+  // code below, and the browser that scans it is asked for nothing and stays
+  // in for 400 days. An operator who works remotely every day never types it.
+  // Turning it off is a real choice for a house network somebody controls —
+  // it is what this did before — and it is one click.
+  //
+  // What the key is *not* is a guarantee. The listener serves plain http, so
+  // the key crosses the network in the clear the first time a browser offers
+  // it. It keeps out somebody on the venue's guest wifi who types in the
+  // address; it does not keep out somebody reading the wire. That is why the
+  // interface is still picked deliberately and why the warning below stayed.
 
   import { onMount } from "svelte";
+  import { newKey } from "./key";
   import { clampPort } from "./profiles";
   import { encodeQr, qrPath } from "./qr";
   import {
@@ -83,6 +90,56 @@
   // app that begins serving a network on that click is an app that started
   // serving a network nobody asked it to.
   const pick = (address: string) => (remote.address = address);
+
+  // --- The key ------------------------------------------------------------
+
+  /// Whether the operator has said anything about the key on this page.
+  ///
+  /// What it is for is the one case the automatic key gets wrong: somebody
+  /// deliberately emptied the box, and then switched the listener off and on
+  /// again. Without this a key would come back, and a setting that undoes
+  /// itself is worse than one that was never offered.
+  let decided = $state(false);
+
+  /// Serving, and — the first time — with a key.
+  ///
+  /// Generated rather than asked for. A box that has to be filled in before
+  /// the feature works is a box that gets filled in with the house's wifi
+  /// password, and the key is in the QR code anyway, so there is nothing for
+  /// an operator to gain by choosing it.
+  const serve = (on: boolean) => {
+    remote.enabled = on;
+    if (on && remote.key === "" && !decided) remote.key = newKey();
+  };
+
+  // The box *is* the setting: empty is a listener anyone on the address can
+  // drive, filled is one that asks. There is no switch beside it, because a
+  // switch and a box that can disagree is a screen where "on, and empty" has
+  // to mean something — and the only honest thing it could mean is off.
+
+  /// A new key, which puts every browser that had the old one out.
+  ///
+  /// It does: the listener is rebound when the key changes — see `apply` in
+  /// `remote.rs` — which drops the sockets, and the cookie those browsers hold
+  /// is derived from the key they were let in with. So this is also the button
+  /// for the phone that was left in a green room.
+  const replace = () => {
+    decided = true;
+    remote.key = newKey();
+  };
+
+  // Written on change rather than on every keystroke, unlike the port. A key
+  // that changed per character would rebind the listener per character, and
+  // each rebind drops the browsers that are connected — so an operator typing
+  // a key of their own would knock the room off eight times.
+  let typed = $state("");
+  $effect(() => {
+    typed = remote.key;
+  });
+  const commit = () => {
+    decided = true;
+    remote.key = typed.trim();
+  };
 
   // Copying the address, and saying whether it worked.
   //
@@ -192,7 +249,12 @@
   </p>
 
   <label class="switch">
-    <input type="checkbox" bind:checked={remote.enabled} disabled={!ready} />
+    <input
+      type="checkbox"
+      checked={remote.enabled}
+      onchange={(e) => serve(e.currentTarget.checked)}
+      disabled={!ready}
+    />
     <span>Serve on the local network</span>
   </label>
 
@@ -225,6 +287,39 @@
       onblur={() => (remote.port = clampPort(remote.port))}
     />
   </label>
+
+  <label>
+    <span>Key</span>
+    <!-- Written on blur or Enter, not per keystroke: see `commit`. -->
+    <input
+      class="key"
+      type="text"
+      placeholder="no key"
+      bind:value={typed}
+      onchange={commit}
+      onblur={commit}
+      autocomplete="off"
+      autocapitalize="characters"
+      autocorrect="off"
+      spellcheck="false"
+    />
+    <button onclick={replace} title="Replaces the key and disconnects every browser that has the old one">
+      New key
+    </button>
+  </label>
+
+  {#if remote.key === ""}
+    <p class="hint">
+      Empty: anyone who can reach the address can drive the session. Reasonable
+      on a network you control, and on nothing else.
+    </p>
+  {:else}
+    <p class="hint">
+      Already in the address and in the code below — scanning is the whole of
+      it, and a browser that has scanned once is not asked again. A new key
+      disconnects every browser that had the old one.
+    </p>
+  {/if}
 
   {#if listFailed}
     <p class="error">The network interfaces could not be listed: {listFailed}</p>
@@ -282,9 +377,10 @@
   {/if}
 
   <p class="warn">
-    There is no password on this yet. Anyone who can reach the chosen address
-    can start and stop the session and change the setup — so pick an interface
-    on a network you control, and leave this off on a venue's guest wifi.
+    Served over plain http, so the key is readable by anyone who can read the
+    network itself — it keeps out somebody who types in the address, not
+    somebody watching the wire. Pick an interface on a network you control, and
+    leave this off on a venue's guest wifi.
   </p>
 </section>
 
@@ -331,6 +427,15 @@
 
   input[type="number"] {
     width: 7rem;
+  }
+
+  /* Eight characters that mean nothing, which is the one string where every
+     letter has to be legible on its own. */
+  .key {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    width: 9rem;
   }
 
   .url {

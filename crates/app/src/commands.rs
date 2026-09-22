@@ -154,7 +154,7 @@ pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) -> Resul
     match command {
         Command::AppVersion => json(env!("CARGO_PKG_VERSION")),
         Command::LoadConfig => json(load_config(app)?),
-        Command::SaveConfig { config } => json(save_config(app, config)?),
+        Command::SaveConfig { config } => json(save_config(app, config).await?),
         Command::ListModels { selection } => json(list_models(app, selection)?),
         Command::DownloadModel { id } => json(download_model(app, id).await?),
         Command::CancelDownload { id } => json(cancel_download(app, &id)?),
@@ -240,7 +240,7 @@ fn load_config<R: Runtime>(app: &AppHandle<R>) -> Result<Config, String> {
 /// which half is authoritative — which is exactly the drift the single file
 /// exists to avoid. That is also what makes a remote save safe: it is
 /// last-write-wins, and the side that lost is told.
-fn save_config<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<(), String> {
+async fn save_config<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<(), String> {
     let path = state(app)?.config_path()?;
     // Through the same tidying the file gets on the way in, so that what is
     // compared below is two configurations in one form rather than one of each.
@@ -265,7 +265,7 @@ fn save_config<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<(), Str
         // returning here would mean the only way to try again is to change a
         // field and change it back. `apply` is a no-op when the listener
         // already matches, so this costs the ordinary save nothing.
-        remote::apply(app, &config.remote);
+        remote::apply(app, &config.remote).await;
         return Ok(());
     }
 
@@ -279,7 +279,7 @@ fn save_config<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<(), Str
     // (P16). A separate "enable the remote" command would be a second writer
     // of the same setting, and the two would disagree the first time a save
     // and a click landed together.
-    remote::apply(app, &config.remote);
+    remote::apply(app, &config.remote).await;
 
     // Announced to every view, which is how a detached group window (P7)
     // learns that its group was renamed, refilled or switched to another
