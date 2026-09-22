@@ -12,6 +12,27 @@ scratch := justfile_directory() / ".scratch"
 # repository root rather than from ui.
 tauri := justfile_directory() / "ui/node_modules/.bin/tauri"
 
+# Where Tauri looks for the bundled sidecar (P13). It insists on the target
+# triple in the file name and strips it off again when it copies the binary
+# into `Contents/MacOS` — which is exactly where `worker::find_binary` looks,
+# so nothing in the app has to know whether it is running packaged or not.
+triple := "aarch64-apple-darwin"
+sidecar := justfile_directory() / "crates/app/binaries/whisper-worker-" + triple
+
+# Who signs the bundle. `-` is an ad-hoc signature: enough for Hardened Runtime
+# and for running here, not enough for another Mac — Gatekeeper wants a
+# Developer ID, which needs the paid programme. Pass one in once there is one:
+#
+#     just build "Developer ID Application: Name (TEAMID)"
+identity := env("APPLE_SIGNING_IDENTITY", "-")
+
+# The oldest macOS the bundle claims to run on. Read out of the Tauri config
+# rather than written down twice: `tauri build` exports it as the deployment
+# target for the app, and the sidecar has to be built against the same one. A
+# sidecar built against the host's macOS refuses to start on anything older —
+# the app would launch on macOS 13 and then fail at its first transcription.
+minimum_macos := `sed -n 's/.*"minimumSystemVersion": "\(.*\)".*/\1/p' crates/app/tauri.conf.json`
+
 default:
     @just --list
 
@@ -19,10 +40,10 @@ default:
 
 # Run the app in development mode (Vite + Tauri, hot reload).
 #
-# The sidecar is looked up next to the app binary, which is where cargo puts
-# it — so it has to be built too. Packaging it as a Tauri `externalBin` is P13.
-dev:
-    cargo build -p whisper-worker
+# The sidecar is staged for Tauri rather than only built: `externalBin` is
+# checked in development too, and a missing one fails the run before the
+# window opens.
+dev: (_sidecar "debug")
     {{tauri}} dev
 
 # Frontend only, without the Tauri window
@@ -79,8 +100,56 @@ test-ui:
 
 # --- Build ---------------------------------------------------------------
 
-build:
-    {{tauri}} build
+# Build, sign and package the app (P13).
+#
+# `tauri build` signs the bundle *and* the sidecar inside it with one identity
+# and the entitlements next to the config. Hardened Runtime is on by default in
+# Tauri 2, and it is what makes the microphone entitlement necessary rather
+# than decorative.
+build: (_sidecar "release" "--release")
+    APPLE_SIGNING_IDENTITY={{quote(identity)}} {{tauri}} build
+
+# What the signature actually says, on the bundle and on the sidecar. Read this
+# rather than trusting that the build printed no errors: an unsigned sidecar
+# inside a signed app is the P13 failure that only shows up on a foreign Mac.
+verify app=(justfile_directory() / "target/release/bundle/macos/Fluestr.app"):
+    codesign --verify --deep --strict --verbose=2 {{quote(app)}}
+    @echo
+    codesign --display --entitlements - --verbose=4 {{quote(app)}}
+    @echo
+    codesign --display --verbose=2 {{quote(app)}}/Contents/MacOS/whisper-worker
+    @echo
+    spctl --assess --type execute --verbose=4 {{quote(app)}} || \
+        echo "^ expected while the identity is ad-hoc: Gatekeeper wants a Developer ID"
+
+# Everything a beta tester needs, in one folder to hand over.
+#
+# The DMG is signed ad-hoc, so macOS blocks it on their machine and they have
+# to let it through by hand — which is why the instructions travel *with* the
+# file rather than in the covering message, where they get skimmed and then
+# asked about anyway.
+beta: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="{{justfile_directory()}}/target/beta"
+    rm -rf "$out" && mkdir -p "$out"
+    cp {{justfile_directory()}}/target/release/bundle/dmg/*.dmg "$out/"
+    cp {{justfile_directory()}}/docs/beta-install.md "$out/Read me first — installing Fluestr.md"
+    echo
+    echo "Ready to send:"
+    ls -1sh "$out"
+    echo
+    echo "Signed with: {{identity}}"
+    if [ "{{identity}}" = "-" ]; then
+        echo "  ^ ad-hoc. Testers will have to unblock it in System Settings;"
+        echo "    that is what the instructions next to the DMG are for."
+    fi
+
+# Copy the sidecar to the name Tauri bundles it under.
+_sidecar dir flags="":
+    MACOSX_DEPLOYMENT_TARGET={{minimum_macos}} cargo build -p whisper-worker {{flags}}
+    mkdir -p {{parent_directory(sidecar)}}
+    cp {{justfile_directory()}}/target/{{dir}}/whisper-worker {{sidecar}}
 
 # --- Whisper tooling (P4/P14) --------------------------------------------
 

@@ -22,7 +22,9 @@ thresholds goes the same way: it is per house and per evening, which is why it
 is a setting and not a task, and there is no state of it that is finished. That
 puts **P13, packaging and signing, at the head of the next steps** — with P6,
 P7, P9 and P19 in, a notarised build is what now stands between this and a
-machine that is not this one.
+machine that is not this one. Since 2026-09-22 that build exists and is signed,
+sidecar and all; what it is not is *notarised*, and that now waits on a
+Developer ID rather than on anything in the repository.
 
 Earlier the same day, the LAN remote got the key P16 had
 left as "one middleware in front of the socket when it is wanted". It is
@@ -124,7 +126,7 @@ for now, with the reason recorded in the package.
 | P10 | SQLite persistence | **Deferred** | Set aside by the user: this is about live communication, not persistence |
 | P11 | Model manager | **Done** | — |
 | P12 | Settings & presets | **Done** | The theme is still a constant; every threshold that decides what is transcribed is a setting |
-| P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
+| P13 | Packaging & signing | **Open** | Signed DMG builds and the sidecar is bundled and co-signed; only a Developer ID is missing, so the signature is ad-hoc and Gatekeeper still warns |
 | P14 | Performance & latency budget | **Deferred** | Set aside by the user: tested in the house rather than on a bench |
 | P15 | Vocabulary & prompt management | **Done** | Named lists dropped: one list is what a house has, and it is tuned by ear |
 | P16 | LAN remote client | **Done** | Verified from a second machine on a house network. The key is a lock, not encryption — the transport is plain http |
@@ -132,7 +134,7 @@ for now, with the reason recorded in the package.
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
 | P20 | Streaming recognition as a second engine | **Open** | Everything — it is a measurement before it is a feature |
-| P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that is P13's acceptance |
+| P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that waits on a Developer ID, see P13 |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -325,8 +327,8 @@ session that fell back to the energy detector. Three earlier attempts failed
 and are documented in measurements.md §8, including one that appeared to work
 and did nothing at all.
 
-**Outstanding:** registration as a Tauri `externalBin` so the binary is bundled
-and co-signed. Belongs with P13.
+**Bundling:** registered as a Tauri `externalBin` on 2026-09-22, so the binary
+is bundled into `Contents/MacOS` and co-signed with the app. See P13.
 
 ### P5 — Worker pool & backpressure — **Done**
 
@@ -1131,23 +1133,72 @@ offer a number the backend will not take.
 is still a constant, and the least of them — it changes nothing about what is
 transcribed.
 
-### P13 — Packaging & signing (macOS) — **Open**
+### P13 — Packaging & signing (macOS) — **Open** (blocked on an Apple ID)
 
 arm64 build, sidecar correctly bundled, code signing with hardened runtime,
 notarisation, DMG.
 
-**Done already:** `Info.plist` with `NSMicrophoneUsageDescription`. Without it
-macOS does not even ask — the callback silently delivers zeros, and a silent
-channel is indistinguishable from a denied permission.
+**Done on 2026-09-22.** `just build` produces a signed `Fluestr.app` and a DMG,
+and `just verify` reads back what the signature actually says rather than
+trusting that the build printed no errors.
 
-**Outstanding:** the `com.apple.security.device.audio-input` entitlement, which
-hardened runtime gates separately, and the sidecar's own signature.
+- **`Info.plist` with `NSMicrophoneUsageDescription`.** Without it macOS does
+  not even ask — the callback silently delivers zeros, and a silent channel is
+  indistinguishable from a denied permission.
+- **`Entitlements.plist` with `com.apple.security.device.audio-input`.**
+  Hardened Runtime gates the microphone a second time: the Info.plist key makes
+  macOS ask, this makes the answer count. Deliberately the only entitlement in
+  the file.
+- **The sidecar as a Tauri `externalBin`** — P4's outstanding piece. Tauri
+  bundles it into `Contents/MacOS` and co-signs it with the same identity and
+  the same entitlements, which is what closes the risk named below.
+  `worker::find_binary` needed no change: Tauri strips the target triple it
+  insists on in the staged file name, so the sidecar lands exactly where the
+  development lookup already looked.
+- **Hardened Runtime**, which Tauri 2 turns on by default. Confirmed rather
+  than assumed: both binaries report `flags=0x10002(adhoc,runtime)`.
+
+Two things surfaced only once a bundle was actually built, because both are
+consequences of `minimumSystemVersion` — which `tauri build` exports as the
+deployment target and a plain `cargo build` never sees:
+
+- **The release build did not link.** `ggml-metal.m` guards macOS 14 API behind
+  `@available`; below that deployment target clang cannot fold the guard away
+  and emits a call to `__isPlatformVersionAtLeast`, which lives in compiler-rt.
+  rustc links with `-nodefaultlibs`, so nothing dragged it in. `audio-core`'s
+  build script now links it, gated on the Silero feature — that is what puts
+  whisper.cpp in the link at all. Fixed there rather than by raising the
+  minimum, which is a product decision and not a link error's to make.
+- **The sidecar was built against the wrong minimum.** It inherited the host's
+  macOS while the bundle claimed 13.0, so on a macOS 13 machine the app would
+  have launched and then failed at its first transcription. The `just` recipe
+  reads the minimum out of `tauri.conf.json` rather than repeating it, and both
+  binaries now report `minos 13.0`.
+
+**Verified end to end:** the bundled, hardened, signed sidecar loads the model
+on Metal and returns the expected transcript for the P14 fixture — the slice
+run against `Fluestr.app/Contents/MacOS/whisper-worker` instead of the cargo
+build. Metal under Hardened Runtime was the open question; it needs no JIT
+entitlement. (First run compiles the shader library, ~8.5 s; cached afterwards
+at ~8 ms. Worth knowing before it is read as a hang on a foreign Mac.)
+
+**Outstanding, and the whole of what is left:** a Developer ID. The signature
+today is ad-hoc (`-`), which satisfies Hardened Runtime and runs here, but
+carries no team identity, so `spctl --assess` rejects it and a foreign Mac
+shows a Gatekeeper warning. Notarisation needs the same certificate. Both are
+gated on enrolment in the Apple Developer Program, which the user has not
+taken — a cost decision, not a technical one. Nothing in the repository has to
+change when it is: `just build "Developer ID Application: … (TEAMID)"`, and
+notarisation is the credentials in the environment that `tauri build` already
+looks for and reports missing.
 
 **Accepted when:** the DMG installs on a foreign Mac and runs without a
-Gatekeeper warning.
+Gatekeeper warning. Still open, and only for that reason. P21's guide has not
+been walked on a machine that has never run the app either — it waits on the
+same build.
 
-**Risk:** hardened runtime plus a sidecar process is the classic stumbling
-block — the sidecar needs its own signature.
+**Risk, closed:** hardened runtime plus a sidecar process is the classic
+stumbling block — the sidecar needs its own signature. It has one.
 
 ### P14 — Performance & latency budget — **Deferred**
 
@@ -2057,13 +2108,16 @@ have happened, and with them P8, P15 and P16 closed — the thresholds turned ou
 to be a thing tuned per house rather than a thing finished, and the remote
 worked from a second machine. What was third is now first.
 
-1. **P13, packaging and signing.** With P6, P7, P9, P19 and now P8, P15 and P16
-   in, a notarised build is the last thing between this and a machine that is
-   not this one. It carries P4's outstanding piece — the sidecar as a Tauri
-   `externalBin`, so it is bundled and co-signed — and its risk is the classic
-   one: hardened runtime plus a sidecar process, where the sidecar needs its own
-   signature and the `com.apple.security.device.audio-input` entitlement is
-   gated separately.
+1. **P13, packaging and signing — mechanically done, waiting on a Developer
+   ID.** Built on 2026-09-22: `just build` signs the app and the sidecar with
+   Hardened Runtime and the microphone entitlement and packages a DMG, and the
+   bundled sidecar was run end to end on Metal to prove it. P4's outstanding
+   piece went with it, and the classic risk — hardened runtime plus a sidecar
+   process — is closed. What is left is not work but enrolment: without a
+   Developer ID the signature is ad-hoc, so Gatekeeper still warns on a foreign
+   Mac and notarisation cannot run. That is a cost decision for the user, and
+   it is now the only thing standing between this and a machine that is not
+   this one — including P21's guide, which has to be walked on one.
 2. **The webhook against a real Companion.** Built and tested against its own
    unit tests on 2026-09-19; what it has not had is a desk. The two things
    only a house can answer are whether a Companion press URL fires from the

@@ -65,16 +65,31 @@ if [ ! -x "$tauri" ]; then
     (cd ui && pnpm install)
 fi
 
-# The sidecar is a separate binary the app looks for next to its own. Packaging
-# it into the bundle is P13, so until then it has to be built here — and in
-# release mode it has to be *found* here too, see below.
+# The sidecar is a separate binary the app looks for next to its own. Since P13
+# it is a Tauri `externalBin`: Tauri copies it into the bundle and co-signs it,
+# but only if it is staged under the name it expects — the target triple is
+# part of that name and Tauri strips it again on the way in. Staged in both
+# modes, because `tauri dev` checks for it too and fails before the window
+# opens if it is not there.
+#
+# Built against the bundle's own minimum macOS rather than this machine's,
+# which is read out of the Tauri config so it is not written down twice. A
+# sidecar built against a newer macOS than the app claims refuses to start on
+# an older one — the app would launch and fail at its first transcription.
+triple="aarch64-apple-darwin"
+sidecar="$root/crates/app/binaries/whisper-worker-$triple"
+minimum_macos="$(sed -n 's/.*"minimumSystemVersion": "\(.*\)".*/\1/p' crates/app/tauri.conf.json)"
+
 step "Building the transcription sidecar"
 if [ "$mode" = "release" ]; then
-    cargo build --release -p whisper-worker
-    worker="$root/target/release/whisper-worker"
+    MACOSX_DEPLOYMENT_TARGET="$minimum_macos" cargo build --release -p whisper-worker
+    built="$root/target/release/whisper-worker"
 else
-    cargo build -p whisper-worker
+    MACOSX_DEPLOYMENT_TARGET="$minimum_macos" cargo build -p whisper-worker
+    built="$root/target/debug/whisper-worker"
 fi
+mkdir -p "$(dirname "$sidecar")"
+cp "$built" "$sidecar"
 
 if [ "$mode" = "dev" ]; then
     # From the repository root, not from ui: the Tauri CLI looks for
@@ -83,19 +98,22 @@ if [ "$mode" = "dev" ]; then
     exec "$tauri" dev
 fi
 
+# Signed ad-hoc unless an identity is in the environment. That is enough for
+# Hardened Runtime and for running here; a Developer ID — which Gatekeeper and
+# notarisation want, and which this project does not have yet — is the same
+# variable with a real name in it. See P13.
 step "Building the release bundle — this takes a few minutes"
-"$tauri" build
+APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}" "$tauri" build
 
 app="$root/target/release/bundle/macos/Fluestr.app"
-binary="$app/Contents/MacOS/Fluestr"
+binary="$app/Contents/MacOS/fluestr"
 if [ ! -x "$binary" ]; then
     echo "run.sh: the build finished but $app is not there" >&2
     exit 1
 fi
 
 step "Starting $app"
-# Started as a binary rather than with `open`, for two reasons: the log goes to
-# this terminal, where a failure to start can be read, and the environment
-# reaches the process — which until P13 packages the sidecar is the only way the
-# bundled app finds it at all.
-exec env FLUESTR_WORKER="$worker" "$binary"
+# Started as a binary rather than with `open` so the log goes to this terminal,
+# where a failure to start can be read. No FLUESTR_WORKER: the sidecar is in
+# the bundle next to this binary now, which is where the app looks anyway.
+exec "$binary"

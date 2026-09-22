@@ -77,6 +77,48 @@ exist yet:
 | `FLUESTR_VAD_MODEL` | the model manager (P11) | newest `ggml-silero-*.bin` in `.scratch/models` |
 | `FLUESTR_WORKER` | the bundled sidecar (P13) | `whisper-worker` next to the app binary |
 
+## Building a signed app
+
+```sh
+just build     # signed Fluestr.app and a DMG in target/release/bundle
+just verify    # what the signature actually says, app and sidecar
+```
+
+The sidecar is bundled as a Tauri `externalBin`, so it lands in
+`Contents/MacOS` next to the app and is signed with the same identity and the
+same entitlements. Hardened Runtime is on, which is why
+`Entitlements.plist` carries `com.apple.security.device.audio-input`: the
+`Info.plist` key makes macOS ask for the microphone, the entitlement makes the
+answer count.
+
+Without an identity in the environment the bundle is signed **ad-hoc**. That
+runs here and satisfies Hardened Runtime, but it carries no team identity — so
+`spctl` rejects it, another Mac shows a Gatekeeper warning, and notarisation
+cannot run. All three want a Developer ID, which needs the paid Apple Developer
+Program. Once there is one, nothing here changes but the argument:
+
+```sh
+just build "Developer ID Application: Your Name (TEAMID)"
+```
+
+Notarisation is then the credentials `tauri build` already looks for and
+reports missing — `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and
+`APPLE_TEAM_ID`, or an App Store Connect key in `APPLE_API_KEY`,
+`APPLE_API_ISSUER` and `APPLE_API_KEY_PATH`.
+
+### Handing a build to testers
+
+```sh
+just beta      # target/beta: the DMG and the instructions that go with it
+```
+
+While the signature is ad-hoc, macOS blocks the app on a machine that is not
+this one and the tester has to allow it through System Settings by hand — once
+per build, and Control-click → Open is *not* a way around it on macOS 15 and
+newer. [docs/beta-install.md](docs/beta-install.md) is written for the tester
+rather than for this repository, and `just beta` copies it next to the DMG so
+the two travel together.
+
 ## Layout
 
 ```

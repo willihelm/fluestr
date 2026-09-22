@@ -26,3 +26,6 @@ fixtures/generated/
 
 # Playwright MCP: console logs and page snapshots from manual runs
 .playwright-mcp/
+
+# Tauri: the sidecar staged for `externalBin` (P13) — a build artefact
+crates/app/binaries/

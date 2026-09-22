@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Applied to the app and to the sidecar when the bundle is signed (P13).
+
+  Hardened Runtime is what notarisation requires, and it gates microphone
+  access a second time: `NSMicrophoneUsageDescription` in Info.plist makes
+  macOS *ask*, this makes the answer count. Without it a hardened build is
+  handed zeros by the capture callback even after the operator says yes —
+  the same silent failure P1 flags, but only in a packaged build, which is
+  the one place it is hardest to see.
+
+  Deliberately short. Every entitlement here is a hole in the runtime the
+  app is asking for by name, and the only one this needs is the microphone.
+  In particular there is no `disable-library-validation`: the sidecar is a
+  separate process that Tauri co-signs with the same identity, not a library
+  loaded into this one, so library validation has nothing to object to.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>
