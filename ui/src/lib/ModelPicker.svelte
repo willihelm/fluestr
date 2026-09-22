@@ -217,7 +217,7 @@
         {#if view.source === "custom"}
           — the custom model
         {:else if view.source === "environment"}
-          — from <code>INTERCOM2CHAT_MODEL</code>
+          — from <code>FLUESTR_MODEL</code>
         {:else if view.source === "development"}
           — found in <code>.scratch/models</code>
         {/if}

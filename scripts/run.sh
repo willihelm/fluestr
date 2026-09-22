@@ -79,15 +79,15 @@ fi
 if [ "$mode" = "dev" ]; then
     # From the repository root, not from ui: the Tauri CLI looks for
     # tauri.conf.json below the working directory and it lives in crates/app.
-    step "Starting Intercom2Chat (development)"
+    step "Starting Fluestr (development)"
     exec "$tauri" dev
 fi
 
 step "Building the release bundle — this takes a few minutes"
 "$tauri" build
 
-app="$root/target/release/bundle/macos/Intercom2Chat.app"
-binary="$app/Contents/MacOS/Intercom2Chat"
+app="$root/target/release/bundle/macos/Fluestr.app"
+binary="$app/Contents/MacOS/Fluestr"
 if [ ! -x "$binary" ]; then
     echo "run.sh: the build finished but $app is not there" >&2
     exit 1
@@ -98,4 +98,4 @@ step "Starting $app"
 # this terminal, where a failure to start can be read, and the environment
 # reaches the process — which until P13 packages the sidecar is the only way the
 # bundled app finds it at all.
-exec env INTERCOM2CHAT_WORKER="$worker" "$binary"
+exec env FLUESTR_WORKER="$worker" "$binary"

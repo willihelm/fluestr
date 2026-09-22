@@ -1,4 +1,4 @@
-# Intercom2Chat
+# Fluestr
 
 An offline desktop app that transcribes several intercom streams at once and
 presents them as a chat log.
@@ -68,9 +68,9 @@ exist yet:
 
 | Variable | Replaces | Default |
 |---|---|---|
-| `INTERCOM2CHAT_MODEL` | the model manager (P11) | largest non-Silero `.bin` in `.scratch/models` |
-| `INTERCOM2CHAT_VAD_MODEL` | the model manager (P11) | newest `ggml-silero-*.bin` in `.scratch/models` |
-| `INTERCOM2CHAT_WORKER` | the bundled sidecar (P13) | `whisper-worker` next to the app binary |
+| `FLUESTR_MODEL` | the model manager (P11) | largest non-Silero `.bin` in `.scratch/models` |
+| `FLUESTR_VAD_MODEL` | the model manager (P11) | newest `ggml-silero-*.bin` in `.scratch/models` |
+| `FLUESTR_WORKER` | the bundled sidecar (P13) | `whisper-worker` next to the app binary |
 
 ## Layout
 

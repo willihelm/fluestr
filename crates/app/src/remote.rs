@@ -110,7 +110,7 @@ const COOKIE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
 /// message for an attacker to vary, and anybody who can produce the digest
 /// already knows the key. The version in it is so that a later change to how
 /// the value is formed invalidates what is stored rather than accepting it.
-const COOKIE_DOMAIN: &str = "intercom2chat-remote-v1:";
+const COOKIE_DOMAIN: &str = "fluestr-remote-v1:";
 
 /// How many wrong keys one address may offer before it is made to wait.
 ///

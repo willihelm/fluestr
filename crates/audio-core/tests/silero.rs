@@ -10,7 +10,7 @@
 //! ```
 //!
 //! Both files are found in `.scratch` by default;
-//! `INTERCOM2CHAT_VAD_MODEL` and `VAD_TEST_FIXTURE` override them.
+//! `FLUESTR_VAD_MODEL` and `VAD_TEST_FIXTURE` override them.
 
 #![cfg(feature = "silero")]
 
@@ -30,7 +30,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn model_path() -> PathBuf {
-    if let Ok(path) = std::env::var("INTERCOM2CHAT_VAD_MODEL") {
+    if let Ok(path) = std::env::var("FLUESTR_VAD_MODEL") {
         return PathBuf::from(path);
     }
     let dir = workspace_root().join(".scratch/models");

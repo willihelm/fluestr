@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 fn temp_dir(tag: &str) -> PathBuf {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "intercom2chat-download-{tag}-{}-{}",
+        "fluestr-download-{tag}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));

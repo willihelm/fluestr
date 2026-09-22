@@ -38,7 +38,7 @@
 
 <main>
   <form onsubmit={offer}>
-    <h1>Intercom2Chat</h1>
+    <h1>Fluestr</h1>
     <p>
       This session is served with a key. Scanning the QR code in the app's
       Settings puts it in for you; this is the other way in.

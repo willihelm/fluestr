@@ -77,7 +77,7 @@ export const detail = (usage: ResourceUsage): string => {
   const share =
     usage.totalMemory > 0 ? ` of ${formatMemory(usage.totalMemory)}` : "";
   const memory =
-    `Memory is Intercom2Chat and its whisper workers — ${processes} — ` +
+    `Memory is Fluestr and its whisper workers — ${processes} — ` +
     `resident${share}.`;
 
   if (usage.gpu === null) return memory;

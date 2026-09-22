@@ -8,7 +8,7 @@
 //! ```sh
 //! just model small-q5_1
 //! just fixture de_mixed "Achtung Regie, Standby für Cue fünf. …"
-//! INTERCOM2CHAT_MODEL=.scratch/models/ggml-small-q5_1.bin \
+//! FLUESTR_MODEL=.scratch/models/ggml-small-q5_1.bin \
 //! SLICE_FIXTURE=.scratch/fixtures/de_mixed.wav \
 //!   cargo test -p app --test slice -- --ignored --nocapture
 //! ```

@@ -118,7 +118,7 @@ export const offerKey = async (key: string): Promise<string | null> => {
   try {
     answer = await fetch("/auth", { method: "POST", body: key });
   } catch {
-    return "Intercom2Chat did not answer.";
+    return "Fluestr did not answer.";
   }
 
   if (answer.ok) {

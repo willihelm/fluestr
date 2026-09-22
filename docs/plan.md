@@ -10,7 +10,21 @@ Evidence for the architecture decisions is in
 [measurements.md](measurements.md); this file references it rather than
 repeating numbers, so there is one place to correct when a measurement changes.
 
-**Status of this document:** 2026-09-22. The LAN remote got the key P16 had
+**Status of this document:** 2026-09-22. **P8, P15 and P16 were closed by the
+user**, on the strength of field use rather than of the lists they still
+carried: the app has been run on a show and the LAN remote from a second
+machine on a house network, and both did what they were for. What each package
+still named as outstanding is recorded now as deliberately not built — peak
+hold and a clipping warning beside meters that already answer the question,
+named vocabulary lists beside one list that reads correctly, encryption beside
+a key on a network whose ends the operator can see. The tuning of the detection
+thresholds goes the same way: it is per house and per evening, which is why it
+is a setting and not a task, and there is no state of it that is finished. That
+puts **P13, packaging and signing, at the head of the next steps** — with P6,
+P7, P9 and P19 in, a notarised build is what now stands between this and a
+machine that is not this one.
+
+Earlier the same day, the LAN remote got the key P16 had
 left as "one middleware in front of the socket when it is wanted". It is
 optional and it travels in the link the Settings page already draws as a QR
 code, so the ceremony is scanning: the page trades the key for a cookie that
@@ -105,15 +119,15 @@ for now, with the reason recorded in the package.
 | P5 | Worker pool & backpressure | **Done** | The ten-minute memory-growth run was never taken — set aside with P14 |
 | P6 | Tauri API | **Done** | `search_session` decided against — search is per view, see below |
 | P7 | Chat UI | **Done** | — |
-| P8 | Levels & stream health | **Partial** | Level, overrun count and overload count only |
+| P8 | Levels & stream health | **Done** | Peak hold, clipping warning and queue depth were dropped rather than postponed — see the package |
 | P9 | Live search & filter | **Done** | Per view, over what the window holds. No time-range filter |
 | P10 | SQLite persistence | **Deferred** | Set aside by the user: this is about live communication, not persistence |
 | P11 | Model manager | **Done** | — |
 | P12 | Settings & presets | **Done** | The theme is still a constant; every threshold that decides what is transcribed is a setting |
 | P13 | Packaging & signing | **Open** | `Info.plist` with the microphone usage description exists |
 | P14 | Performance & latency budget | **Deferred** | Set aside by the user: tested in the house rather than on a bench |
-| P15 | Vocabulary & prompt management | **Partial** | One global box, stored, but not named lists; no baseline left to measure it against |
-| P16 | LAN remote client | **Partial** | Verified against a mock app only, not from a second machine on a real network. The key is a lock, not encryption — the transport is plain http |
+| P15 | Vocabulary & prompt management | **Done** | Named lists dropped: one list is what a house has, and it is tuned by ear |
+| P16 | LAN remote client | **Done** | Verified from a second machine on a house network. The key is a lock, not encryption — the transport is plain http |
 | P17 | Alert terms & visual attention | **Done** | Subsumed by P19: the terms and the flash flags are rules now, and an existing file is migrated into them |
 | P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
@@ -138,9 +152,11 @@ interface the app recognises after a rename; a model manager that brings a
 fresh machine to its first transcription without a terminal; and, optionally,
 the same UI served to a browser on the local network as a full peer.
 
-**What a multi-channel patch has behind it:** one live session with four
-channels on real hardware — the right text in the right stream, nothing
-dropped, no visible slowdown. Every latency and CPU number in measurements.md
+**What a multi-channel patch has behind it:** live sessions with four channels
+on real hardware, in the house rather than on a bench — the right text in the
+right stream, nothing dropped, no visible slowdown, and the LAN remote worked
+from a second machine on the house network. That field use is what closed P8,
+P15 and P16 on 2026-09-22. Every latency and CPU number in measurements.md
 is still a single-stream number and, with P14 set aside, will stay one. Eight
 channels is the load P14 reasoned about and `tests/pool.rs` exercises
 synthetically; it is a reference point, not a ceiling. What tells an operator
@@ -723,7 +739,7 @@ can be changed from the channel list without stopping capture — P6's
 `update_stream_config` — and the list is no longer only walkable backwards a
 page at a time, because P9's search grows the window to whatever it jumps to.
 
-### P8 — Levels & stream health — **Partial**
+### P8 — Levels & stream health — **Done**
 
 Today: a level meter per configured stream (RMS and peak, computed in Rust,
 all arriving in one event so the bars on screen are the same age), on screen
@@ -855,12 +871,19 @@ every view learning to read both.
   about something nobody started. The device list on the same page is what
   says the interface is gone.
 
-**Outstanding:** peak hold, silence indicator, clipping warning, worker queue
-depth, and the rest of a global status bar — active workers, queue length and
-throughput. `WorkerPool` already exposes `workers()` and `queue_depth()`.
+**Not built, by decision.** Peak hold, a silence indicator, a clipping warning,
+worker queue depth, and the rest of a global status bar — active workers, queue
+length and throughput. `WorkerPool` still exposes `workers()` and
+`queue_depth()`, so the strip can grow them the day somebody misses them.
+**Closed by the user on 2026-09-22** after field use: a clipped channel is
+already legible on a peak bar clamped to full scale, a silent one is already a
+flat bar beside an unlit M, and the two figures an operator actually watches
+while a show runs turned out to be the GPU meter and the overload counter. A
+status bar naming five more is a status bar nobody reads.
 
 **Accepted when:** a deliberately clipped channel and a silent one are both
-immediately recognisable in the UI.
+immediately recognisable in the UI. ✔ in the house, by eye, rather than by the
+indicators this package originally listed.
 
 ### P9 — Live search & filter — **Done**
 
@@ -1195,7 +1218,7 @@ decoder load per stream and would be the first thing to break the P5 budget.
 Paying that is only justified if the exchange rate turns out to be bad. If it
 is good, the same responsiveness is a changed constant.
 
-### P15 — Vocabulary & prompt management — **Partial**
+### P15 — Vocabulary & prompt management — **Done**
 
 Today: **one** free-text vocabulary on the Settings page, applied to every
 stream through `SessionConfig::vocabulary` and passed to the sidecar as
@@ -1218,17 +1241,19 @@ drifts. An emptied box stays empty across a restart: the file tells "never set",
 which keeps the default, apart from "deliberately cleared", which turns the
 prompt off and is how its effect gets measured at all.
 
-**Outstanding:** *named* lists with exactly one active — today there is one list
-and no way to keep a second — a shipped starter list, and shortening that is
-deliberate rather than whisper's silent truncation. The measurement went with
-P14 on 2026-09-21.
+**Not built, by decision.** *Named* lists with exactly one active, a shipped
+starter list, and shortening that is deliberate rather than whisper's silent
+truncation. The measurement went with P14 on 2026-09-21; the lists went on
+2026-09-22, when the user **closed the package** after field use. One list is
+what a house has — its jargon does not come in variants — and the comparison
+this package was reaching for is one nobody turned out to want to make.
 
 **Accepted when:** originally, when the enabled list measurably improved the
 word error rate of the technical terms against a baseline on the P14 fixture
-set. With P14 set aside there is no baseline, so what is left is weaker and
-should be said plainly: named lists exist, one is active, and an operator can
-switch between two and keep the one that sounds better. The ability to switch
-is the point — it is the only comparison anybody can still make.
+set. With P14 set aside there is no baseline, and with the named lists dropped
+there is no switching either, so what is left is the weakest form and should be
+said plainly: the list is edited by ear, between shows, against the terms that
+came out wrong that evening — and that is how it has been used. ✔
 
 ### P17 — Alert terms & visual attention — **Done**
 
@@ -1291,7 +1316,7 @@ editor, and an existing `config.json` is migrated into the equivalent rules on
 the way in. The matcher in `crates/app/src/alerts.rs`, the UTF-16 ranges and
 the per-bubble counting are unchanged and are what P19 is built on.
 
-### P16 — LAN remote client — **Partial**
+### P16 — LAN remote client — **Done**
 
 The operator can optionally enable a local-network client from Settings. The
 app then serves a browser build of the same UI on the selected LAN interface;
@@ -1415,17 +1440,24 @@ the only writer — and carries the keys it handed out across an adopted
 configuration by position, so a channel renamed on the remote does not read as a
 profile switch and close the operator's group windows.
 
-**Outstanding:** authentication, which the transport is shaped for and which
-nothing yet asks for.
+**Not built, by decision.** Encryption, and with it a certificate and a name
+for this machine: the key crosses the network in the clear the first time a
+browser offers it, and everything after that is plain http. **Closed by the
+user on 2026-09-22.** This is a house network whose ends the operator can see,
+what the key keeps out is a curious phone rather than somebody on the wire, and
+TLS on a LAN with no name service means a self-signed certificate and a browser
+warning on every device — ceremony of exactly the kind that ends with the
+listener switched off.
 
 **Accepted when:** a second device on the chosen LAN opens the URL, sees the
 same existing and incoming communication, levels and group views as the
 operator, and can start and stop the session and change configuration with the
 change appearing on the operator's screen; a remote config save reaches the
 local app as an ordinary config update; disabling the listener immediately
-drops the connections it was serving. ✔ for the command round trip, the event
-stream and the drop on disable, against a mock app; the second machine waits on
-the whole-system verification below.
+drops the connections it was serving. ✔ — the command round trip, the event
+stream and the drop on disable against a mock app first, then the whole
+arrangement from a second machine on a house network on 2026-09-22, which is
+what closed the package.
 
 ### P18 — Windows port (WASAPI shared, ASIO opt-in) — **Open**
 
@@ -1940,8 +1972,8 @@ confirmed on real hardware in the live session of 2026-09-21.*
 session.*
 
 **Milestone C (language quality & production readiness):** + P15, P8, P9, P13.
-*P10 left it on 2026-09-18 and P14 on 2026-09-21; P3b was dropped. What is
-left of it is P15's named lists and P13.*
+*P10 left it on 2026-09-18 and P14 on 2026-09-21; P3b was dropped, and P15's
+named lists with it on 2026-09-22. What is left of it is P13.*
 
 **Milestone D (second platform):** + P18. *Deliberately after C: it reopens
 capture, the GPU backend and packaging, and each is cheaper to redo once the
@@ -1952,39 +1984,31 @@ macOS version it is ported from has settled in the house.*
 ## Suggested next steps
 
 In this order, with the reason each one comes where it does. Reordered on
-2026-09-21: the load test that stood at the head of this list went with P14,
-and what it was blocking — the settings proper — was done the same day and is
-no longer on it.
+2026-09-22: the two evenings in the house that stood at the head of this list
+have happened, and with them P8, P15 and P16 closed — the thresholds turned out
+to be a thing tuned per house rather than a thing finished, and the remote
+worked from a second machine. What was third is now first.
 
-1. **The thresholds, in the house.** Nothing to build: the controls exist and
-   reach the running session, and what they have not had is an evening with
-   somebody turning them while a show talks. It is first because every number
-   in the Detection section is still the constant it was, and the point of
-   exposing them was to find out what this house wants instead.
-2. **The remote, on a real network.** P16 has not had a second machine, a house
-   network and somebody working from it. That comes before authentication —
-   the obvious next thing to want, and the wrong thing to build against an
-   arrangement nobody has used yet.
-3. **P13, packaging and signing.** With P6, P7, P9 and P19 in, what is left
-   between this and a machine that is not this one is a notarised build. It
-   carries P4's outstanding piece — the sidecar as a Tauri `externalBin`, so it
-   is bundled and co-signed.
-4. **The webhook against a real Companion.** Built and tested against its own
+1. **P13, packaging and signing.** With P6, P7, P9, P19 and now P8, P15 and P16
+   in, a notarised build is the last thing between this and a machine that is
+   not this one. It carries P4's outstanding piece — the sidecar as a Tauri
+   `externalBin`, so it is bundled and co-signed — and its risk is the classic
+   one: hardened runtime plus a sidecar process, where the sidecar needs its own
+   signature and the `com.apple.security.device.audio-input` entitlement is
+   gated separately.
+2. **The webhook against a real Companion.** Built and tested against its own
    unit tests on 2026-09-19; what it has not had is a desk. The two things
    only a house can answer are whether a Companion press URL fires from the
    body the editor produces, and whether three seconds and one retry are the
    right numbers on a network with a show on it.
-5. **P20's measurement, if the house asks for it.** Deliberately behind the
-   evenings above, because they decide whether it is worth taking: a streaming
+3. **P20's measurement, if the house asks for it.** Deliberately behind a
+   release, because the evenings that decide whether it is worth taking are
+   evenings on a build somebody can install: a streaming
    engine buys latency and costs nearly everything else this pipeline has
    accumulated, and only somebody sitting in front of the running app can say
    whether the wait for the speaker to stop is the complaint. If it is, the
    spike is an afternoon on recorded session audio and answers it for good.
-6. **P15's named lists.** Not the measurement — that went with P14 — but the
-   ability to keep a second list and switch between them, which is the only
-   comparison left to anybody. One list with no alternative cannot be judged
-   even by ear.
-7. **P18, the Windows port.** Last, and not because it is hard: it reopens
+4. **P18, the Windows port.** Last, and not because it is hard: it reopens
    capture, the GPU backend and packaging. The one part worth pulling forward
    is the hardware question in its **Risk** — which channels the interface
    exposes through WASAPI — because it can be answered on the target machine in

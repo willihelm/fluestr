@@ -467,7 +467,7 @@ impl Sender {
         // not pay for a TCP handshake. `timeout` is per attempt, which is what
         // the retry below counts on.
         let client = match reqwest::Client::builder()
-            .user_agent(concat!("intercom2chat/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("fluestr/", env!("CARGO_PKG_VERSION")))
             .timeout(TIMEOUT)
             .build()
         {

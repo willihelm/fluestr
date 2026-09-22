@@ -13,6 +13,6 @@
 <plist version="1.0">
   <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Intercom2Chat transcribes the intercom channels of your audio interface locally. Nothing is sent anywhere.</string>
+    <string>Fluestr transcribes the intercom channels of your audio interface locally. Nothing is sent anywhere.</string>
   </dict>
 </plist>

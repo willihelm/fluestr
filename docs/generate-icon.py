@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generates the source icon (1024x1024 PNG) without external dependencies.
 
-A placeholder until the design pass in P13. Motif: three stacked bars of
-differing length — chat lines and a level meter at the same time.
+Motif: three stacked bars of differing length — chat lines and a level meter
+at the same time, and, with the bottom one cut to a stub, the F of Fluestr.
 
     python3 docs/generate-icon.py crates/app/icons/source.png
     pnpm --dir ui tauri icon ../crates/app/icons/source.png \
@@ -42,10 +42,12 @@ BAR_H = 0.10 * TILE
 GAP = 0.07 * TILE
 TOP = 0.28 * TILE
 LEFT = 0.22 * TILE
+# The third bar is a stub rather than a third full line: long, shorter, barely
+# there is what turns the stack into an F without drawing one.
 BARS = [
     (TOP, LEFT, 0.78 * TILE, ACCENT),
     (TOP + BAR_H + GAP, LEFT, 0.62 * TILE, DIM),
-    (TOP + 2 * (BAR_H + GAP), LEFT, 0.70 * TILE, ACCENT),
+    (TOP + 2 * (BAR_H + GAP), LEFT, 0.34 * TILE, ACCENT),
 ]
 BAR_RADIUS = BAR_H / 2
 

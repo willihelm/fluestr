@@ -1,4 +1,4 @@
-# Intercom2Chat — development tasks
+# Fluestr — development tasks
 #
 # Install `just` with: brew install just
 
@@ -127,8 +127,8 @@ fixture name text:
 # resampling -> segmentation -> sidecar -> transcript. Needs a model.
 slice fixture=(scratch / "fixtures/de_mixed.wav") model=(scratch / "models/ggml-small-q5_1.bin"):
     cargo build -p whisper-worker
-    INTERCOM2CHAT_WORKER={{justfile_directory()}}/target/debug/whisper-worker \
-    INTERCOM2CHAT_MODEL={{model}} \
+    FLUESTR_WORKER={{justfile_directory()}}/target/debug/whisper-worker \
+    FLUESTR_MODEL={{model}} \
     SLICE_FIXTURE={{fixture}} \
         cargo test -p app --test slice -- --ignored --nocapture
 

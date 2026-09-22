@@ -158,7 +158,7 @@
     // arrives here and nowhere else. The all-channels view cannot be renamed,
     // so its title is set once and never changes.
     if (showsAll || target) {
-      setWindowTitle(`${showsAll ? ALL_CHANNELS_NAME : target!.name} — Intercom2Chat`);
+      setWindowTitle(`${showsAll ? ALL_CHANNELS_NAME : target!.name} — Fluestr`);
     }
 
     // The stored setting is what this window is *born* with, read once. The

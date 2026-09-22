@@ -199,7 +199,7 @@ pub enum Source {
     Managed,
     /// The custom model: a path the operator typed. The offline way in.
     Custom,
-    /// `INTERCOM2CHAT_MODEL`. Developer escape hatch, and it outranks
+    /// `FLUESTR_MODEL`. Developer escape hatch, and it outranks
     /// everything so that a test run is never at the mercy of whatever the
     /// developer last clicked in the UI.
     Environment,
@@ -212,7 +212,7 @@ pub enum Source {
 /// The order is the point, so it is spelled out rather than left to the reader
 /// of the `if` chain:
 ///
-/// 1. `INTERCOM2CHAT_MODEL` — a test that sets it must get it, whatever is
+/// 1. `FLUESTR_MODEL` — a test that sets it must get it, whatever is
 ///    configured.
 /// 2. The custom model's path, if the custom model is the one selected.
 /// 3. The selected catalogue model, if it is installed.
@@ -228,13 +228,10 @@ pub enum Source {
 pub fn resolve(dir: &Path, selection: &Selection) -> Result<Resolved> {
     let vad = resolve_vad(dir, selection);
 
-    if let Ok(path) = std::env::var("INTERCOM2CHAT_MODEL") {
+    if let Ok(path) = std::env::var("FLUESTR_MODEL") {
         let path = PathBuf::from(path);
         if !path.is_file() {
-            bail!(
-                "INTERCOM2CHAT_MODEL points at {} — not a file",
-                path.display()
-            );
+            bail!("FLUESTR_MODEL points at {} — not a file", path.display());
         }
         return Ok(Resolved {
             speech: path,
@@ -305,7 +302,7 @@ pub fn resolve(dir: &Path, selection: &Selection) -> Result<Resolved> {
 /// The VAD half, which never fails: a missing one costs quality, not the
 /// session, and the sidecar says so loudly enough on its own.
 fn resolve_vad(dir: &Path, selection: &Selection) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("INTERCOM2CHAT_VAD_MODEL") {
+    if let Ok(path) = std::env::var("FLUESTR_VAD_MODEL") {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Some(path);
@@ -396,7 +393,7 @@ pub async fn download(
     }
 
     let client = reqwest::Client::builder()
-        .user_agent(concat!("intercom2chat/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("fluestr/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("building the HTTP client")?;
 
@@ -646,7 +643,7 @@ mod tests {
     fn temp_dir() -> PathBuf {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "intercom2chat-models-{}-{}",
+            "fluestr-models-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -654,11 +651,11 @@ mod tests {
         dir
     }
 
-    /// `INTERCOM2CHAT_MODEL` outranks everything by design, which would make
+    /// `FLUESTR_MODEL` outranks everything by design, which would make
     /// every resolution test below pass or fail depending on the developer's
     /// shell. The tests that are about the order below it say so by skipping.
     fn environment_is_clean() -> bool {
-        std::env::var_os("INTERCOM2CHAT_MODEL").is_none()
+        std::env::var_os("FLUESTR_MODEL").is_none()
     }
 
     fn install(dir: &Path, id: &str) -> PathBuf {

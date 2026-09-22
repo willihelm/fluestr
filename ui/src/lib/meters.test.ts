@@ -21,8 +21,8 @@ describe("collapseKey", () => {
   // Per view, which is the point: the desk keeps its bars while the group
   // window squeezed into the corner of the screen gives them up.
   it("gives every view its own entry", () => {
-    expect(collapseKey(null)).toBe("intercom2chat.meters.main");
-    expect(collapseKey(2)).toBe("intercom2chat.meters.group-2");
-    expect(collapseKey(ALL_CHANNELS_VIEW)).toBe("intercom2chat.meters.group-all");
+    expect(collapseKey(null)).toBe("fluestr.meters.main");
+    expect(collapseKey(2)).toBe("fluestr.meters.group-2");
+    expect(collapseKey(ALL_CHANNELS_VIEW)).toBe("fluestr.meters.group-all");
   });
 });

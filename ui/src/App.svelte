@@ -1006,7 +1006,7 @@
 
 <main>
   <header class="bar">
-    <h1>Intercom2Chat</h1>
+    <h1>Fluestr</h1>
 
     <nav class="tabs">
       <button
@@ -1074,7 +1074,7 @@
     <div class="bar offline">
       <span class="error">●</span>
       <span>
-        Not connected to Intercom2Chat. What is on screen is what arrived
+        Not connected to Fluestr. What is on screen is what arrived
         before the connection went; it is being retried.
       </span>
     </div>

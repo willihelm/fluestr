@@ -15,7 +15,7 @@ import type { GroupView } from "./windows";
 /// Where a view's answer is kept. Spelled like the sort override's key, so a
 /// human reading storage can match both to the window they belong to.
 export const collapseKey = (view: GroupView | null): string =>
-  `intercom2chat.meters.${view === null ? "main" : `group-${view}`}`;
+  `fluestr.meters.${view === null ? "main" : `group-${view}`}`;
 
 /// What a stored entry means. Only an explicit "collapsed" hides the strip:
 /// anything else — never written, or written by a version of this that stored

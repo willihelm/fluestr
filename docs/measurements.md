@@ -370,7 +370,7 @@ decision:
 - **Energy VAD.** Works in a quiet room, will not survive an intercom feed with
   constant background noise. P3 has since replaced it behind the `Vad` trait —
   see §10; it remains only as the fallback when the VAD model is missing.
-- **Model discovered from `.scratch/models` or `INTERCOM2CHAT_MODEL`.** P11.
+- **Model discovered from `.scratch/models` or `FLUESTR_MODEL`.** P11.
 - **Sidecar found next to the app binary.** Bundling it as an `externalBin`
   with its own signature is P13.
 - **Chat list is unvirtualised.** Fine for minutes, not for an hour across

@@ -50,7 +50,7 @@ export const label = (direction: SortDirection): string =>
 /// else — see `windows.ts` — so a key can be read by a human looking at
 /// storage and matched to the window it belongs to.
 export const overrideKey = (view: GroupView | null): string =>
-  `intercom2chat.sort.${view === null ? "main" : `group-${view}`}`;
+  `fluestr.sort.${view === null ? "main" : `group-${view}`}`;
 
 /// What a stored entry means, including the two ways there is none: never
 /// written, and written by a version of this that stored something else.

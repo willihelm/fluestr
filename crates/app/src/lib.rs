@@ -423,8 +423,8 @@ fn open_group_window<R: Runtime>(
         None => format!("{GROUP_WINDOW_PREFIX}{GROUP_WINDOW_ALL}"),
     };
     // The group's own name first: this window is read from a Dock icon and a
-    // window menu, where "Intercom2Chat" is what every one of them says.
-    let title = format!("{name} — Intercom2Chat");
+    // window menu, where "Fluestr" is what every one of them says.
+    let title = format!("{name} — Fluestr");
 
     if let Some(existing) = app.get_webview_window(&label) {
         // Already open: bring it forward and let it pick up a rename. Asking

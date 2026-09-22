@@ -256,13 +256,10 @@ pub fn list_languages() -> Result<Vec<whisper_protocol::Language>> {
 /// which is also where Tauri puts a bundled `externalBin` sidecar (P13). The
 /// environment variable is the escape hatch for anything else.
 pub fn find_binary() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("INTERCOM2CHAT_WORKER") {
+    if let Ok(path) = std::env::var("FLUESTR_WORKER") {
         let path = PathBuf::from(path);
         if !path.is_file() {
-            bail!(
-                "INTERCOM2CHAT_WORKER points at {} — not a file",
-                path.display()
-            );
+            bail!("FLUESTR_WORKER points at {} — not a file", path.display());
         }
         return Ok(path);
     }
@@ -282,7 +279,7 @@ pub fn find_binary() -> Result<PathBuf> {
 
     bail!(
         "no sidecar found next to {} — build it with `cargo build -p whisper-worker` \
-         or point INTERCOM2CHAT_WORKER at it",
+         or point FLUESTR_WORKER at it",
         exe.display()
     )
 }
@@ -306,13 +303,10 @@ const SCRATCH_MODELS: &str = ".scratch/models";
 /// location, which covers running from anywhere in the repository as well as
 /// `cargo run` and `tauri dev`.
 pub fn find_model() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("INTERCOM2CHAT_MODEL") {
+    if let Ok(path) = std::env::var("FLUESTR_MODEL") {
         let path = PathBuf::from(path);
         if !path.is_file() {
-            bail!(
-                "INTERCOM2CHAT_MODEL points at {} — not a file",
-                path.display()
-            );
+            bail!("FLUESTR_MODEL points at {} — not a file", path.display());
         }
         return Ok(path);
     }
@@ -333,7 +327,7 @@ pub fn find_model() -> Result<PathBuf> {
 
     if searched.is_empty() {
         bail!(
-            "no model found — run `just model small-q5_1` or set INTERCOM2CHAT_MODEL \
+            "no model found — run `just model small-q5_1` or set FLUESTR_MODEL \
              (looked for {SCRATCH_MODELS} above {})",
             describe(search_roots())
         );
@@ -363,7 +357,7 @@ fn search_roots() -> Vec<PathBuf> {
 /// `None` rather than an error: a missing VAD degrades the result, it does not
 /// prevent a session. The sidecar warns about running without one.
 pub fn find_vad_model() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("INTERCOM2CHAT_VAD_MODEL") {
+    if let Ok(path) = std::env::var("FLUESTR_VAD_MODEL") {
         let path = PathBuf::from(path);
         return path.is_file().then_some(path);
     }
@@ -486,13 +480,13 @@ mod tests {
     fn a_missing_model_directory_explains_the_fix() {
         // Depends on whether the developer has downloaded a model, so this
         // asserts the shape of the failure rather than a particular path.
-        if std::env::var_os("INTERCOM2CHAT_MODEL").is_some() {
+        if std::env::var_os("FLUESTR_MODEL").is_some() {
             return;
         }
         if let Err(err) = find_model() {
             let message = err.to_string();
             assert!(
-                message.contains("just model") || message.contains("INTERCOM2CHAT_MODEL"),
+                message.contains("just model") || message.contains("FLUESTR_MODEL"),
                 "unhelpful error: {message}"
             );
         }

@@ -868,7 +868,7 @@ mod tests {
     fn temp_dir() -> PathBuf {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "intercom2chat-config-{}-{}",
+            "fluestr-config-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

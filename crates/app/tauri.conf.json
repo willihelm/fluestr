@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Intercom2Chat",
+  "productName": "Fluestr",
   "version": "0.1.0",
-  "identifier": "io.github.willihelm.intercom2chat",
+  "identifier": "io.github.willihelm.fluestr",
   "build": {
     "beforeDevCommand": {
       "script": "pnpm dev",
@@ -18,7 +18,7 @@
   "app": {
     "windows": [
       {
-        "title": "Intercom2Chat",
+        "title": "Fluestr",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

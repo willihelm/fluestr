@@ -25,7 +25,7 @@ export const MAX_FRACTION = 0.6;
 /// Also where a double-click on the handle puts it back to.
 export const DEFAULT_WIDTH = 192;
 
-const KEY = "intercom2chat.sidebar-width";
+const KEY = "fluestr.sidebar-width";
 
 /// The width brought inside what the current window can show.
 ///
