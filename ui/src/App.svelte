@@ -1101,9 +1101,25 @@
            The name lives in Settings, three clicks away, and an operator who
            has two houses in the list can otherwise only tell them apart by
            what the channel labels say once audio is already running — which
-           is one show too late to find out the wrong profile was loaded. -->
+           is one show too late to find out the wrong profile was loaded.
+
+           A picker rather than a label, so the setup can be changed here
+           too. Locked while a session runs, like the list in Settings: the
+           capture configuration is fixed once capture has opened. -->
       {#if active}
-        <span class="profile" title="Active profile">{active.name}</span>
+        <select
+          class="profile"
+          bind:value={activeKey}
+          disabled={running || busy}
+          title={running || busy
+            ? "Active profile — stop the session to switch"
+            : "Active profile"}
+          aria-label="Active profile"
+        >
+          {#each profiles as profile (profile.key)}
+            <option value={profile.key}>{profile.name}</option>
+          {/each}
+        </select>
       {/if}
 
       <!-- Beside the button it decides the fate of, rather than a page away
@@ -1466,17 +1482,27 @@
     cursor: pointer;
   }
 
-  /* Dim and unemphasised: it is a label on the button beside it, not a control
-     — and a name in the app's accent beside a Start button reads as something
-     to press. Truncated rather than allowed to push Start off a narrow
-     window; the whole name is in the tooltip and in Settings. */
+  /* Quiet rather than in the app's accent: a picker in the accent beside a
+     Start button reads as the thing to press. Capped in width rather than
+     allowed to push Start off a narrow window; the whole name is in the open
+     list and in Settings. */
   .profile {
+    font: inherit;
     font-size: 0.85rem;
-    color: var(--text-dim);
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.3rem 0.45rem;
     max-width: 14rem;
-    overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .profile:disabled {
+    color: var(--text-dim);
+    opacity: 0.7;
+    cursor: default;
   }
 
   .auto-start {
@@ -1509,7 +1535,7 @@
 
      The same 45 rem as `layout.ts` matches on, written out because a media
      query cannot read a constant. The header is the bar that has to give: it
-     carries a title, a profile name, Auto-start and Start, and on a phone in
+     carries a title, the profile picker, Auto-start and Start, and on a phone in
      portrait that is two lines of furniture above a chat.
 
      What goes is the title, and only the title. The app is named in the
@@ -1552,7 +1578,7 @@
     }
 
     /* Gone entirely, label and box. It is set once, between shows, and the
-       header on a phone is already a profile name and Start on one line —
+       header on a phone is already the profile picker and Start on one line —
        the one control here the session turns on. Auto-start keeps whatever it
        was given on the desk; it is not changed by being unreachable. */
     .auto-start {
