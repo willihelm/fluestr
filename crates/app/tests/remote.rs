@@ -255,6 +255,59 @@ async fn a_page_from_another_site_cannot_open_the_socket() {
     remote::apply(&handle, &RemoteConfig::default()).await;
 }
 
+/// DNS rebinding: a page on a hostile name that re-resolves to this machine
+/// sends that name as its `Host` — and as its `Origin`, so the two agreeing
+/// proves nothing. The listener answers to its own address only.
+#[tokio::test]
+async fn a_request_for_another_name_is_refused() {
+    let app = mock();
+    let handle = app.handle().clone();
+
+    let port = PORT + 8;
+    let status = remote::apply(
+        &handle,
+        &RemoteConfig {
+            enabled: true,
+            address: "127.0.0.1".into(),
+            port,
+            key: String::new(),
+        },
+    )
+    .await;
+    assert!(status.running, "not serving: {:?}", status.error);
+    let (mut accepted, _) = connect_to(port).await;
+
+    let mut request = format!("ws://127.0.0.1:{port}/ws")
+        .into_client_request()
+        .expect("a request");
+    let headers = request.headers_mut();
+    headers.insert(
+        "host",
+        format!("evil.example:{port}").parse().expect("a host"),
+    );
+    headers.insert(
+        "origin",
+        format!("http://evil.example:{port}")
+            .parse()
+            .expect("an origin"),
+    );
+    assert!(
+        tokio_tungstenite::connect_async(request).await.is_err(),
+        "a rebound name was let onto the socket"
+    );
+
+    let refused = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/auth"))
+        .header("host", format!("evil.example:{port}"))
+        .send()
+        .await
+        .expect("asking /auth");
+    assert_eq!(refused.status().as_u16(), 421);
+
+    let _ = accepted.close(None).await;
+    remote::apply(&handle, &RemoteConfig::default()).await;
+}
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 

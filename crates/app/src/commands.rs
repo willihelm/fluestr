@@ -143,6 +143,21 @@ pub enum Command {
     WebhookStatus,
 }
 
+/// Who is asking.
+///
+/// One implementation of every command, but not one *trust*: a browser on the
+/// LAN is a peer for running the show and not for what only the machine may
+/// write — the remote's own settings, the custom model's path, and where a
+/// webhook sends what was said (P19). The pages hide those from the remote;
+/// this is what makes that true for a caller that is not one of the pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caller {
+    /// One of the app's own windows.
+    Window,
+    /// A browser the LAN remote serves (P16).
+    Remote,
+}
+
 /// Runs one command and answers with its result as JSON.
 ///
 /// JSON rather than a typed result, because the two callers want different
@@ -150,18 +165,55 @@ pub enum Command {
 /// hands it back to a frontend that was going to parse JSON either way. A
 /// typed answer would need an enum mirroring this one, which is the second
 /// copy this module exists to avoid.
-pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) -> Result<Value, String> {
+pub async fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    caller: Caller,
+    command: Command,
+) -> Result<Value, String> {
+    let remote = caller == Caller::Remote;
     match command {
         Command::AppVersion => json(env!("CARGO_PKG_VERSION")),
-        Command::LoadConfig => json(load_config(app)?),
-        Command::SaveConfig { config } => json(save_config(app, config).await?),
-        Command::ListModels { selection } => json(list_models(app, selection)?),
+        Command::LoadConfig => {
+            let config = load_config(app)?;
+            if remote {
+                json(config.for_remote(&state(app)?.remote.secret()))
+            } else {
+                json(config)
+            }
+        }
+        Command::SaveConfig { config } => json(save_config(app, caller, config).await?),
+        Command::ListModels { selection } => {
+            // The path is the machine's: a remote asking about a path of its
+            // own choosing would be asking whether any file on this disk
+            // exists, and the answer says.
+            let selection = selection.map(|mut arg| {
+                if remote {
+                    arg.model_path = state(app).ok().and_then(|s| s.selection().path);
+                }
+                arg
+            });
+            json(list_models(app, selection)?)
+        }
         Command::DownloadModel { id } => json(download_model(app, id).await?),
         Command::CancelDownload { id } => json(cancel_download(app, &id)?),
         Command::RemoveModel { id } => json(remove_model(app, &id)?),
         Command::ListDevices => json(session::list_devices().map_err(|err| err.to_string())?),
         Command::ListLanguages => json(list_languages(app)?),
-        Command::SetRules { rules } => json(set_rules(app, rules)?),
+        Command::SetRules { mut rules } => {
+            if remote {
+                // What the remote compiled from the redacted configuration:
+                // each webhook is a name, and only a name the machine handed
+                // out becomes a request again.
+                let known = load_config(app)?.webhooks_by_fingerprint(&state(app)?.remote.secret());
+                for rule in &mut rules {
+                    rule.webhook = rule
+                        .webhook
+                        .take()
+                        .and_then(|sent| known.get(&sent.url).cloned());
+                }
+            }
+            json(set_rules(app, rules)?)
+        }
         Command::SessionSnapshot => json(session_snapshot(app)?),
         Command::ClearCommunication => json(clear_communication(app)?),
         // On a blocking thread: starting a session loads the model, which on
@@ -194,7 +246,14 @@ pub async fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) -> Resul
             json(set_monitor_gain(app, stream_id, gain_db)?)
         }
         Command::ListInterfaces => json(remote::interfaces()),
-        Command::RemoteStatus => json(remote_status(app)?),
+        Command::RemoteStatus => {
+            let status = remote_status(app)?;
+            if remote {
+                json(status.for_remote())
+            } else {
+                json(status)
+            }
+        }
         Command::WebhookStatus => json(state(app)?.webhooks.status()),
     }
 }
@@ -240,8 +299,19 @@ fn load_config<R: Runtime>(app: &AppHandle<R>) -> Result<Config, String> {
 /// which half is authoritative — which is exactly the drift the single file
 /// exists to avoid. That is also what makes a remote save safe: it is
 /// last-write-wins, and the side that lost is told.
-async fn save_config<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<(), String> {
+async fn save_config<R: Runtime>(
+    app: &AppHandle<R>,
+    caller: Caller,
+    config: Config,
+) -> Result<(), String> {
     let path = state(app)?.config_path()?;
+    let secret = state(app)?.remote.secret();
+    // What only the machine may write, put back from the file before anything
+    // else looks at a save from the remote — see `Config::from_remote`.
+    let config = match caller {
+        Caller::Window => config,
+        Caller::Remote => config.from_remote(&crate::config::load(&path), &secret),
+    };
     // Through the same tidying the file gets on the way in, so that what is
     // compared below is two configurations in one form rather than one of each.
     let config = config.sanitised();
@@ -288,7 +358,11 @@ async fn save_config<R: Runtime>(app: &AppHandle<R>, config: Config) -> Result<(
     //
     // After the write, not before: a view that reacted to a configuration the
     // disk then refused would be showing something nothing else agrees with.
-    crate::broadcast(app, EVENT_CONFIG, config);
+    //
+    // Split: the remote is shown the configuration without the machine's
+    // half, for `Config::for_remote`'s reasons.
+    let shown = config.for_remote(&secret);
+    crate::broadcast_split(app, EVENT_CONFIG, config, &shown);
     Ok(())
 }
 
@@ -667,7 +741,7 @@ fn remote_status<R: Runtime>(app: &AppHandle<R>) -> Result<remote::Status, Strin
 /// wrapper; there is nowhere left to add it to only one of the two views.
 #[tauri::command]
 pub async fn command<R: Runtime>(app: AppHandle<R>, request: Command) -> Result<Value, String> {
-    dispatch(&app, request).await
+    dispatch(&app, Caller::Window, request).await
 }
 
 #[cfg(test)]

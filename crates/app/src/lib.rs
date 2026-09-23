@@ -113,6 +113,24 @@ pub(crate) fn broadcast<R: Runtime, S: Serialize + Clone>(
     let _ = app.emit(event, payload);
 }
 
+/// [`broadcast`], for the few events a remote browser is shown less of.
+///
+/// The configuration and the listener's status carry things only the machine
+/// may see — the key, the webhook destinations and their headers — so the
+/// app's own windows get `local` and the hub gets `remote`. Still one call,
+/// for [`broadcast`]'s reason.
+pub(crate) fn broadcast_split<R: Runtime, L: Serialize + Clone, T: Serialize>(
+    app: &AppHandle<R>,
+    event: &str,
+    local: L,
+    remote: &T,
+) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.remote.publish(event, remote);
+    }
+    let _ = app.emit(event, local);
+}
+
 /// Sends session output to every view.
 ///
 /// The rules ride along (P19): this is the one place every view's copy of a
@@ -598,6 +616,9 @@ pub fn run() {
                 Ok(dir) => {
                     let path = dir.join(config::FILE_NAME);
                     tracing::info!(path = %path.display(), "configuration file");
+                    // Before anything is served: the listener below keys its
+                    // cookies with it.
+                    state.remote.keep_secret_in(&dir.join(remote::SECRET_FILE));
                     *state.config_path.lock().expect("fresh state") = Some(path);
                 }
                 Err(err) => {

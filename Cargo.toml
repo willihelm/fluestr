@@ -70,6 +70,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
 # deliberately — the listener never binds 0.0.0.0 — so the picker has to be
 # able to name them.
 if-addrs = "0.13"
+# The secret the remote's cookie and the redacted webhooks are keyed with.
+# Already in the tree behind half the dependencies; named here so the one
+# place that needs unpredictable bytes asks the operating system for them.
+getrandom = "0.3"
 
 # Alert terms (P17)
 # Composed and decomposed umlauts are the same word to an operator, and a term

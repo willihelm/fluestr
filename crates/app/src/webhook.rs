@@ -188,7 +188,34 @@ pub struct Request {
     pub body: String,
 }
 
+/// How the URL of a webhook shown to a remote browser begins.
+pub const REDACTED: &str = "redacted:";
+
 impl Webhook {
+    /// This webhook as a remote browser is shown it: the method, and an
+    /// opaque name in place of the destination, its headers and its body.
+    ///
+    /// The destination is written on the machine and nowhere else (P19), so
+    /// the remote has no use for it — but it does send the rule back, when it
+    /// saves or recompiles the rules, and the name is what lets the machine
+    /// put the real request back where it was. Keyed with the remote's secret
+    /// so it cannot be matched against guessed URLs, and so that a name the
+    /// remote invents matches nothing: see [`crate::config::Config::from_remote`].
+    pub fn redacted(&self, secret: &[u8; 32]) -> Webhook {
+        Webhook {
+            url: self.fingerprint(secret),
+            method: self.method,
+            headers: Vec::new(),
+            body: String::new(),
+        }
+    }
+
+    pub fn fingerprint(&self, secret: &[u8; 32]) -> String {
+        let whole = serde_json::to_vec(self).unwrap_or_default();
+        let digest = crate::remote::mac(secret, &whole);
+        format!("{REDACTED}{}", hex::encode(&digest[..16]))
+    }
+
     /// This webhook with the segment's values in it.
     ///
     /// Each of the three places is escaped for the place it is:

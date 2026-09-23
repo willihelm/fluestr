@@ -106,11 +106,19 @@ const COOKIE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
 /// Mixed into the cookie's value, so that what sits in the browser's jar is
 /// derived from the key rather than being the key.
 ///
-/// No HMAC: the message is this constant and nothing else, so there is no
-/// message for an attacker to vary, and anybody who can produce the digest
-/// already knows the key. The version in it is so that a later change to how
+/// Keyed with [`Hub::secret`], and that is what makes the rate limit on
+/// `/auth` the only way to guess. A cookie anybody could compute from a
+/// candidate key — which v1 was — can be offered straight to `/ws` as fast as
+/// the network carries it, and a cookie read off the wire gives the key up to
+/// an offline search of forty bits. The version is so that a change to how
 /// the value is formed invalidates what is stored rather than accepting it.
-const COOKIE_DOMAIN: &str = "fluestr-remote-v1:";
+const COOKIE_DOMAIN: &str = "fluestr-remote-v2:";
+
+/// The file the secret is kept in, next to the configuration.
+///
+/// Its own file rather than a field of the configuration, because the
+/// configuration is sent to every view and this must reach none of them.
+pub const SECRET_FILE: &str = "remote-secret";
 
 /// How many wrong keys one address may offer before it is made to wait.
 ///
@@ -203,6 +211,25 @@ pub struct Status {
     /// Why it is not running although it was asked to. `None` when there is
     /// nothing to say.
     pub error: Option<String>,
+}
+
+impl Status {
+    /// The status as a browser the remote serves is shown it: the address
+    /// without the key in its fragment.
+    ///
+    /// A browser that is connected was let in with the key, but one that is
+    /// being put out because the key was just replaced must not be handed the
+    /// new one on its way out — and the remote has no Settings section that
+    /// would show it anyway.
+    pub fn for_remote(&self) -> Self {
+        Self {
+            url: self
+                .url
+                .as_deref()
+                .map(|url| url.split('#').next().unwrap_or(url).to_string()),
+            ..self.clone()
+        }
+    }
 }
 
 /// One address this machine can be reached on, for the picker.
@@ -315,6 +342,12 @@ pub struct Hub {
     /// Why the last attempt to start failed, kept so the Settings page can be
     /// told about it after the fact — the save that asked is long gone.
     error: Mutex<Option<String>>,
+    /// What the cookie and the redacted webhooks are keyed with.
+    ///
+    /// Random per process until [`Hub::keep_secret_in`] swaps in the one on
+    /// disk — which is what a cookie that lasts 400 days needs: a secret that
+    /// changed at every start would be a key prompt at every start.
+    secret: Mutex<[u8; 32]>,
 }
 
 impl Default for Hub {
@@ -326,8 +359,92 @@ impl Default for Hub {
             listener: Mutex::new(None),
             gate: Gate::default(),
             error: Mutex::new(None),
+            secret: Mutex::new(fresh_secret()),
         }
     }
+}
+
+/// Thirty-two bytes from the operating system.
+///
+/// A failure here is not survivable in any honest way — a predictable secret
+/// looks exactly like a good one — so it is the one panic in this module.
+fn fresh_secret() -> [u8; 32] {
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).expect("the operating system has no random bytes to give");
+    secret
+}
+
+impl Hub {
+    pub(crate) fn secret(&self) -> [u8; 32] {
+        self.secret
+            .lock()
+            .map(|s| *s)
+            .unwrap_or_else(|p| *p.into_inner())
+    }
+
+    /// Adopts the secret kept at `path`, or keeps the fresh one there.
+    ///
+    /// Called once at setup, before anything is served. A file that cannot be
+    /// read or written leaves the per-process secret in place: the remote
+    /// still works, and the cost is a key prompt after the next restart.
+    pub fn keep_secret_in(&self, path: &std::path::Path) {
+        let stored = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| hex::decode(text.trim()).ok())
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok());
+
+        let Ok(mut secret) = self.secret.lock() else {
+            return;
+        };
+        if let Some(stored) = stored {
+            *secret = stored;
+            return;
+        }
+        if let Err(err) = write_secret(path, &secret) {
+            tracing::warn!(error = %err, "the remote's secret could not be kept");
+        }
+    }
+}
+
+/// Writes the secret readable by this user alone.
+fn write_secret(path: &std::path::Path, secret: &[u8; 32]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)?
+        .write_all(hex::encode(secret).as_bytes())
+}
+
+/// HMAC-SHA256, RFC 2104, for a 32-byte key.
+///
+/// By hand rather than as a dependency: it is two hashes and two pads, and
+/// the key here is always shorter than the block, which removes the one case
+/// that takes any care.
+pub(crate) fn mac(secret: &[u8; 32], message: &[u8]) -> [u8; 32] {
+    let mut inner_pad = [0x36u8; 64];
+    let mut outer_pad = [0x5cu8; 64];
+    for (i, byte) in secret.iter().enumerate() {
+        inner_pad[i] ^= byte;
+        outer_pad[i] ^= byte;
+    }
+    let inner = Sha256::new()
+        .chain_update(inner_pad)
+        .chain_update(message)
+        .finalize();
+    Sha256::new()
+        .chain_update(outer_pad)
+        .chain_update(inner)
+        .finalize()
+        .into()
 }
 
 impl Hub {
@@ -562,7 +679,12 @@ fn bring_up<R: Runtime>(app: &AppHandle<R>, hub: &Arc<Hub>, config: &RemoteConfi
 /// whether the listener actually came up is not something the configuration
 /// knows, and the client count moves on its own afterwards.
 pub fn announce<R: Runtime>(app: &AppHandle<R>, status: &Status) {
-    crate::broadcast(app, crate::EVENT_REMOTE_STATUS, status.clone());
+    crate::broadcast_split(
+        app,
+        crate::EVENT_REMOTE_STATUS,
+        status.clone(),
+        &status.for_remote(),
+    );
 }
 
 /// How long a listener that has been asked to stop is waited for.
@@ -620,6 +742,15 @@ fn bind<R: Runtime>(
         .trim()
         .parse()
         .map_err(|_| format!("{address} is not an address this machine can serve on"))?;
+    // The picker only ever offers one interface's address, but the file is
+    // writable by hand and the check belongs where the socket is opened: an
+    // unspecified address is every interface at once, which is the venue's
+    // guest wifi without anyone having said so.
+    if ip.is_unspecified() || ip.is_multicast() {
+        return Err(format!(
+            "{address} is not one interface — choose the address of the network to serve"
+        ));
+    }
     let addr = SocketAddr::new(ip, port);
 
     let std_listener = StdTcpListener::bind(addr).map_err(|err| match err.kind() {
@@ -646,6 +777,7 @@ fn bind<R: Runtime>(
     let server = Server {
         app: app.clone(),
         hub: Arc::clone(hub),
+        hosts: hosts_for(ip, port).into(),
         key: key.subscribe(),
         kick: kick.subscribe(),
         stop: stop.subscribe(),
@@ -670,6 +802,12 @@ fn bind<R: Runtime>(
             // part of this build" — the asset route is a catch-all.
             .route("/auth", get(lock_state).post(unlock))
             .fallback(asset)
+            // Every route, the page included: see `addressed_to_us`.
+            .layer(axum::middleware::from_fn_with_state(
+                server.clone(),
+                only_our_host,
+            ))
+            .layer(axum::middleware::map_response(hardened))
             .with_state(server);
 
         // With the peer's address, which is what the rate limit on `/auth`
@@ -719,6 +857,9 @@ fn bind<R: Runtime>(
 struct Server<R: Runtime> {
     app: AppHandle<R>,
     hub: Arc<Hub>,
+    /// Every `Host` a browser that really asked for this address sends. See
+    /// [`addressed_to_us`].
+    hosts: Arc<[String]>,
     /// The key as it stands now, already trimmed. Empty is an open listener,
     /// and every check below is written so that empty passes.
     ///
@@ -744,6 +885,7 @@ impl<R: Runtime> Clone for Server<R> {
         Self {
             app: self.app.clone(),
             hub: Arc::clone(&self.hub),
+            hosts: Arc::clone(&self.hosts),
             key: self.key.clone(),
             kick: self.kick.clone(),
             stop: self.stop.clone(),
@@ -761,8 +903,13 @@ impl<R: Runtime> Clone for Server<R> {
 /// resolver means the operator's window and the remote are two different
 /// builds of this app driving one session. That is worse than not serving at
 /// all, because it looks right: every fix lands in the window and none of them
-/// reaches the browser, and the browser is where it is being tested. A
-/// released app has no dev URL, so this costs it nothing.
+/// reaches the browser, and the browser is where it is being tested.
+///
+/// **Only in a development build.** A released app still carries `devUrl` in
+/// its embedded configuration — Tauri ignores it there but does not remove it
+/// — so asking the configuration alone would forward a shipped app's remote
+/// to `localhost:1420`, and whatever process on the machine listens there
+/// would be serving the page every remote browser runs, cookie and all.
 ///
 /// Otherwise the bundle Tauri embedded, rather than a directory next to the
 /// executable: there is one browser build, it is compiled into the app, and a
@@ -770,8 +917,10 @@ impl<R: Runtime> Clone for Server<R> {
 async fn asset<R: Runtime>(State(server): State<Server<R>>, uri: Uri) -> Response {
     let path = uri.path();
 
-    if let Some(dev) = server.app.config().build.dev_url.as_ref() {
-        return proxy(dev.as_str(), dev_target(&uri)).await;
+    if tauri::is_dev() {
+        if let Some(dev) = server.app.config().build.dev_url.as_ref() {
+            return proxy(dev.as_str(), dev_target(&uri)).await;
+        }
     }
 
     // A browser asked for `/?group=2` wants the page, and the frontend serves
@@ -837,12 +986,11 @@ async fn proxy(dev: &str, path: &str) -> Response {
 ///
 /// Not the key itself: a cookie is readable by anything that can read the
 /// browser's jar, and there is no reason for the key to be in two places when
-/// one of them only ever has to be compared.
-fn cookie_for(key: &str) -> String {
-    let mut hash = Sha256::new();
-    hash.update(COOKIE_DOMAIN.as_bytes());
-    hash.update(key.as_bytes());
-    hex::encode(hash.finalize())
+/// one of them only ever has to be compared. Keyed with the secret — see
+/// [`COOKIE_DOMAIN`] for why that matters.
+fn cookie_for(secret: &[u8; 32], key: &str) -> String {
+    let message = [COOKIE_DOMAIN.as_bytes(), key.as_bytes()].concat();
+    hex::encode(mac(secret, &message))
 }
 
 /// Whether two strings are the same, without telling the caller *where* they
@@ -872,8 +1020,9 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 /// An empty key is an open listener, which is what every installation before
 /// this one was and what a house network the operator controls may reasonably
 /// stay.
-fn unlocked(headers: &HeaderMap, key: &str) -> bool {
-    key.is_empty() || cookie(headers, COOKIE).is_some_and(|held| same(&held, &cookie_for(key)))
+fn unlocked(headers: &HeaderMap, secret: &[u8; 32], key: &str) -> bool {
+    key.is_empty()
+        || cookie(headers, COOKIE).is_some_and(|held| same(&held, &cookie_for(secret, key)))
 }
 
 /// Who has been guessing, and for how long they are made to stop.
@@ -944,7 +1093,7 @@ async fn lock_state<R: Runtime>(State(server): State<Server<R>>, headers: Header
     let key = server.key.borrow().clone();
     let body = serde_json::json!({
         "required": !key.is_empty(),
-        "unlocked": unlocked(&headers, &key),
+        "unlocked": unlocked(&headers, &server.hub.secret(), &key),
     });
     (
         [(
@@ -999,7 +1148,7 @@ async fn unlock<R: Runtime>(
             // half of keeping somebody else's page off this socket.
             format!(
                 "{COOKIE}={}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict",
-                cookie_for(&key)
+                cookie_for(&server.hub.secret(), &key)
             ),
         )],
     )
@@ -1036,7 +1185,7 @@ async fn socket<R: Runtime>(
     State(server): State<Server<R>>,
     headers: HeaderMap,
 ) -> Response {
-    if !from_this_app(&headers) {
+    if !from_this_app(&headers, &server.hosts) {
         tracing::warn!(
             origin = ?headers.get(header::ORIGIN),
             "a page from somewhere else tried to open the remote socket"
@@ -1048,7 +1197,7 @@ async fn socket<R: Runtime>(
             .into_response();
     }
     let key = server.key.borrow().clone();
-    if !unlocked(&headers, &key) {
+    if !unlocked(&headers, &server.hub.secret(), &key) {
         tracing::warn!("the remote socket was asked for without the key");
         return (
             StatusCode::UNAUTHORIZED,
@@ -1072,10 +1221,14 @@ async fn socket<R: Runtime>(
 /// this app for that to happen.
 ///
 /// The rule: a browser states the page's origin, and it has to be the address
-/// this app is being served on. No origin at all is not a browser — `curl`, a
-/// script, the tests — and that is left to the LAN-trust decision, because a
-/// caller that can forge the header can forge anything else too.
-fn from_this_app(headers: &HeaderMap) -> bool {
+/// this app is being served on — *the address it is bound to*, not whatever
+/// `Host` the request carries. Comparing the two headers with each other is
+/// what DNS rebinding walks through: a page on `evil.example` that re-resolves
+/// its own name to this machine sends `evil.example` in both. No origin at all
+/// is not a browser — `curl`, a script, the tests — and that is left to the
+/// key, because a caller that can forge the header can forge anything else
+/// too.
+fn from_this_app(headers: &HeaderMap, hosts: &[String]) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
     };
@@ -1086,14 +1239,88 @@ fn from_this_app(headers: &HeaderMap) -> bool {
     else {
         return false;
     };
-    let Some(asked) = asked.authority() else {
+    if asked.scheme_str() != Some("http") {
         return false;
-    };
+    }
+    asked
+        .authority()
+        .is_some_and(|asked| ours(asked.as_str(), hosts))
+}
 
+/// Every `Host` header a browser sends when it really asked for this
+/// listener: the address and port, the bare address on port 80, and
+/// `localhost` for a loopback listener — that is what an operator types first.
+fn hosts_for(ip: IpAddr, port: u16) -> Vec<String> {
+    let bare = match ip {
+        IpAddr::V4(ip) => ip.to_string(),
+        IpAddr::V6(ip) => format!("[{ip}]"),
+    };
+    let mut names = vec![bare];
+    if ip.is_loopback() {
+        names.push("localhost".into());
+    }
+
+    let mut hosts = Vec::new();
+    for name in names {
+        hosts.push(format!("{name}:{port}"));
+        if port == 80 {
+            hosts.push(name);
+        }
+    }
+    hosts
+}
+
+fn ours(host: &str, hosts: &[String]) -> bool {
+    hosts.iter().any(|ours| ours.eq_ignore_ascii_case(host))
+}
+
+/// Whether a request was sent to this listener by name.
+///
+/// The defence against DNS rebinding, and the reason it sits in front of every
+/// route rather than only the socket: a browser that loaded a page from a
+/// hostile name which now resolves here sends that name as `Host`, and with
+/// no key set it would otherwise be driving the session — and with one, it
+/// could still burn the rate limit of the operator's own machine at `/auth`.
+fn addressed_to_us(headers: &HeaderMap, hosts: &[String]) -> bool {
     headers
         .get(header::HOST)
         .and_then(|host| host.to_str().ok())
-        .is_some_and(|host| asked.as_str().eq_ignore_ascii_case(host))
+        .is_some_and(|host| ours(host, hosts))
+}
+
+async fn only_our_host<R: Runtime>(
+    State(server): State<Server<R>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if !addressed_to_us(request.headers(), &server.hosts) {
+        tracing::warn!(
+            host = ?request.headers().get(header::HOST),
+            "a request for another host name reached the remote"
+        );
+        return (
+            StatusCode::MISDIRECTED_REQUEST,
+            "this server answers to its own address only",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+/// The headers every answer carries: not to be framed by another page, not
+/// to be sniffed into another type, and no address in any `Referer`.
+async fn hardened(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
 }
 
 /// One connected browser, for as long as it stays connected.
@@ -1133,6 +1360,12 @@ async fn serve_client<R: Runtime>(mut socket: WebSocket, server: Server<R>) {
 
     loop {
         tokio::select! {
+            // In the order written, not at random. A replaced key sets the
+            // kick *before* the status and configuration that follow it are
+            // published, so checking the kick first is what guarantees a
+            // browser being put out is never sent one more frame first.
+            biased;
+
             // The listener was switched off. Said out loud rather than just
             // dropped, so the page shows "disconnected" instead of spending
             // its reconnect backoff working it out.
@@ -1231,22 +1464,23 @@ async fn answer<R: Runtime>(app: &AppHandle<R>, text: &str) -> Option<String> {
     };
 
     let id = call.id;
-    let answer = match crate::commands::dispatch(app, call.command).await {
-        Ok(value) => Answer {
-            kind: "result",
-            id,
-            ok: true,
-            value: Some(value),
-            error: None,
-        },
-        Err(message) => Answer {
-            kind: "result",
-            id,
-            ok: false,
-            value: None,
-            error: Some(message),
-        },
-    };
+    let answer =
+        match crate::commands::dispatch(app, crate::commands::Caller::Remote, call.command).await {
+            Ok(value) => Answer {
+                kind: "result",
+                id,
+                ok: true,
+                value: Some(value),
+                error: None,
+            },
+            Err(message) => Answer {
+                kind: "result",
+                id,
+                ok: false,
+                value: None,
+                error: Some(message),
+            },
+        };
 
     serde_json::to_string(&answer)
         .map_err(|err| tracing::error!(error = %err, "an answer could not be serialised"))
@@ -1344,30 +1578,107 @@ mod tests {
     /// before this one was, and what a file written before it says.
     #[test]
     fn no_key_lets_everyone_in() {
-        assert!(unlocked(&HeaderMap::new(), ""));
+        assert!(unlocked(&HeaderMap::new(), &[0; 32], ""));
     }
 
     /// And a key means the cookie, or nothing.
     #[test]
     fn a_key_is_the_cookie_or_nothing() {
         let key = "k7p4m2rq";
-        assert!(!unlocked(&HeaderMap::new(), key), "no cookie got in");
+        let secret = [7u8; 32];
+        assert!(
+            !unlocked(&HeaderMap::new(), &secret, key),
+            "no cookie got in"
+        );
 
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            format!("other=1; {COOKIE}={}; last=2", cookie_for(key))
+            format!("other=1; {COOKIE}={}; last=2", cookie_for(&secret, key))
                 .parse()
                 .expect("a cookie header"),
         );
-        assert!(unlocked(&headers, key), "the right cookie was refused");
+        assert!(
+            unlocked(&headers, &secret, key),
+            "the right cookie was refused"
+        );
 
         // The key itself is not the cookie: what is stored is derived from it,
         // so a jar that is read gives up the value and not the key.
-        assert_ne!(cookie_for(key), key);
+        assert_ne!(cookie_for(&secret, key), key);
 
         // And the cookie for one key does not open another.
-        assert!(!unlocked(&headers, "something else"));
+        assert!(!unlocked(&headers, &secret, "something else"));
+
+        // Nor does it open the same key on another installation: without the
+        // secret a cookie cannot be computed from a guess, which is what
+        // keeps `/ws` from being a way round the rate limit on `/auth`.
+        assert!(!unlocked(&headers, &[8u8; 32], key));
+    }
+
+    /// RFC 4231, test case 2: the one vector with a key shorter than a block,
+    /// which is every key this is given.
+    #[test]
+    fn the_mac_is_hmac_sha256() {
+        let mut secret = [0u8; 32];
+        secret[..4].copy_from_slice(b"Jefe");
+        assert_eq!(
+            hex::encode(mac(&secret, b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// DNS rebinding: a hostile name resolved to this machine sends that name
+    /// as both `Host` and `Origin`. Agreeing with each other is not enough —
+    /// they have to name the address this listener is bound to.
+    #[test]
+    fn a_rebound_name_is_not_this_listener() {
+        let hosts = hosts_for("192.168.1.20".parse().expect("an address"), 8787);
+
+        let mut rebound = HeaderMap::new();
+        rebound.insert(header::HOST, "evil.example:8787".parse().expect("a host"));
+        rebound.insert(
+            header::ORIGIN,
+            "http://evil.example:8787".parse().expect("an origin"),
+        );
+        assert!(!addressed_to_us(&rebound, &hosts));
+        assert!(!from_this_app(&rebound, &hosts));
+
+        let mut ours = HeaderMap::new();
+        ours.insert(header::HOST, "192.168.1.20:8787".parse().expect("a host"));
+        ours.insert(
+            header::ORIGIN,
+            "http://192.168.1.20:8787".parse().expect("an origin"),
+        );
+        assert!(addressed_to_us(&ours, &hosts));
+        assert!(from_this_app(&ours, &hosts));
+
+        // `localhost` is this machine only when the listener is on loopback.
+        assert!(!ours_host("localhost:8787", &hosts));
+        let loopback = hosts_for("127.0.0.1".parse().expect("an address"), 8787);
+        assert!(ours_host("localhost:8787", &loopback));
+    }
+
+    fn ours_host(host: &str, hosts: &[String]) -> bool {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().expect("a host"));
+        addressed_to_us(&headers, hosts)
+    }
+
+    /// A browser the remote serves is not handed the key, even in the status
+    /// that carries the address.
+    #[test]
+    fn the_remote_is_shown_the_address_without_the_key() {
+        let status = Status {
+            running: true,
+            url: Some(url_for("192.168.1.20", 8787, "k7p4m2rq")),
+            clients: 1,
+            error: None,
+        };
+        assert_eq!(
+            status.for_remote().url.as_deref(),
+            Some("http://192.168.1.20:8787/")
+        );
     }
 
     /// Ten wrong keys and the address waits. Without this an eight-character

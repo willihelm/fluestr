@@ -28,6 +28,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::rules;
+use crate::webhook::Webhook;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -679,6 +681,69 @@ impl Config {
         }
 
         self.version = VERSION;
+    }
+
+    /// This configuration as a browser the LAN remote serves is shown it.
+    ///
+    /// Three things are the machine's alone, and the backend — not the page —
+    /// is what keeps them there: the remote's own settings (the key above
+    /// all), the custom model's path on this disk, and every webhook's
+    /// destination, headers and body (P19), which may carry a token. A
+    /// webhook is kept as [`Webhook::redacted`], so the remote still sees
+    /// *that* a rule calls out and can switch it off.
+    pub fn for_remote(&self, secret: &[u8; 32]) -> Config {
+        let mut shown = self.clone();
+        shown.remote.key = String::new();
+        shown.model_path = None;
+        for rule in shown.profiles.iter_mut().flat_map(|p| p.rules.iter_mut()) {
+            rule.webhook = rule.webhook.as_ref().map(|hook| hook.redacted(secret));
+        }
+        shown
+    }
+
+    /// A configuration a remote browser saved, with what only the machine may
+    /// write put back from `stored`.
+    ///
+    /// Whatever the remote sent for those is ignored: its remote settings and
+    /// model path are replaced with the stored ones, and a webhook survives
+    /// only as a name [`Config::for_remote`] handed out — so a remote can keep
+    /// a request or drop it, and cannot write one. A name that matches nothing
+    /// is a remote a save behind the machine, which changed the request in the
+    /// meantime; the rule in the same place under the same name keeps its
+    /// current one rather than losing it to a stale view.
+    pub fn from_remote(mut self, stored: &Config, secret: &[u8; 32]) -> Config {
+        self.remote = stored.remote.clone();
+        self.model_path = stored.model_path.clone();
+
+        let known = stored.webhooks_by_fingerprint(secret);
+        for (p, profile) in self.profiles.iter_mut().enumerate() {
+            for (r, rule) in profile.rules.iter_mut().enumerate() {
+                let Some(sent) = rule.webhook.take() else {
+                    continue;
+                };
+                rule.webhook = known.get(&sent.url).cloned().or_else(|| {
+                    stored
+                        .profiles
+                        .get(p)?
+                        .rules
+                        .get(r)
+                        .filter(|same| same.name == rule.name)?
+                        .webhook
+                        .clone()
+                });
+            }
+        }
+        self
+    }
+
+    /// Every webhook in the file, by the name the remote knows it as.
+    pub fn webhooks_by_fingerprint(&self, secret: &[u8; 32]) -> HashMap<String, Webhook> {
+        self.profiles
+            .iter()
+            .flat_map(|p| p.rules.iter())
+            .filter_map(|rule| rule.webhook.as_ref())
+            .map(|hook| (hook.fingerprint(secret), hook.clone()))
+            .collect()
     }
 
     /// Turns a version 1 file into a version 2 one: the alert list and the two
@@ -1456,5 +1521,103 @@ mod tests {
         sent.profiles[1].groups[0].members.push(99);
 
         assert_eq!(sent.sanitised(), stored);
+    }
+
+    fn with_a_webhook() -> Config {
+        let mut config = a_config().sanitised();
+        config.model_path = Some("/Volumes/Stick/ggml-medium.bin".into());
+        config.profiles[1].rules[1]
+            .actions
+            .push(rules::Action::Webhook);
+        config.profiles[1].rules[1].webhook = Some(Webhook {
+            url: "http://companion:8000/api/location/1/0/2/press".into(),
+            method: crate::webhook::Method::Post,
+            headers: vec![crate::webhook::Header {
+                name: "Authorization".into(),
+                value: "Bearer house-token".into(),
+            }],
+            body: "{{text}}".into(),
+        });
+        config
+    }
+
+    /// The machine's half never reaches a remote browser: not the key, not a
+    /// path on this disk, not where a webhook goes or what it carries.
+    #[test]
+    fn a_remote_is_not_shown_what_only_the_machine_may_write() {
+        let secret = [3u8; 32];
+        let shown = serde_json::to_string(&with_a_webhook().for_remote(&secret)).unwrap();
+
+        for secret_part in [
+            "k7p4m2rq",
+            "ggml-medium",
+            "companion",
+            "house-token",
+            "{{text}}",
+        ] {
+            assert!(
+                !shown.contains(secret_part),
+                "{secret_part} reached the remote"
+            );
+        }
+        // But it still sees that the rule calls out, which is what lets it
+        // switch the rule off.
+        assert!(shown.contains(crate::webhook::REDACTED));
+    }
+
+    /// A remote that sends back what it was shown changes nothing — the
+    /// requests come back from their names.
+    #[test]
+    fn what_a_remote_was_shown_saves_as_what_is_stored() {
+        let secret = [3u8; 32];
+        let stored = with_a_webhook();
+        let echoed = stored.for_remote(&secret).from_remote(&stored, &secret);
+        assert_eq!(echoed.sanitised(), stored);
+    }
+
+    /// A remote cannot write a destination, change its own listener or point
+    /// the model at another file, whatever it sends.
+    #[test]
+    fn a_remote_cannot_write_what_only_the_machine_may() {
+        let secret = [3u8; 32];
+        let stored = with_a_webhook();
+
+        let mut sent = stored.for_remote(&secret);
+        sent.remote.key = String::new();
+        sent.remote.address = "0.0.0.0".into();
+        sent.model_path = Some("/etc/passwd".into());
+        // A new webhook on a rule that had none, and one pointed elsewhere.
+        sent.profiles[1].rules[0]
+            .actions
+            .push(rules::Action::Webhook);
+        sent.profiles[1].rules[0].webhook = Some(Webhook {
+            url: "https://attacker.example/collect".into(),
+            method: crate::webhook::Method::Post,
+            headers: vec![],
+            body: "{{text}}".into(),
+        });
+
+        let saved = sent.from_remote(&stored, &secret);
+        assert_eq!(saved.remote, stored.remote);
+        assert_eq!(saved.model_path, stored.model_path);
+        assert_eq!(saved.profiles[1].rules[0].webhook, None);
+        assert_eq!(
+            saved.profiles[1].rules[1].webhook,
+            stored.profiles[1].rules[1].webhook
+        );
+    }
+
+    /// Dropping a webhook is something the remote may do: it is switching a
+    /// rule's call off, not writing one.
+    #[test]
+    fn a_remote_may_drop_a_webhook() {
+        let secret = [3u8; 32];
+        let stored = with_a_webhook();
+        let mut sent = stored.for_remote(&secret);
+        sent.profiles[1].rules[1].webhook = None;
+        assert_eq!(
+            sent.from_remote(&stored, &secret).profiles[1].rules[1].webhook,
+            None
+        );
     }
 }
