@@ -421,14 +421,14 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
 
 <style>
   .hint {
-    margin: 0 0 0.6rem;
+    margin: 0 0 1rem;
     font-size: 0.8rem;
     color: var(--text-dim);
     max-width: 44rem;
   }
 
   .foot {
-    margin: 0.6rem 0 0;
+    margin: 1rem 0 0;
   }
 
   .empty {
@@ -441,17 +441,17 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 1rem;
     max-width: 44rem;
   }
 
   .rule {
     border: 1px solid var(--border);
     border-radius: 0.4rem;
-    padding: 0.55rem;
+    padding: 0.85rem 0.9rem;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.75rem;
   }
 
   /* A rule that is off is still readable — it is kept in order to be read and
@@ -475,7 +475,7 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
   }
 
   .reads {
-    margin: 0;
+    margin: -0.35rem 0 0;
     font-size: 0.8rem;
     color: var(--text-dim);
   }
@@ -483,12 +483,12 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
   .field {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
+    gap: 0.75rem;
   }
 
   .legend {
     flex: none;
-    width: 3rem;
+    width: 4.5rem;
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -504,7 +504,7 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
   .actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.3rem;
+    gap: 0.4rem;
   }
 
   .chip,
@@ -556,8 +556,8 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
   .request {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.45rem 0.5rem;
+    gap: 0.75rem;
+    padding: 0.75rem 0.8rem;
     border: 1px dashed var(--border);
     border-radius: 0.3rem;
   }
@@ -566,7 +566,7 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
     flex: 1;
   }
 
-  .request .hint {
+  .rule .hint {
     margin: 0;
   }
 
@@ -590,7 +590,7 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
   .rows {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.4rem;
     flex: 1;
     min-width: 0;
   }
