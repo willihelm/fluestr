@@ -113,7 +113,10 @@ hound = "3.5"
 # tracing_backend: routes whisper.cpp/ggml logs into `tracing`. Without it the
 # C++ side writes on its own — and anything that accidentally lands on stdout
 # corrupts the sidecar's frame protocol.
-whisper-rs = { version = "0.16", features = ["metal", "tracing_backend"] }
+#
+# No GPU backend here: `metal` does not build off macOS, so each crate that
+# links whisper.cpp adds the one its target has (P18).
+whisper-rs = { version = "0.16", features = ["tracing_backend"] }
 
 [profile.release]
 opt-level = 3

@@ -1518,6 +1518,8 @@ what closed the package.
 
 ### P18 — Windows port (WASAPI shared, ASIO opt-in) — **Open**
 
+The order of work and its progress are tracked in [windows-port.md](windows-port.md).
+
 The seam for this was built in P1 and has held: everything above
 `AudioBackend` — ring buffer, resampler, segmenter, protocol, worker pool,
 model manager, remote, frontend — is free of the platform. The port is four
