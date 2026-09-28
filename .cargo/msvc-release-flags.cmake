@@ -1,4 +1,5 @@
-# Put the optimisation back into MSVC Release builds of whisper.cpp (P18).
+# Put the optimisation back into MSVC Release builds of whisper.cpp (P18), and
+# keep ggml-vulkan's nested build under MAX_PATH (below).
 #
 # whisper-rs-sys builds whisper.cpp through the `cmake` crate, which with the
 # Visual Studio generator overwrites CMAKE_<LANG>_FLAGS_<BUILD_TYPE> with cc's

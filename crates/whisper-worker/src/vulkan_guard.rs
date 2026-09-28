@@ -86,7 +86,10 @@ unsafe extern "system" fn on_failure(notify: u32, info: *const DelayLoadInfo) ->
 }
 
 unsafe fn is_vulkan(dll: *const c_char) -> bool {
-    !dll.is_null() && CStr::from_ptr(dll).to_bytes().eq_ignore_ascii_case(b"vulkan-1.dll")
+    !dll.is_null()
+        && CStr::from_ptr(dll)
+            .to_bytes()
+            .eq_ignore_ascii_case(b"vulkan-1.dll")
 }
 
 unsafe extern "system" fn stub_get_instance_proc_addr(
@@ -107,6 +110,8 @@ unsafe extern "system" fn stub_enumerate_instance_version(_version: *mut u32) ->
 /// Log the fallback once the model is loaded, i.e. after ggml went looking.
 pub fn report() {
     if MISSING.load(Ordering::Relaxed) {
-        tracing::warn!("vulkan-1.dll not found: no Vulkan driver installed, transcribing on the CPU");
+        tracing::warn!(
+            "vulkan-1.dll not found: no Vulkan driver installed, transcribing on the CPU"
+        );
     }
 }

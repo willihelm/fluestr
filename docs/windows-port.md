@@ -30,7 +30,8 @@ On the Windows PC, in order:
    Node 22, pnpm. Then `git checkout windows-port`. All of it by winget:
    `Rustlang.Rustup`, `Microsoft.VisualStudio.2022.BuildTools` (with
    `--override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`),
-   `Kitware.CMake`, `LLVM.LLVM`, `OpenJS.NodeJS.22`; then `npm install -g pnpm`.
+   `Kitware.CMake`, `LLVM.LLVM`, `OpenJS.NodeJS.22`, `KhronosGroup.VulkanSDK`
+   (Stage 3; its installer needs an elevated prompt); then `npm install -g pnpm`.
 2. `cargo build --workspace --release` — Stage 1. Expect whisper.cpp's cmake
    build to be the likely first failure; fix it here.
 3. `cargo clippy --workspace --all-targets -- -D warnings` and
@@ -178,8 +179,7 @@ Goal: whisper on the GPU on Windows, with its own measured defaults.
       `winget install KhronosGroup.VulkanSDK` (needs admin), and
       `build-windows.ps1` finds it under `C:\VulkanSDK` if `VULKAN_SDK` is not
       set yet (listed with the other prerequisites in its header — the README
-      has no Windows section). *Not yet built: the SDK install is pending on
-      the PC.*
+      has no Windows section). Built and run on 2026-09-24, see *Findings*.
 - [x] Confirm the fallback. Loader present, no usable driver: ggml's
       `ggml_backend_vk_reg` catches the failed `vkCreateInstance` and registers
       no device → CPU. **No loader at all** was the real problem:
@@ -191,7 +191,10 @@ Goal: whisper on the GPU on Windows, with its own measured defaults.
       Verified on 2026-09-24 in a stand-alone harness (loader hidden via
       `SetDefaultDllDirectories`): starts, returns `VK_ERROR_INITIALIZATION_FAILED`,
       logs the CPU warning; with the loader visible, binds the real one (1.3).
-      Still to check in the real sidecar once it builds.
+      In the real sidecar, the no-driver case (`VK_DRIVER_FILES` pointed at
+      nothing): one device (CPU), "no GPU found", transcript unchanged at CPU
+      speed. The missing-loader case has only the harness behind it — this
+      PC always has `vulkan-1.dll` in System32.
 - [ ] **Measure on the target hardware** and write the numbers into
       measurements.md next to the Metal ones: per-segment latency, first-start
       time, how many workers before latency climbs. Set the Windows pool size
@@ -359,3 +362,38 @@ Radeon iGPU), Rust 1.98.1, VS 2022 Build Tools 17.14, CMake 4.4.3, LLVM 23.
   for the cdylib, which rustc's `linker_messages` lint reports as a warning
   (it only recognises the English text). Harmless; `-D warnings` in clippy
   does not link, so it does not fail the build.
+
+### 2026-09-24 — Vulkan (Stage 3)
+
+Same machine; Vulkan SDK 1.4.357.0, AMD Radeon iGPU driver (Vulkan 1.3).
+
+- **Per-segment latency, `small-q5_1`, one worker, slice test** (14.5 s
+  German fixture, five segments, same release sidecar both times):
+
+  | Backend | First segment | Following segments | Total |
+  |---|---|---|---|
+  | Vulkan (Radeon iGPU) | 3.6 s | 1.4–1.7 s | 9.8 s |
+  | CPU fallback (4 threads) | 6.2 s | 6.4–6.7 s | 32.5 s |
+
+  The first Vulkan segment carries the pipeline compilation. Model load
+  0.7 s (189 MB into `Vulkan0`). Not yet measured: several workers on the one
+  iGPU, and first start after a driver update (shader cache cold).
+- **MAX_PATH in the ggml-vulkan build.** The shader generator is an
+  ExternalProject under `…\ggml-vulkan\vulkan-shaders-gen-prefix\src\vulkan-shaders-gen-build\`,
+  and MSBuild's `VCTargetsPath` probe below it reached 262 characters from
+  `C:\Users\ICF Licht\Documents\git\fluestr` (MSB3491). Fixed in
+  `.cargo/msvc-release-flags.cmake` with `EP_BASE`, which moves it to
+  `…\build\ep\Build\vulkan-shaders-gen`. CI's `D:\a\fluestr\fluestr` is short
+  enough either way.
+- **A failed CMake run poisons the next build.** whisper-rs-sys passes *every*
+  directory under its CMake build tree to rustc as `-L`, including the
+  over-long leftovers of the failed configure; with those, rustc reported
+  `can't find crate for tracing` while compiling whisper-rs.
+  `cargo clean --release -p whisper-rs-sys` clears it.
+- **Fallback, verified:** no usable driver → one device (CPU), "no GPU found",
+  same transcript at CPU speed. `vulkan-1.dll` is a delay-load dependency of
+  `whisper-worker.exe` (`dumpbin /dependents`).
+- The slice test's "loaded in … (GPU)" reflects the requested `use_gpu`, not
+  the backend whisper ended up on; the sidecar log line
+  `whisper_backend_init_gpu: using Vulkan0 backend` / `no GPU found` is the
+  authority.
