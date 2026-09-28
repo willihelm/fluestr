@@ -7,6 +7,38 @@ each piece currently stands, so the port can be picked up at any step without
 re-surveying the tree. When a step is done, tick it here and keep P18's status
 line in plan.md in sync.
 
+## Start here (handoff, 2026-09-23)
+
+Work continues on the `windows-port` branch, on a Windows PC. Nothing on this
+branch has been compiled on Windows yet. Stages 1, 2 and 4 are written and
+pass on macOS (clippy, tests, and `audio-core` clippy for the Windows target).
+
+GitHub Actions is **not available** right now: jobs are refused with "recent
+account payments have failed or your spending limit needs to be increased".
+The workflow also only triggers on pushes to `main` and on pull requests, so
+the branch pushes never ran it. Until billing is fixed, the Windows PC is the
+build loop.
+
+On the Windows PC, in order:
+
+1. Install: Rust via rustup (MSVC toolchain), Visual Studio Build Tools with
+   "Desktop development with C++", CMake, Node 22, pnpm. Then
+   `git checkout windows-port`.
+2. `cargo build --workspace --release` — Stage 1. Expect whisper.cpp's cmake
+   build to be the likely first failure; fix it here.
+3. `cargo clippy --workspace --all-targets -- -D warnings` and
+   `cargo test --workspace` — the `cfg(windows)` paths (`worker::hide_console`,
+   the `ping` child in `resources.rs`, `stable_id::wasapi`) have only been
+   type-checked, never run.
+4. `cargo test -p audio-core catalogue_on_this_machine -- --ignored --nocapture`
+   — lists each capture endpoint with its id. Paste the output into
+   *Findings*: it is the hardware check Stage 5 depends on (how many endpoints
+   the interface shows, and with how many channels each).
+5. `scripts\build-windows.ps1` — the installer — then the Stage 2 smoke test
+   below. `scripts\build-windows.ps1 -Dev` for hot reload.
+6. Record everything surprising in *Findings*, tick the plan, then Stage 3
+   (Vulkan) and Stage 5.
+
 ## Where we build
 
 Development happens on a Mac, and whisper.cpp (cmake + MSVC) does not
