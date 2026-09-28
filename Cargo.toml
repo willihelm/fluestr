@@ -105,6 +105,17 @@ cpal = "0.16"
 # device UID (P12), which cpal keeps to itself.
 objc2-core-audio = "0.3"
 objc2-core-foundation = "0.3"
+# The WASAPI endpoint id behind `DeviceId` on Windows (P18), which cpal keeps
+# to itself just as it does the CoreAudio UID. Pinned to the version cpal
+# binds WASAPI with, so this adds features to a crate already in the tree
+# rather than a second copy of it.
+windows = { version = "0.54", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Devices_FunctionDiscovery",
+] }
 ringbuf = "0.4"
 rubato = "0.16"
 hound = "3.5"

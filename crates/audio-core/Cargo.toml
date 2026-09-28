@@ -31,6 +31,10 @@ objc2-core-foundation = { workspace = true }
 # into one dependency with the features of both.
 whisper-rs = { workspace = true, optional = true, features = ["metal"] }
 
+# The WASAPI endpoint id behind `DeviceId` on Windows (P18).
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
 [dev-dependencies]
 hound = { workspace = true }
 serde_json = { workspace = true }
