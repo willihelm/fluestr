@@ -51,6 +51,7 @@
 
   import { onMount, untrack } from "svelte";
   import StreamSetup from "./StreamSetup.svelte";
+  import { isMac, shortcut } from "./shortcut";
   import GroupMembership from "./GroupMembership.svelte";
   import {
     cancelDownload,
@@ -446,8 +447,13 @@
 
         {#if devices.length === 0}
           <p class="warn">
-            No input device found. Plug the interface in and allow microphone access when
-            macOS asks.
+            {#if isMac()}
+              No input device found. Plug the interface in and allow microphone access
+              when macOS asks.
+            {:else}
+              No input device found. Plug the interface in, and check that Settings ›
+              Privacy &amp; security › Microphone lets desktop apps use it.
+            {/if}
           </p>
         {:else}
           <label class="field">
@@ -533,9 +539,9 @@
       </div>
 
       <ul class="plain">
-        <li><strong>Start</strong> — in the header, or ⌘T.</li>
+        <li><strong>Start</strong> — in the header, or {shortcut("T")}.</li>
         <li><strong>Meters</strong> — above the chat, live before you start.</li>
-        <li><strong>Settings</strong> — ⌘, for vocabulary, thresholds and rules.</li>
+        <li><strong>Settings</strong> — {shortcut(",")} for vocabulary, thresholds and rules.</li>
       </ul>
     {/if}
   </div>

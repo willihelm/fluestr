@@ -32,6 +32,7 @@
   import { ALL_CHANNELS_VIEW, type GroupView } from "./lib/windows";
   import { beforeLeaving, whenEditingEnds } from "./lib/editing";
   import { watchNarrow } from "./lib/layout";
+  import { shortcut as keyLabel } from "./lib/shortcut";
   import {
     clearCommunication as clearOnBackend,
     closeGroupWindows,
@@ -1136,13 +1137,13 @@
         <!-- Red, unlike Start: it is the one button in the header that
              ends what is running, and during a show it is pressed by
              somebody looking for it rather than reading it. -->
-        <button class="primary danger" onclick={stop} title="Stop (⌘T)">Stop</button>
+        <button class="primary danger" onclick={stop} title="Stop ({keyLabel('T')})">Stop</button>
       {:else}
         <button
           class="primary"
           onclick={start}
           disabled={busy || device === "" || problem !== null}
-          title="Start (⌘T)"
+          title="Start ({keyLabel('T')})"
         >
           {busy ? "Starting …" : "Start"}
         </button>
@@ -1288,7 +1289,7 @@
           {running}
           startHint={isRemote
             ? "Press Start above to begin transcribing."
-            : "Press ⌘T, or Start above, to begin transcribing."}
+            : `Press ${keyLabel("T")}, or Start above, to begin transcribing.`}
         />
       {/if}
     </div>

@@ -147,15 +147,16 @@ Goal: whisper on the GPU on Windows, with its own measured defaults.
 - [ ] CUDA: only if Vulkan proves too slow on NVIDIA hardware that the users
       actually have. Not planned.
 
-### Stage 4 — Device identity (WASAPI endpoint id)
+### Stage 4 — Device identity (WASAPI endpoint id) (code done, awaiting a Windows run)
 
-- [ ] Fill the non-macOS `catalogue()` in `stable_id.rs` with
+- [x] Fill the non-macOS `catalogue()` in `stable_id.rs` with
       `IMMDeviceEnumerator::EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)` →
       `(PKEY_Device_FriendlyName, IMMDevice::GetId)`, via the `windows` crate
-      (already in the tree behind cpal/Tauri — pin the same version).
+      (0.54, the version cpal binds WASAPI with — no second copy in the tree).
       cpal's WASAPI device name is the friendly name, so the existing
       name-plus-position matching in `by_name` applies unchanged.
-- [ ] Unit test stays on `by_name`; add a live test gated like `capture_live.rs`.
+- [x] Unit test stays on `by_name`; add a live test gated like `capture_live.rs`.
+      On the Windows PC: `cargo test -p audio-core catalogue_on_this_machine -- --ignored --nocapture`.
 
 Done when: renaming an endpoint in Sound settings keeps the stored profile
 working, and two identical interfaces are told apart.
@@ -208,8 +209,11 @@ single-client one, fails naming the interface as busy.
 
 ### Polish (any time after Stage 2)
 
-- [ ] Shortcut hints: "Ctrl+T" instead of "⌘T" when not on macOS (the handler
-      already accepts both).
+- [x] Shortcut hints: "Ctrl+T" instead of "⌘T" when not on macOS (the handler
+      already accepts both) — `ui/src/lib/shortcut.ts`, decided by the reader's
+      browser so the LAN remote gets its own keyboard's label.
+- [x] Setup guide: the no-device message names the Windows microphone privacy
+      setting instead of "when macOS asks".
 - [ ] Test fixtures: `just fixture` uses `say`; on Windows either reuse the
       committed/Mac-generated WAVs or document `System.Speech`. Low priority.
 
@@ -221,6 +225,13 @@ single-client one, fails naming the interface as busy.
 - **Minimum Windows version** — assumed Windows 10 22H2+.
 - **Test hardware** — which Windows machine and which interface Stage 3+ is
   measured on.
+
+## Cross-checking from the Mac
+
+`cargo clippy -p audio-core --all-targets --target x86_64-pc-windows-msvc -- -D warnings`
+works on the Mac (audio-core without `silero` links no C++), so the capture
+and device-identity code for Windows can be checked without CI. Everything
+that pulls in whisper.cpp — `app`, `whisper-worker` — needs the Windows job.
 
 ## Findings
 
