@@ -47,6 +47,17 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
 
+      # tauri-build refuses to build `app` without its `externalBin` staged,
+      # and copies it into target/debug — where the pool tests look for the
+      # sidecar. It has to be the real one: a placeholder would be copied over
+      # the worker cargo just built. Only ever passed locally because the
+      # staged file from `just dev` sits in the ignored binaries/ folder.
+      - name: Stage the sidecar
+        run: |
+          cargo build -p whisper-worker
+          mkdir -p crates/app/binaries
+          cp target/debug/whisper-worker crates/app/binaries/whisper-worker-aarch64-apple-darwin
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -108,6 +119,15 @@ jobs:
       - name: Frontend dependencies
         run: pnpm install --frozen-lockfile
         working-directory: ui
+
+      # As in the macOS job. `build-windows.ps1` restages the release build
+      # for the installer below.
+      - name: Stage the sidecar
+        shell: bash
+        run: |
+          cargo build -p whisper-worker
+          mkdir -p crates/app/binaries
+          cp target/debug/whisper-worker.exe crates/app/binaries/whisper-worker-x86_64-pc-windows-msvc.exe
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

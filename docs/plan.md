@@ -131,7 +131,7 @@ for now, with the reason recorded in the package.
 | P15 | Vocabulary & prompt management | **Done** | Named lists dropped: one list is what a house has, and it is tuned by ear |
 | P16 | LAN remote client | **Done** | Verified from a second machine on a house network. The key is a lock, not encryption — the transport is plain http |
 | P17 | Alert terms & visual attention | **Done** | Subsumed by P19: the terms and the flash flags are rules now, and an existing file is migrated into them |
-| P18 | Windows port | **Open** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
+| P18 | Windows port | **In progress** | Everything — capture on WASAPI/ASIO, the GPU backend, packaging |
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
 | P20 | Streaming recognition as a second engine | **Open** | Everything — it is a measurement before it is a feature |
 | P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that waits on a Developer ID, see P13 |
@@ -1516,7 +1516,7 @@ stream and the drop on disable against a mock app first, then the whole
 arrangement from a second machine on a house network on 2026-09-22, which is
 what closed the package.
 
-### P18 — Windows port (WASAPI shared, ASIO opt-in) — **Open**
+### P18 — Windows port (WASAPI shared, ASIO opt-in) — **In progress**
 
 The order of work and its progress are tracked in [windows-port.md](windows-port.md).
 

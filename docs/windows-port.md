@@ -1,6 +1,6 @@
 # Windows port — working plan
 
-The execution checklist for **P18** in [plan.md](plan.md#p18--windows-port-wasapi-shared-asio-opt-in--open).
+The execution checklist for **P18** in [plan.md](plan.md#p18--windows-port-wasapi-shared-asio-opt-in--in-progress).
 P18 holds the *design* and its reasons (shared-mode WASAPI, ASIO opt-in, the
 never-touch-the-DAW constraint); this file holds the *order of work* and where
 each piece currently stands, so the port can be picked up at any step without
@@ -9,9 +9,13 @@ line in plan.md in sync.
 
 ## Start here (handoff, 2026-09-23)
 
-Work continues on the `windows-port` branch, on a Windows PC. Nothing on this
-branch has been compiled on Windows yet. Stages 1, 2 and 4 are written and
-pass on macOS (clippy, tests, and `audio-core` clippy for the Windows target).
+**Picked up on the Windows PC the same day:** steps 1–4 below are done, and
+the app runs and transcribes in development mode. What that turned up is in
+*Findings*; what is left of the list is step 5 (the installer and its smoke
+test), then Stage 3.
+
+Work continues on the `windows-port` branch, on a Windows PC. Stages 1, 2 and
+4 were written on macOS and have now been built and tested on Windows.
 
 GitHub Actions is **not available** right now: jobs are refused with "recent
 account payments have failed or your spending limit needs to be increased".
@@ -22,8 +26,11 @@ build loop.
 On the Windows PC, in order:
 
 1. Install: Rust via rustup (MSVC toolchain), Visual Studio Build Tools with
-   "Desktop development with C++", CMake, Node 22, pnpm. Then
-   `git checkout windows-port`.
+   "Desktop development with C++", CMake, **LLVM** (libclang for bindgen),
+   Node 22, pnpm. Then `git checkout windows-port`. All of it by winget:
+   `Rustlang.Rustup`, `Microsoft.VisualStudio.2022.BuildTools` (with
+   `--override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`),
+   `Kitware.CMake`, `LLVM.LLVM`, `OpenJS.NodeJS.22`; then `npm install -g pnpm`.
 2. `cargo build --workspace --release` — Stage 1. Expect whisper.cpp's cmake
    build to be the likely first failure; fix it here.
 3. `cargo clippy --workspace --all-targets -- -D warnings` and
@@ -88,7 +95,7 @@ Already fine on Windows: config/data dirs (Tauri path API), window
 attention and always-on-top (Tauri), TLS (rustls), the LAN remote and
 webhooks, stdout framing (Rust does no CRLF translation on pipes).
 
-### Stage 1 — It compiles on Windows (code done, awaiting first CI run)
+### Stage 1 — It compiles on Windows (done, 2026-09-23 on the PC; CI still pending billing)
 
 Goal: `cargo build --workspace --release` succeeds on the CI Windows runner,
 CPU-only whisper.
@@ -112,7 +119,7 @@ CPU-only whisper.
 
 Done when: the Windows job is green and the macOS job is unchanged.
 
-### Stage 2 — It runs and packages (code done, awaiting CI + smoke test)
+### Stage 2 — It runs and packages (runs in dev mode; installer and its smoke test next)
 
 Implemented as: `gpu_none.rs` swapped in by `#[path]` off macOS;
 `worker::hide_console`; `tauri.windows.conf.json` (merged over the main config
@@ -155,7 +162,8 @@ lists devices and transcribes one stereo input on CPU.
       covering them is enough.
 - [ ] **Smoke test on a Windows machine:** install, first-run guide, model
       download, pick the default input, start, see a transcript. Note what
-      broke in *Findings* below.
+      broke in *Findings* below. *In dev mode all of it but "install" passed
+      on 2026-09-23; the installer itself has not been built yet.*
 
 Done when: the smoke test passes from the CI-built installer.
 
@@ -173,13 +181,16 @@ Goal: whisper on the GPU on Windows, with its own measured defaults.
       measurements.md next to the Metal ones: per-segment latency, first-start
       time, how many workers before latency climbs. Set the Windows pool size
       and the first-start message from that, not from the Metal numbers.
+      Without a GPU the pool default (2 workers × 4 threads, sized for Metal)
+      oversubscribes a 4-core CPU; the CPU fallback should size workers ×
+      threads from `available_parallelism`, not from the GPU default.
 - [ ] GPU utilisation for the resource meter: PDH counter
       `\GPU Engine(*engtype_3D)\Utilization Percentage` summed — optional; the
       meter already works without it.
 - [ ] CUDA: only if Vulkan proves too slow on NVIDIA hardware that the users
       actually have. Not planned.
 
-### Stage 4 — Device identity (WASAPI endpoint id) (code done, awaiting a Windows run)
+### Stage 4 — Device identity (WASAPI endpoint id) (runs on Windows; rename check pending)
 
 - [x] Fill the non-macOS `catalogue()` in `stable_id.rs` with
       `IMMDeviceEnumerator::EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)` →
@@ -270,4 +281,66 @@ that pulls in whisper.cpp — `app`, `whisper-worker` — needs the Windows job.
 Record here what only a real run could tell (driver behaviour, surprises in CI,
 numbers), with the date.
 
-- _none yet_
+### 2026-09-23 — first run on Windows
+
+Machine: Windows 11 Pro 26100, AMD Ryzen 3 4300U (4 cores / 4 threads, AVX2,
+Radeon iGPU), Rust 1.98.1, VS 2022 Build Tools 17.14, CMake 4.4.3, LLVM 23.
+
+- **bindgen needs libclang.** whisper-rs-sys generates its bindings at build
+  time and fails without LLVM. Its bundled fallback (`WHISPER_DONT_GENERATE_BINDINGS`)
+  is *not* an option: it comes from Linux glibc headers, where `int64_t` is
+  `long`, which is 32-bit on Windows. `build-windows.ps1` finds the LLVM
+  default install by itself; plain `cargo` needs
+  `LIBCLANG_PATH=C:\Program Files\LLVM\bin` (the installer does not touch PATH).
+- **The release build of whisper.cpp was unoptimised.** With the Visual
+  Studio generator the `cmake` crate overwrites `CMAKE_<LANG>_FLAGS_RELEASE`
+  with cc's flags and strips every `/O…` from them, so `ggml-cpu` was built
+  with `<Optimization></Optimization>`. The dev tree escaped by accident (it
+  defines `RelWithDebInfo`, so the crate overwrote that variable instead, while
+  the VS build still used `Release`). Fixed by
+  `.cargo/msvc-release-flags.cmake`, injected via `CMAKE_PROJECT_INCLUDE`,
+  which appends `/O2 /Ob2 /DNDEBUG` under `if(MSVC)` only. Slice test, one
+  worker × 4 threads, `small-q5_1`, 14.5 s German fixture:
+  **77 s → 6.3 s per segment** (decode time is flat in segment length — it is
+  the 30 s encoder window).
+- **CPU-only is far from real time on this machine** even optimised: ~6 s per
+  segment with one worker. In the app (2 workers × 4 threads on 4 cores) the
+  first decodes ran past the 30 s watchdog and workers were replaced. Stage 3
+  (Vulkan; the Radeon iGPU is a candidate) and a CPU-sized pool are what make
+  it usable. whisper.cpp with `use_gpu = true` and no GPU backend falls back to
+  CPU on its own ("no GPU found"), which answers half of Stage 3's fallback
+  question.
+- **Integration tests that link the Tauri runtime** died with
+  `STATUS_ENTRYPOINT_NOT_FOUND`: `TaskDialogIndirect` needs Common Controls v6,
+  which only a manifest brings in, and tauri-build manifests the app, not the
+  tests. `crates/app/build.rs` now embeds that dependency into test targets
+  on MSVC. After it: fmt, clippy `-D warnings`, `cargo test --workspace` all
+  green (195 app, 8 remote, 89 audio-core, 8 protocol, 2 worker).
+- **CI never staged the sidecar.** `tauri-build` refuses to build `app` without
+  `crates/app/binaries/whisper-worker-<triple>`; it only ever worked on the Mac
+  because `just dev` had left one in the ignored folder. Both CI jobs now
+  build and stage it first.
+- **`build-windows.ps1` under Windows PowerShell 5.1:** it did not parse (em
+  dashes in a BOM-less file are read as Windows-1252, where their last byte is
+  a closing quote), and with output redirected, cargo's first stderr line was
+  fatal under `$ErrorActionPreference = "Stop"`. Both fixed; the file is
+  ASCII now.
+- **Capture:** WASAPI shared mode works; the default input was metered and
+  transcribed. The first-run guide, model download (managed, into
+  `%APPDATA%\io.github.willihelm.fluestr\models`) and config all work
+  unchanged. No GPU utilisation, as expected: the meter shows memory only.
+- **Endpoints on this PC** (`catalogue_on_this_machine`, `list_devices`) —
+  two, each with a distinct id, each stereo, each offering exactly one
+  shared-mode rate:
+
+  ```
+  Line In /Microphone (Waves SoundGrid)    {0.0.1.00000000}.{25ec8b49-a294-44b6-996f-ab4bb8a36288}  2 ch, 44100 Hz
+  Mikrofon (Realtek High Definition Audio) {0.0.1.00000000}.{84bc2c30-aa53-4a8a-b65f-bff9607f2810}  2 ch, 48000 Hz
+  ```
+
+  SoundGrid appears as one stereo endpoint here — how a real SoundGrid rig
+  with more I/O shows up is Stage 5's hardware check.
+- Cosmetic: MSVC's German `link.exe` prints "Bibliothek … werden erstellt"
+  for the cdylib, which rustc's `linker_messages` lint reports as a warning
+  (it only recognises the English text). Harmless; `-D warnings` in clippy
+  does not link, so it does not fail the build.

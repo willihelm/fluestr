@@ -1,4 +1,4 @@
-# Build Fluestr on Windows (P18) — the counterpart of `just build` / `scripts/run.sh`.
+# Build Fluestr on Windows (P18) - the counterpart of `just build` / `scripts/run.sh`.
 #
 # The justfile stays the macOS entry point: it is bash, signs with codesign and
 # makes fixtures with `say`. This does the same steps a Windows machine needs,
@@ -9,7 +9,11 @@
 #   scripts\build-windows.ps1 -Dev      development mode, hot reload
 #
 # Needs: Rust (rustup, MSVC toolchain), Visual Studio Build Tools with the
-# "Desktop development with C++" workload, CMake, Node 22 and pnpm.
+# "Desktop development with C++" workload, CMake, LLVM (libclang, for the
+# whisper.cpp bindings), Node 22 and pnpm.
+#
+# Keep this file ASCII: Windows PowerShell 5.1 reads a BOM-less script as
+# Windows-1252, and the last byte of an em dash is a closing quote there.
 
 param([switch]$Dev)
 
@@ -19,8 +23,12 @@ Set-Location $root
 
 function Step($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
 
-# Native commands do not throw on a non-zero exit in Windows PowerShell 5.
+# Native commands do not throw on a non-zero exit in Windows PowerShell 5, and
+# when the output is redirected (`> build.log`) it turns every stderr line into
+# an error record - which "Stop" makes fatal at cargo's first "Compiling". So
+# the exit code alone decides.
 function Run {
+    $ErrorActionPreference = "Continue"
     & $args[0] @($args | Select-Object -Skip 1)
     if ($LASTEXITCODE -ne 0) { throw "$($args -join ' ') failed with exit code $LASTEXITCODE" }
 }
@@ -30,7 +38,21 @@ foreach ($tool in "cargo", "pnpm", "cmake") {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { $missing += $tool }
 }
 if ($missing) {
-    throw "missing: $($missing -join ', ') — install Rust from https://rustup.rs, then: winget install Kitware.CMake; npm install -g pnpm"
+    throw "missing: $($missing -join ', ') - install Rust from https://rustup.rs, then: winget install Kitware.CMake; npm install -g pnpm"
+}
+
+# whisper-rs-sys generates its bindings with bindgen, which loads libclang at
+# build time. The LLVM installer does not put itself on PATH, so point at its
+# default location rather than make everyone edit their environment. The
+# crate's bundled fallback bindings are not an option: they come from Linux
+# glibc headers, where `int64_t` is `long` - which on Windows is 32-bit.
+if (-not $env:LIBCLANG_PATH) {
+    $llvm = "C:\Program Files\LLVM\bin"
+    if (Test-Path "$llvm\libclang.dll") {
+        $env:LIBCLANG_PATH = $llvm
+    } elseif (-not (Get-Command clang -ErrorAction SilentlyContinue)) {
+        throw "missing: libclang - winget install LLVM.LLVM, or set LIBCLANG_PATH to the folder holding libclang.dll"
+    }
 }
 
 $tauri = Join-Path $root "ui\node_modules\.bin\tauri.cmd"
@@ -41,7 +63,7 @@ if (-not (Test-Path $tauri)) {
 }
 
 # Tauri bundles the sidecar as an `externalBin` and wants the target triple in
-# its file name, which it strips again on the way into the install directory —
+# its file name, which it strips again on the way into the install directory -
 # where `worker::find_binary` looks for `whisper-worker.exe`.
 $triple = "x86_64-pc-windows-msvc"
 $profileDir = if ($Dev) { "debug" } else { "release" }
@@ -59,10 +81,10 @@ if ($Dev) {
     exit 0
 }
 
-Step "Building the installer — this takes a few minutes"
+Step "Building the installer - this takes a few minutes"
 Run $tauri build
 
 $installer = Get-ChildItem "target\release\bundle\nsis\*.exe" | Select-Object -First 1
 if (-not $installer) { throw "the build finished but no installer is in target\release\bundle\nsis" }
 Step "Installer: $($installer.FullName)"
-Write-Host "Unsigned: SmartScreen will warn on first start — More info, then Run anyway."
+Write-Host "Unsigned: SmartScreen will warn on first start - More info, then Run anyway."

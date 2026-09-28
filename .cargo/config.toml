@@ -21,3 +21,7 @@ TS_RS_EXPORT_DIR = { value = "ui/src/lib/generated", relative = true }
 # Safe for everything here: the 64-bit fields are epoch milliseconds, session
 # clocks, sequence numbers and byte counters, all far inside 2^53.
 TS_RS_LARGE_INT = "number"
+# Without it, a Windows release build of whisper.cpp is unoptimised — see the
+# file itself. whisper-rs-sys hands every `CMAKE_*` variable to CMake, and the
+# file is a no-op outside MSVC, so it is safe to set for every platform.
+CMAKE_PROJECT_INCLUDE = { value = ".cargo/msvc-release-flags.cmake", relative = true }
