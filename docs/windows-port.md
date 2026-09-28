@@ -171,12 +171,27 @@ Done when: the smoke test passes from the CI-built installer.
 
 Goal: whisper on the GPU on Windows, with its own measured defaults.
 
-- [ ] Enable `whisper-rs` feature `vulkan` for `cfg(windows)`. CI needs the
-      Vulkan SDK (a setup action, pinned version); document the local
-      equivalent in the README.
-- [ ] Confirm the fallback: a machine without a Vulkan driver must fall back to
-      CPU, not fail to start the sidecar. If whisper.cpp does not do that on its
-      own, the sidecar has to detect and retry with `use_gpu = false`.
+- [x] Enable `whisper-rs` feature `vulkan` for `cfg(windows)` — on
+      `whisper-worker` only; the app's own whisper (Silero VAD, CPU) stays
+      without it under `tauri build`. CI installs the SDK
+      (`humbletim/install-vulkan-sdk`, 1.4.309.0); locally
+      `winget install KhronosGroup.VulkanSDK` (needs admin), and
+      `build-windows.ps1` finds it under `C:\VulkanSDK` if `VULKAN_SDK` is not
+      set yet (listed with the other prerequisites in its header — the README
+      has no Windows section). *Not yet built: the SDK install is pending on
+      the PC.*
+- [x] Confirm the fallback. Loader present, no usable driver: ggml's
+      `ggml_backend_vk_reg` catches the failed `vkCreateInstance` and registers
+      no device → CPU. **No loader at all** was the real problem:
+      `vkGetInstanceProcAddr` is a hard import, so `vulkan-1.dll` would stop
+      the sidecar from starting, and ggml registers backends before `use_gpu`
+      is read. Now delay-loaded (`whisper-worker/build.rs`) with a failure hook
+      (`src/vulkan_guard.rs`) that hands ggml a stand-in whose
+      `vkEnumerateInstanceVersion` fails — ggml's catch does the rest.
+      Verified on 2026-09-24 in a stand-alone harness (loader hidden via
+      `SetDefaultDllDirectories`): starts, returns `VK_ERROR_INITIALIZATION_FAILED`,
+      logs the CPU warning; with the loader visible, binds the real one (1.3).
+      Still to check in the real sidecar once it builds.
 - [ ] **Measure on the target hardware** and write the numbers into
       measurements.md next to the Metal ones: per-segment latency, first-start
       time, how many workers before latency climbs. Set the Windows pool size

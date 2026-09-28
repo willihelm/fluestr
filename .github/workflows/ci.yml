@@ -120,6 +120,14 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: ui
 
+      # ggml-vulkan builds against the SDK (headers, vulkan-1.lib, glslc).
+      # The runner has no GPU, so the tests themselves still run on the CPU.
+      - name: Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+
       # As in the macOS job. `build-windows.ps1` restages the release build
       # for the installer below.
       - name: Stage the sidecar

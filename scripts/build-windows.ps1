@@ -10,7 +10,7 @@
 #
 # Needs: Rust (rustup, MSVC toolchain), Visual Studio Build Tools with the
 # "Desktop development with C++" workload, CMake, LLVM (libclang, for the
-# whisper.cpp bindings), Node 22 and pnpm.
+# whisper.cpp bindings), the Vulkan SDK (whisper on the GPU), Node 22 and pnpm.
 #
 # Keep this file ASCII: Windows PowerShell 5.1 reads a BOM-less script as
 # Windows-1252, and the last byte of an em dash is a closing quote there.
@@ -52,6 +52,21 @@ if (-not $env:LIBCLANG_PATH) {
         $env:LIBCLANG_PATH = $llvm
     } elseif (-not (Get-Command clang -ErrorAction SilentlyContinue)) {
         throw "missing: libclang - winget install LLVM.LLVM, or set LIBCLANG_PATH to the folder holding libclang.dll"
+    }
+}
+
+# The sidecar runs whisper on Vulkan (P18 stage 3), and building ggml-vulkan
+# needs the SDK: headers, vulkan-1.lib and glslc for the shaders. Its installer
+# sets VULKAN_SDK machine-wide, which a shell opened before the install does
+# not see yet - so fall back to the newest version under the default folder.
+if (-not $env:VULKAN_SDK) {
+    $sdk = Get-ChildItem "C:\VulkanSDK" -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path "$($_.FullName)\Bin\glslc.exe" } |
+        Sort-Object { [version]$_.Name } | Select-Object -Last 1
+    if ($sdk) {
+        $env:VULKAN_SDK = $sdk.FullName
+    } else {
+        throw "missing: Vulkan SDK - winget install KhronosGroup.VulkanSDK, or set VULKAN_SDK"
     }
 }
 

@@ -19,6 +19,9 @@ use whisper_rs::{
     WhisperVadContext, WhisperVadContextParams,
 };
 
+#[cfg(all(windows, target_env = "msvc"))]
+mod vulkan_guard;
+
 /// What the process was asked to do.
 ///
 /// `--languages` is not a request on the protocol even though `ListLanguages`
@@ -106,6 +109,8 @@ fn main() -> Result<()> {
     let ctx = WhisperContext::new_with_params(&args.model, ctx_params)
         .with_context(|| format!("loading model: {}", args.model))?;
     let load_ms = t0.elapsed().as_millis() as u32;
+    #[cfg(all(windows, target_env = "msvc"))]
+    vulkan_guard::report();
     // Whether the VAD is armed decides what reaches the chat on a quiet
     // channel, so it belongs in the log rather than being inferred.
     tracing::info!(
