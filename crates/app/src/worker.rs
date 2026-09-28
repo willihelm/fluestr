@@ -49,6 +49,7 @@ impl Worker {
         threads: usize,
     ) -> Result<Self> {
         let mut command = Command::new(binary);
+        hide_console(&mut command);
         command
             .arg("--model")
             .arg(model)
@@ -231,7 +232,9 @@ impl Drop for Worker {
 /// process is all it ever costs.
 pub fn list_languages() -> Result<Vec<whisper_protocol::Language>> {
     let binary = find_binary()?;
-    let output = Command::new(&binary)
+    let mut command = Command::new(&binary);
+    hide_console(&mut command);
+    let output = command
         .arg("--languages")
         // Its log lines would otherwise land in the app's terminal for a call
         // that is made whenever Settings is opened.
@@ -271,7 +274,10 @@ pub fn find_binary() -> Result<PathBuf> {
     // `target/debug/deps` while the sidecar it needs is in `target/debug`, and
     // without this they find nothing, report "no model" and pass without
     // having tested anything.
-    for candidate in [dir.join("whisper-worker"), dir.join("../whisper-worker")] {
+    // `.exe` on Windows, nothing elsewhere — without it the sidecar Tauri
+    // bundled next to the app is never found there (P18).
+    let name = format!("whisper-worker{}", std::env::consts::EXE_SUFFIX);
+    for candidate in [dir.join(&name), dir.join("..").join(&name)] {
         if candidate.is_file() {
             return Ok(candidate);
         }
@@ -282,6 +288,23 @@ pub fn find_binary() -> Result<PathBuf> {
          or point FLUESTR_WORKER at it",
         exe.display()
     )
+}
+
+/// Keeps the sidecar from opening a console window of its own.
+///
+/// The sidecar is a console program, and on Windows a console program started
+/// from a GUI one gets a fresh console window — one per worker, and another
+/// every time Settings asks for the language list. The pipes are unaffected:
+/// this suppresses the window, not the streams (P18).
+fn hide_console(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
 }
 
 /// Where `just model` puts its downloads, relative to the repository root.

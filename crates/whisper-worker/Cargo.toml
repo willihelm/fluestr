@@ -20,6 +20,16 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 whisper-rs = { workspace = true }
 
+# The GPU backend for the target (P18). Metal on macOS, Vulkan on Windows —
+# building the latter needs the Vulkan SDK (`VULKAN_SDK`, for its headers,
+# import library and `glslc`); running it needs only a GPU driver, and without
+# one the sidecar transcribes on the CPU (`src/vulkan_guard.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { workspace = true, features = ["metal"] }
+
+[target.'cfg(windows)'.dependencies]
+whisper-rs = { workspace = true, features = ["vulkan"] }
+
 [dev-dependencies]
 hound = { workspace = true }
 whisper-protocol = { workspace = true }

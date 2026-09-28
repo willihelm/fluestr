@@ -233,15 +233,24 @@ mod tests {
     /// The whole point of walking the tree: a whisper worker is a child
     /// process, so a sampler that reported only our own process would report a
     /// fraction of the memory the app actually holds. A child stands in for
-    /// one — `sh` rather than a real sidecar, which would need a model and a
-    /// minute.
+    /// one — a shell rather than a real sidecar, which would need a model and
+    /// a minute.
     #[test]
     fn counts_a_child_process() {
+        #[cfg(unix)]
         let mut child = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg("while :; do sleep 1; done")
             .spawn()
             .expect("a shell");
+        // Windows has no `sleep`; a minute of pings to nowhere is the
+        // idiomatic stand-in, and it is killed long before it finishes.
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("ping");
 
         let (tx, rx) = std::sync::mpsc::channel();
         spawn(move |usage| {

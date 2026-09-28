@@ -18,9 +18,13 @@
 //! therefore matched correctly even if the two enumerations ever diverge, and
 //! the ambiguous case degrades to what the app does today.
 //!
+//! On Windows the equivalent is the WASAPI endpoint id (`IMMDevice::GetId`),
+//! stable across reboots and distinct per unit, matched against cpal's list
+//! the same way: cpal names a WASAPI device by its friendly name, which is
+//! what this reads next to the id (P18).
+//!
 //! Anything this cannot answer comes back as `None`, and the caller falls back
-//! to the name. That is the Windows path too, until the WASAPI port brings its
-//! own endpoint id.
+//! to the name.
 
 /// A stable id per name in `names`, in the same order.
 ///
@@ -37,10 +41,15 @@ fn catalogue() -> Vec<(String, String)> {
     macos::input_devices()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 fn catalogue() -> Vec<(String, String)> {
-    // Windows (P18): `IMMDevice::GetId` is the equivalent and belongs here. Until then every device falls back to its name, which is what the
-    // whole app did before this module existed.
+    wasapi::input_devices()
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn catalogue() -> Vec<(String, String)> {
+    // No platform id to read: every device falls back to its name, which is
+    // what the whole app did before this module existed.
     Vec::new()
 }
 
@@ -198,6 +207,88 @@ mod macos {
     }
 }
 
+#[cfg(windows)]
+mod wasapi {
+    use windows::core::BSTR;
+    use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+    use windows::Win32::Media::Audio::{
+        eCapture, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+        COINIT_APARTMENTTHREADED, STGM_READ,
+    };
+
+    /// `(friendly name, endpoint id)` for every active capture endpoint.
+    ///
+    /// An endpoint that will not give both is left out, as on macOS: the
+    /// caller already has its name from cpal.
+    pub(super) fn input_devices() -> Vec<(String, String)> {
+        let _com = Com::init();
+        // SAFETY: COM is initialised on this thread for the guard's lifetime,
+        // which outlives every interface pointer created below.
+        unsafe { endpoints() }.unwrap_or_default()
+    }
+
+    unsafe fn endpoints() -> windows::core::Result<Vec<(String, String)>> {
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+        let collection = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)?;
+
+        let mut devices = Vec::new();
+        for index in 0..collection.GetCount()? {
+            let Ok(device) = collection.Item(index) else {
+                continue;
+            };
+            if let (Some(name), Some(id)) = (friendly_name(&device), endpoint_id(&device)) {
+                devices.push((name, id));
+            }
+        }
+        Ok(devices)
+    }
+
+    /// The name cpal gives the same endpoint — it reads this very property.
+    unsafe fn friendly_name(device: &IMMDevice) -> Option<String> {
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+        BSTR::try_from(&value).ok().map(|name| name.to_string())
+    }
+
+    unsafe fn endpoint_id(device: &IMMDevice) -> Option<String> {
+        let id = device.GetId().ok()?;
+        let string = id.to_string().ok();
+        // The id is allocated by the endpoint and is ours to free.
+        CoTaskMemFree(Some(id.0 as *const _));
+        string
+    }
+
+    /// COM for the current thread, released again only if this call was the
+    /// one that initialised it.
+    ///
+    /// cpal has usually initialised it already on the enumerating thread, as
+    /// single-threaded apartment; asking again in the same mode is harmless
+    /// and simply answers "already". A thread in the other mode refuses, and
+    /// COM is still usable there — so the only case that must not be
+    /// balanced with an uninitialise is that refusal.
+    struct Com(bool);
+
+    impl Com {
+        fn init() -> Self {
+            // SAFETY: no reserved pointer; the mode matches cpal's.
+            Self(unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok())
+        }
+    }
+
+    impl Drop for Com {
+        fn drop(&mut self) {
+            if self.0 {
+                // SAFETY: balances the successful initialisation above.
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +361,25 @@ mod tests {
         );
 
         assert_eq!(ids, vec![Some("...USB:1".to_string())]);
+    }
+
+    /// Against the machine's real endpoints, which only a Windows machine has:
+    /// `cargo test -p audio-core catalogue_on_this_machine -- --ignored --nocapture`.
+    /// Every capture endpoint named, with an id of its own.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the machine's audio endpoints"]
+    fn catalogue_on_this_machine() {
+        let devices = super::catalogue();
+        for (name, id) in &devices {
+            println!("{name:40} {id}");
+        }
+        let mut ids: Vec<&String> = devices.iter().map(|(_, id)| id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), devices.len(), "two endpoints share an id");
+        assert!(devices
+            .iter()
+            .all(|(name, id)| !name.is_empty() && !id.is_empty()));
     }
 }

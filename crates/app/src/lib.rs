@@ -19,6 +19,9 @@ pub mod alerts;
 mod bindings;
 pub mod commands;
 pub mod config;
+// The IOKit reader on macOS; elsewhere a reader that never finds a GPU, which
+// the resource meter already answers with "memory only" (P18).
+#[cfg_attr(not(target_os = "macos"), path = "gpu_none.rs")]
 pub mod gpu;
 pub mod history;
 pub mod models;

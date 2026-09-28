@@ -26,6 +26,14 @@ whisper-rs = { workspace = true, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-audio = { workspace = true }
 objc2-core-foundation = { workspace = true }
+# Metal under whisper.cpp on macOS. Declared a second time rather than in the
+# table above so it stays behind the same `silero` switch; cargo merges the two
+# into one dependency with the features of both.
+whisper-rs = { workspace = true, optional = true, features = ["metal"] }
+
+# The WASAPI endpoint id behind `DeviceId` on Windows (P18).
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
 
 [dev-dependencies]
 hound = { workspace = true }

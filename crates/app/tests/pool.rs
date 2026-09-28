@@ -22,8 +22,8 @@
 use app_lib::pool::{Completed, Outcome, PoolConfig, PoolEvent, WorkerPool};
 use audio_core::{LanguageCode, LanguageMode, Segment, StreamId, SAMPLE_RATE};
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 use std::time::{Duration, Instant};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 /// Half a second of quiet noise.
 ///
@@ -64,21 +64,25 @@ fn config() -> Option<PoolConfig> {
 
 /// Kills this test process's own sidecar children, and nothing else.
 ///
-/// `pgrep -P` restricts the search to direct children, so a developer's
-/// running app is never caught by this.
+/// Only direct children of this process are considered, so a developer's
+/// running app is never caught by this. Through `sysinfo` rather than
+/// `pgrep`/`kill`, which Windows does not have (P18).
 fn kill_our_sidecars() -> usize {
-    let Ok(output) = Command::new("pgrep")
-        .args(["-P", &std::process::id().to_string(), "whisper-worker"])
-        .output()
-    else {
-        return 0;
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let pids: Vec<&str> = stdout.split_whitespace().collect();
-    for pid in &pids {
-        let _ = Command::new("kill").args(["-9", pid]).status();
+    let us = Pid::from_u32(std::process::id());
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+
+    let mut killed = 0;
+    for process in system.processes().values() {
+        let is_sidecar = process
+            .name()
+            .to_string_lossy()
+            .starts_with("whisper-worker");
+        if process.parent() == Some(us) && is_sidecar && process.kill() {
+            killed += 1;
+        }
     }
-    pids.len()
+    killed
 }
 
 #[test]

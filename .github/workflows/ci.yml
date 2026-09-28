@@ -47,6 +47,17 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
 
+      # tauri-build refuses to build `app` without its `externalBin` staged,
+      # and copies it into target/debug — where the pool tests look for the
+      # sidecar. It has to be the real one: a placeholder would be copied over
+      # the worker cargo just built. Only ever passed locally because the
+      # staged file from `just dev` sits in the ignored binaries/ folder.
+      - name: Stage the sidecar
+        run: |
+          cargo build -p whisper-worker
+          mkdir -p crates/app/binaries
+          cp target/debug/whisper-worker crates/app/binaries/whisper-worker-aarch64-apple-darwin
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -74,3 +85,70 @@ jobs:
 
       - name: Release build
         run: cargo build --workspace --release
+
+  windows:
+    # The Windows port (P18). The frontend and the generated types are checked
+    # by the macOS job — they do not depend on the platform. What this job
+    # covers is everything that does: the build of whisper.cpp with MSVC, the
+    # `cfg(windows)` code paths, the tests on Windows, and the installer, which
+    # is uploaded so it can be tried on a real machine.
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ui
+
+      # ggml-vulkan builds against the SDK (headers, vulkan-1.lib, glslc).
+      # The runner has no GPU, so the tests themselves still run on the CPU.
+      - name: Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+
+      # As in the macOS job. `build-windows.ps1` restages the release build
+      # for the installer below.
+      - name: Stage the sidecar
+        shell: bash
+        run: |
+          cargo build -p whisper-worker
+          mkdir -p crates/app/binaries
+          cp target/debug/whisper-worker.exe crates/app/binaries/whisper-worker-x86_64-pc-windows-msvc.exe
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Installer
+        run: scripts\build-windows.ps1
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fluestr-windows-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error

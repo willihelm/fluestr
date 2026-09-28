@@ -36,6 +36,7 @@
 
   import { untrack } from "svelte";
   import { openGroupWindow } from "./bridge";
+  import { shortcut } from "./shortcut";
   import type { Group } from "./groups";
   import { watchNarrow } from "./layout";
   import { clampWidth, DEFAULT_WIDTH, loadWidth, maxWidth, MIN_WIDTH, saveWidth } from "./sidebar";
@@ -282,7 +283,7 @@
         open = false;
       }}
       aria-haspopup="dialog"
-      title="Settings (⌘,)"
+      title="Settings ({shortcut(',')})"
     >
       <span>Settings</span>
       <!-- Drawn rather than an emoji, for the reason the detach glyph and the
