@@ -11,7 +11,7 @@ import type { StoredOutputs } from "./config";
  * `config::VERSION`; the backend refuses to reinterpret a file claiming a
  * higher one.
  */
-export const CONFIG_VERSION = 2;
+export const CONFIG_VERSION = 3;
 
 /**
  * The id the custom model is selected by. Mirrors `models::CUSTOM`. Not a
@@ -126,14 +126,14 @@ export const DEFAULT_OUTPUTS: StoredOutputs = {
       "deviceId": "",
       "channels": []
     },
-    "windowMs": 3000,
+    "windowMs": 1000,
     "calibrationDb": null,
-    "quietDb": -50,
+    "quietDb": 50,
     "baseGainDb": -12,
     "slopePercent": 70,
     "maxGainDb": 0,
     "riseMs": 5000,
-    "fallMs": 20000,
+    "fallMs": 5000,
     "gateDbfs": -45,
     "gateHoldMs": 1500,
     "ceilingDbfs": -1,
@@ -154,3 +154,9 @@ export const SHOUTBOX_GAIN_DB_MAX = 12;
  */
 export const SHOUTBOX_TRIM_DB_MIN = -20;
 export const SHOUTBOX_TRIM_DB_MAX = 12;
+
+/**
+ * What an uncalibrated measurement mic is read through, weighted dBFS to an
+ * estimated dB SPL. Mirrors `config::Shoutbox::ESTIMATED_CALIBRATION_DB`.
+ */
+export const SHOUTBOX_ESTIMATED_CALIBRATION_DB = 100;

@@ -53,7 +53,7 @@
   let title = $derived(
     status?.message ??
       (running
-        ? `Room ${status?.liveDb?.toFixed(0) ?? "—"}, ${status?.measuring ? "measuring" : `held at ${status?.levelDb?.toFixed(0) ?? "—"} while it plays`}`
+        ? `Room ${status?.liveDb?.toFixed(0) ?? "—"} dB SPL${status?.calibrated ? "" : " (estimated)"}, ${status?.measuring ? "measuring" : `held at ${status?.levelDb?.toFixed(0) ?? "—"} while it plays`}`
         : "Shoutbox"),
   );
 </script>

@@ -6,6 +6,7 @@ import {
   encodeChannels,
   isShoutboxDefault,
   outputChoices,
+  recalibrate,
   shoutboxDefaults,
 } from "./outputs";
 import { DEFAULT_OUTPUTS } from "./bridge";
@@ -52,15 +53,16 @@ describe("shoutboxDefaults", () => {
 
 describe("calibrationFor", () => {
   it("makes the page read what the meter reads", () => {
-    // Uncalibrated the page shows −32 dBFS; the meter says 86 dB(A).
-    expect(calibrationFor(86, -32, null)).toBe(118);
+    // Uncalibrated the page shows an estimated 68 (−32 dBFS); the meter says
+    // 86 dB(A).
+    expect(calibrationFor(86, 68, null)).toBe(118);
     // Already calibrated to 110 and showing 78: the same room, re-read.
     expect(calibrationFor(86, 78, 110)).toBe(118);
   });
 
   it("keeps a tenth and goes negative for a hot input", () => {
-    // A 94 dB calibrator on a mic that shows −23.46 dBFS.
-    expect(calibrationFor(94, -23.46, null)).toBe(117.5);
+    // A 94 dB calibrator on a mic that shows −23.46 dBFS, estimated 76.54.
+    expect(calibrationFor(94, 76.54, null)).toBe(117.5);
     // A hot input already reading above SPL: 96.34 shown at offset 0.
     expect(calibrationFor(94, 96.34, 0)).toBe(-2.3);
     // Re-calibrating on top of a negative offset.
@@ -69,6 +71,21 @@ describe("calibrationFor", () => {
 
   it("has nothing to calibrate against without a reading", () => {
     expect(calibrationFor(86, null, null)).toBeNull();
+  });
+});
+
+describe("recalibrate", () => {
+  it("keeps the quiet threshold at the same sound in the room", () => {
+    // Estimated (100) to a measured 118: the room reads 18 higher, and so
+    // does the threshold.
+    const shoutbox = { ...structuredClone(DEFAULT_OUTPUTS.shoutbox), quietDb: 50 };
+    recalibrate(shoutbox, 117.6);
+    expect(shoutbox.calibrationDb).toBe(117.6);
+    expect(shoutbox.quietDb).toBe(68);
+    // And back to the estimate.
+    recalibrate(shoutbox, null);
+    expect(shoutbox.calibrationDb).toBeNull();
+    expect(shoutbox.quietDb).toBe(50);
   });
 });
 

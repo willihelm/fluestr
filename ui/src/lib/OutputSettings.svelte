@@ -23,6 +23,7 @@
     isRemote,
     listDevices,
     listOutputDevices,
+    SHOUTBOX_ESTIMATED_CALIBRATION_DB,
     onShoutboxStatus,
     setShoutboxLive,
     shoutboxStatus,
@@ -35,13 +36,13 @@
   } from "./bridge";
   import {
     calibrationFor,
+    recalibrate,
     isShoutboxDefault,
     roundTenth,
     shoutboxDefaults,
     decodeChannels,
     encodeChannels,
     outputChoices,
-    speed,
   } from "./outputs";
 
   interface Props {
@@ -389,11 +390,13 @@
         min="-200"
         max="200"
         step="0.1"
-        placeholder="none"
+        placeholder="{SHOUTBOX_ESTIMATED_CALIBRATION_DB} (estimated)"
         value={shoutbox.calibrationDb ?? ""}
         onchange={(e) =>
-          (shoutbox.calibrationDb =
-            e.currentTarget.value === "" ? null : roundTenth(Number(e.currentTarget.value)))}
+          recalibrate(
+            shoutbox,
+            e.currentTarget.value === "" ? null : roundTenth(Number(e.currentTarget.value)),
+          )}
       />
     </label>
   </div>
@@ -406,7 +409,7 @@
       type="button"
       disabled={offset === null}
       onclick={() => {
-        shoutbox.calibrationDb = offset;
+        recalibrate(shoutbox, offset);
         meterReading = CALIBRATOR_DB;
       }}
     >
@@ -414,40 +417,16 @@
     </button>
   </div>
   <p class="note">
-    With a calibration the levels below are in dB SPL, without it in weighted dBFS.
-    Calibrating moves what the curve's numbers mean, so set it before the curve. Read
-    the meter while nothing plays on the shoutbox.
+    The room is read in dB SPL, A-weighted. Without a calibration that is an estimate
+    ({SHOUTBOX_ESTIMATED_CALIBRATION_DB} dB over weighted dBFS) and can be ten off either
+    way. Calibrating moves the quiet threshold with it, so the shoutbox behaves as it
+    did and only the numbers become right. Read the meter while nothing plays on the
+    shoutbox.
   </p>
 
   <ShoutboxControls bind:shoutbox={outputs.shoutbox} {status} />
 
-  <h3>Speed and safety</h3>
-  <div class="row">
-    <label class="narrow">
-      <span>Rise — {speed(shoutbox.riseMs)}</span>
-      <input
-        type="range"
-        min="500"
-        max="30000"
-        step="500"
-        bind:value={shoutbox.riseMs}
-      />
-    </label>
-    <label class="narrow">
-      <span>Fall — {speed(shoutbox.fallMs)}</span>
-      <input
-        type="range"
-        min="2000"
-        max="120000"
-        step="1000"
-        bind:value={shoutbox.fallMs}
-      />
-    </label>
-  </div>
-  <p class="note">
-    Rising faster than falling: a loud song is followed within seconds, and a short break
-    in it does not drop the shoutbox under the next chorus.
-  </p>
+  <h3>Safety</h3>
   <div class="row">
     <label class="narrow">
       <span>Counts as playing above (dBFS)</span>
@@ -541,7 +520,6 @@
     font-size: 0.9rem;
   }
 
-  input[type="range"],
   input[type="checkbox"] {
     accent-color: var(--accent);
   }

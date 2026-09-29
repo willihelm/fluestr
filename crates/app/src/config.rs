@@ -40,7 +40,9 @@ use std::path::{Path, PathBuf};
 /// migrated on the way in — see [`Config::migrate`], which is what turned the
 /// alert list and the two flash flags of version 1 into the rules of version
 /// 2.
-pub const VERSION: u32 = 2;
+/// 3 put the shoutbox's room levels in dB SPL throughout (P26) — see
+/// [`Shoutbox::lift_to_spl`].
+pub const VERSION: u32 = 3;
 
 /// The file inside the app's configuration directory.
 pub const FILE_NAME: &str = "config.json";
@@ -398,10 +400,12 @@ impl Default for Listen {
 /// the milliseconds ten decibels take. The one exception is the calibration,
 /// which a calibrator gives to a tenth — kept as [`Tenths`], still an integer.
 ///
-/// Levels are in dB SPL when [`Shoutbox::calibration_db`] is set, and in
-/// weighted dBFS when it is not. The curve is written in whichever the page
-/// shows, so setting a calibration later moves what the numbers mean — which
-/// the page says beside the box.
+/// The room's levels — the reading and the curve's quiet threshold — are in
+/// dB SPL, A-weighted, always: what an engineer thinks in. Without a
+/// calibration they are an estimate, read through
+/// [`Shoutbox::ESTIMATED_CALIBRATION_DB`]. The program's levels — the gate and
+/// the ceiling — stay in dBFS, because they are the signal's and not the
+/// room's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export, export_to = "config.ts", rename = "StoredShoutbox")]
@@ -414,13 +418,16 @@ pub struct Shoutbox {
     /// The speaker. Has to be on the program's interface — one clock, or the
     /// pass-through drifts.
     pub output: OutputRoute,
-    /// The averaging time of the room measurement.
+    /// The averaging time of the room measurement. Short by default: it
+    /// slows the gain on top of the rise and fall, and a second leaves those
+    /// two in charge of how fast the shoutbox follows.
     pub window_ms: u32,
     /// Added to weighted dBFS to read dB SPL, read off an SPL meter or set
-    /// with a calibrator. Negative for a hot input. `None` is uncalibrated.
+    /// with a calibrator. `None` is uncalibrated, and reads through
+    /// [`Shoutbox::ESTIMATED_CALIBRATION_DB`] instead.
     #[ts(optional, type = "number | null")]
     pub calibration_db: Option<Tenths>,
-    /// Below this room level nothing changes.
+    /// Below this room level, in dB SPL, nothing changes.
     pub quiet_db: i32,
     /// The gain at and below the quiet level.
     pub base_gain_db: i32,
@@ -428,11 +435,11 @@ pub struct Shoutbox {
     pub slope_percent: u32,
     /// The most the curve will ask for.
     pub max_gain_db: i32,
-    /// How long a rise of 10 dB takes. Faster than the fall, so a loud song
-    /// is followed within seconds.
+    /// How long a rise of 10 dB takes, so a loud song is followed within
+    /// seconds.
     pub rise_ms: u32,
-    /// How long a fall of 10 dB takes. Slow, so a break between two loud
-    /// numbers does not drop the shoutbox under the next.
+    /// How long a fall of 10 dB takes. 0 is no limit: the averaging window
+    /// alone slows the fall, which is often slow enough on its own.
     pub fall_ms: u32,
     /// Above this pre-gain peak the shoutbox counts as playing, and the room
     /// is not measured — it would be measuring itself.
@@ -453,14 +460,14 @@ impl Default for Shoutbox {
             program: InputRoute::default(),
             reference: InputRoute::default(),
             output: OutputRoute::default(),
-            window_ms: 3_000,
+            window_ms: 1_000,
             calibration_db: None,
-            quiet_db: -50,
+            quiet_db: 50,
             base_gain_db: -12,
             slope_percent: 70,
             max_gain_db: 0,
             rise_ms: 5_000,
-            fall_ms: 20_000,
+            fall_ms: 5_000,
             gate_dbfs: -45,
             gate_hold_ms: 1_500,
             ceiling_dbfs: -1,
@@ -477,11 +484,40 @@ impl Shoutbox {
     pub const LEVEL_DB: std::ops::RangeInclusive<i32> = -120..=140;
     pub const WINDOW_MS: std::ops::RangeInclusive<u32> = 500..=30_000;
     pub const SPEED_MS: std::ops::RangeInclusive<u32> = 500..=120_000;
+    /// The fall's, which may be 0 — see [`Shoutbox::fall_ms`].
+    pub const FALL_MS: std::ops::RangeInclusive<u32> = 0..=120_000;
     pub const GATE_DBFS: std::ops::RangeInclusive<i32> = -80..=-10;
     pub const HOLD_MS: std::ops::RangeInclusive<u32> = 200..=10_000;
     pub const CEILING_DBFS: std::ops::RangeInclusive<i32> = -20..=0;
     pub const SLOPE_PERCENT: std::ops::RangeInclusive<u32> = 0..=200;
     pub const CALIBRATION_DB: std::ops::RangeInclusive<i32> = -200..=200;
+
+    /// What an uncalibrated input is read through: weighted dBFS plus this is
+    /// an estimate of dB SPL. Roughly right for a laptop's own mic and for a
+    /// measurement mic at usual preamp gain — a quiet room at about 30, a
+    /// shout at about 90 — and easily ten off either way, which is what
+    /// calibrating is for. The page says the levels are estimated until then.
+    pub const ESTIMATED_CALIBRATION_DB: f32 = 100.0;
+
+    /// The offset levels are read through, calibrated or not.
+    pub fn offset_db(&self) -> f32 {
+        self.calibration_db
+            .map_or(Self::ESTIMATED_CALIBRATION_DB, Tenths::db)
+    }
+
+    /// Moves an uncalibrated curve written before version 3 from weighted
+    /// dBFS to the estimated SPL it is read in now, so it stays where it was
+    /// in the room.
+    ///
+    /// Only a quiet threshold at or below 0: a weighted dBFS level cannot be
+    /// above full scale, so anything higher was never one — it is a profile
+    /// the file did not have a shoutbox for, which the default filled in, and
+    /// the default is SPL already. A calibrated curve was in dB SPL all along.
+    fn lift_to_spl(&mut self) {
+        if self.calibration_db.is_none() && self.quiet_db <= 0 {
+            self.quiet_db += Self::ESTIMATED_CALIBRATION_DB as i32;
+        }
+    }
 
     fn clamp(&mut self) {
         let clamp_i =
@@ -496,7 +532,7 @@ impl Shoutbox {
         clamp_i(&mut self.ceiling_dbfs, &Self::CEILING_DBFS);
         clamp_u(&mut self.window_ms, &Self::WINDOW_MS);
         clamp_u(&mut self.rise_ms, &Self::SPEED_MS);
-        clamp_u(&mut self.fall_ms, &Self::SPEED_MS);
+        clamp_u(&mut self.fall_ms, &Self::FALL_MS);
         clamp_u(&mut self.gate_hold_ms, &Self::HOLD_MS);
         clamp_u(&mut self.slope_percent, &Self::SLOPE_PERCENT);
         if let Some(offset) = self.calibration_db.as_mut() {
@@ -519,9 +555,12 @@ impl Shoutbox {
                 max_gain_db: self.max_gain_db as f32,
             },
             rise_db_per_s: per_second(self.rise_ms),
-            fall_db_per_s: per_second(self.fall_ms),
+            fall_db_per_s: match self.fall_ms {
+                0 => f32::INFINITY,
+                ms => per_second(ms),
+            },
             window: std::time::Duration::from_millis(self.window_ms as u64),
-            calibration_db: self.calibration_db.map_or(0.0, Tenths::db),
+            calibration_db: self.offset_db(),
             gate_threshold_dbfs: self.gate_dbfs as f32,
             gate_hold: std::time::Duration::from_millis(self.gate_hold_ms as u64),
         }
@@ -1082,6 +1121,12 @@ impl Config {
     /// Run on the way *in*, so it costs nothing on a file that has already
     /// been migrated: a version 2 file has no legacy fields to read.
     fn migrate(&mut self) {
+        if self.version < 3 {
+            for profile in &mut self.profiles {
+                profile.outputs.shoutbox.lift_to_spl();
+            }
+        }
+
         let terms = std::mem::take(&mut self.alerts);
 
         for profile in &mut self.profiles {
@@ -2017,6 +2062,38 @@ mod tests {
         let json = serde_json::to_string(&shoutbox).expect("writing");
         assert!(json.contains(r#""calibrationDb":-2.3"#), "{json}");
         assert_eq!(shoutbox.control().calibration_db, -2.3);
+        assert_eq!(
+            Shoutbox::default().control().calibration_db,
+            Shoutbox::ESTIMATED_CALIBRATION_DB
+        );
+    }
+
+    /// An uncalibrated version 2 curve was in weighted dBFS; it comes back in
+    /// the estimated SPL it is read in now, at the same place in the room. A
+    /// calibrated one was in dB SPL already, and a profile the file had no
+    /// shoutbox for gets the default, which is SPL too.
+    #[test]
+    fn a_version_two_curve_is_lifted_to_spl_once() {
+        let file = r#"{"version":2,"active":0,"vocabulary":null,"profiles":[
+            {"name":"A","device":"X","channels":[],"groups":[],"outputs":{"shoutbox":{"quietDb":-50}}},
+            {"name":"B","device":"X","channels":[],"groups":[],"outputs":{"shoutbox":{"quietDb":80,"calibrationDb":118}}},
+            {"name":"C","device":"X","channels":[],"groups":[]}
+        ]}"#;
+        let path = temp_dir().join(FILE_NAME);
+        fs::write(&path, file).expect("writing the version 2 file");
+
+        let config = load(&path);
+        let quiet: Vec<i32> = config
+            .profiles
+            .iter()
+            .map(|p| p.outputs.shoutbox.quiet_db)
+            .collect();
+        assert_eq!(quiet, vec![50, 80, Shoutbox::default().quiet_db]);
+        assert_eq!(config.version, VERSION);
+
+        // Saved and read again it is version 3, and nothing moves twice.
+        save(&path, &config).expect("saving");
+        assert_eq!(load(&path).profiles[0].outputs.shoutbox.quiet_db, 50);
     }
 
     /// The shoutbox is set up from wherever it is heard (P26); the listen

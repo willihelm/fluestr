@@ -21,7 +21,7 @@
     type ShoutboxStatus,
     type StoredShoutbox,
   } from "./bridge";
-  import { curveTarget } from "./outputs";
+  import { curveTarget, offsetOf } from "./outputs";
   import Knob from "./Knob.svelte";
 
   interface Props {
@@ -39,18 +39,19 @@
     void setShoutboxLive(trimDb, muted).catch(() => {});
   };
 
-  let unit = $derived(shoutbox.calibrationDb != null ? "dB" : "dBFS");
+  /// The room is always read in dB SPL; without a calibration the numbers
+  /// are an estimate, and say so.
+  const unit = "dB SPL";
+  let estimated = $derived(shoutbox.calibrationDb == null);
 
   /// What a double-tap on a knob goes back to.
   const defaults = DEFAULT_OUTPUTS.shoutbox;
 
   /// The quiet threshold's knob, over what the mic can read: its weighted
-  /// dBFS scale moved by the calibration offset, whatever that is. Not "SPL
-  /// when calibrated": an offset of 0 is a calibration too, and a range
-  /// guessed from the unit put the knob where the room never is. Never
+  /// dBFS scale moved by the offset in force, measured or estimated. Never
   /// narrower than the value it holds, or the knob would show it wrongly.
   let quietRange = $derived.by(() => {
-    const offset = shoutbox.calibrationDb ?? 0;
+    const offset = offsetOf(shoutbox.calibrationDb);
     const [from, to] = [Math.round(offset - 90), Math.round(offset)];
     return { min: Math.min(from, shoutbox.quietDb), max: Math.max(to, shoutbox.quietDb) };
   });
@@ -136,9 +137,9 @@
 {#if status?.state === "running"}
   <dl class="readings">
     <div>
-      <dt>Room</dt>
+      <dt>Room{estimated ? " (estimated)" : ""}</dt>
       <dd>
-        {fmt(status.liveDb)} {unit}
+        {estimated ? "≈ " : ""}{fmt(status.liveDb)} {unit}
         {#if !status.referenceOk}
           <span class="warn">· mic lost, gain held</span>
         {:else if !status.measuring && status.levelDb != null}
@@ -201,7 +202,7 @@
         <circle cx={point.x} cy={point.y} r="4" class="point" />
       {/if}
       <text x={(plot.left + plot.right) / 2} y={H - 4} class="axis-title" text-anchor="middle">
-        Room level ({unit})
+        Room level ({estimated ? "≈ " : ""}{unit})
       </text>
       <text
         transform="translate(11 {(plot.top + plot.bottom) / 2}) rotate(-90)"
@@ -237,6 +238,16 @@
       onchange={(v) => (shoutbox.baseGainDb = v)}
     />
     <Knob
+      label="Rise"
+      unit="s per 10 dB"
+      value={shoutbox.riseMs / 1000}
+      min={0.5}
+      max={30}
+      step={0.5}
+      reset={defaults.riseMs / 1000}
+      onchange={(s) => (shoutbox.riseMs = Math.round(s * 1000))}
+    />
+    <Knob
       label="Gain per dB of room"
       unit="%"
       value={shoutbox.slopePercent}
@@ -256,8 +267,19 @@
       reset={defaults.maxGainDb}
       onchange={(v) => (shoutbox.maxGainDb = v)}
     />
+    <Knob
+      label="Fall"
+      unit="s per 10 dB"
+      value={shoutbox.fallMs / 1000}
+      min={0}
+      step={0.5}
+      max={Math.max(30, shoutbox.fallMs / 1000)}
+      reset={defaults.fallMs / 1000}
+      onchange={(s) => (shoutbox.fallMs = Math.round(s * 1000))}
+    />
   </div>
 </div>
+
 
 <style>
   h3 {
@@ -342,10 +364,11 @@
     height: auto;
   }
 
-  /* Two by two beside the curve, and in one row under it when it wraps. */
+  /* The curve's four beside it, and the two speeds in a third column: all
+     of it the room-following, in one block. */
   .curve .fields {
     display: grid;
-    grid-template-columns: repeat(2, max-content);
+    grid-template-columns: repeat(3, max-content);
     gap: 0.4rem 0.8rem;
     align-content: start;
   }

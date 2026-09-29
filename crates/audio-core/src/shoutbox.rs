@@ -208,12 +208,13 @@ pub struct ControlSettings {
     pub curve: Curve,
     /// How fast the gain may rise, in dB per second.
     pub rise_db_per_s: f32,
-    /// How fast it may fall. Slower than the rise, so that a short break in a
-    /// loud song does not drop the shoutbox under the next chorus.
+    /// How fast it may fall, in dB per second. Infinite is no limit: the
+    /// gain then follows the averaged room down as fast as it moves.
     pub fall_db_per_s: f32,
     /// The averaging time constant of the room measurement.
     pub window: Duration,
-    /// Added to weighted dBFS to read dB SPL; 0 when uncalibrated.
+    /// Added to weighted dBFS to read dB SPL: the calibration, or the
+    /// estimate the app reads an uncalibrated mic through.
     pub calibration_db: f32,
     /// Above this pre-gain peak, in dBFS, the shoutbox counts as playing.
     pub gate_threshold_dbfs: f32,
@@ -666,6 +667,23 @@ mod tests {
         // And back down at a quarter of that.
         let after = run(&mut c, -55.0, 0.0, 1.0);
         assert!(top - after.gain_db <= 0.5 + 0.01, "{top} -> {after:?}");
+    }
+
+    #[test]
+    fn an_unlimited_fall_follows_the_averaged_room_down() {
+        let mut c = Controller::new(ControlSettings {
+            fall_db_per_s: f32::INFINITY,
+            ..settings()
+        });
+        run(&mut c, -30.0, 0.0, 10.0);
+        let top = c.gain_db();
+        // No slew limit on the way down: only the averaging window, whose
+        // two seconds take the room most of the way back in three.
+        let after = run(&mut c, -55.0, 0.0, 3.0);
+        assert!(top - after.gain_db > 5.0, "{top} -> {after:?}");
+        assert!(after.gain_db.is_finite() && after.gain_db >= -12.0);
+        let settled = run(&mut c, -55.0, 0.0, 20.0);
+        assert!((settled.gain_db + 12.0).abs() < 0.1, "{settled:?}");
     }
 
     #[test]

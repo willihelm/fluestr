@@ -27,7 +27,7 @@
     onchange: (value: number) => void;
   }
 
-  let { value, min, max, step = 1, origin = min, reset, label, unit, onchange }: Props = $props();
+  let { value, min, max, step = 1, origin, reset, label, unit, onchange }: Props = $props();
 
   const SWEEP = 135;
   /// The whole range in about this many pixels of drag, whatever its size:
@@ -55,7 +55,7 @@
   };
 
   let current = $derived(angleOf(value));
-  let start = $derived(angleOf(origin));
+  let start = $derived(angleOf(origin ?? min));
   let pxPerStep = $derived(TRAVEL_PX / ((max - min) / step));
 
   const set = (v: number) => {
@@ -138,7 +138,9 @@
     }
   };
 
-  let text = $derived(`${origin === 0 && value > 0 ? "+" : ""}${value}`);
+  /// Signed only around a value that does nothing — a gain above unity is
+  /// "+6". A speed or a percentage from the bottom of its range is not.
+  let text = $derived(`${origin !== undefined && value > origin ? "+" : ""}${value}`);
 </script>
 
 <div

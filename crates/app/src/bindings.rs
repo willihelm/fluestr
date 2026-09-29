@@ -136,6 +136,12 @@ export const SHOUTBOX_GAIN_DB_MAX = {shout_gain_max};
  */
 export const SHOUTBOX_TRIM_DB_MIN = {shout_trim_min};
 export const SHOUTBOX_TRIM_DB_MAX = {shout_trim_max};
+
+/**
+ * What an uncalibrated measurement mic is read through, weighted dBFS to an
+ * estimated dB SPL. Mirrors `config::Shoutbox::ESTIMATED_CALIBRATION_DB`.
+ */
+export const SHOUTBOX_ESTIMATED_CALIBRATION_DB = {shout_estimated};
 "#,
         version = crate::config::VERSION,
         custom = crate::models::CUSTOM,
@@ -158,6 +164,7 @@ export const SHOUTBOX_TRIM_DB_MAX = {shout_trim_max};
         shout_gain_max = crate::config::Shoutbox::GAIN_DB.end(),
         shout_trim_min = crate::config::Shoutbox::TRIM_DB.start(),
         shout_trim_max = crate::config::Shoutbox::TRIM_DB.end(),
+        shout_estimated = crate::config::Shoutbox::ESTIMATED_CALIBRATION_DB,
     )
 }
 

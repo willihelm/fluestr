@@ -515,10 +515,12 @@ minIntervalMs: number, };
  * the milliseconds ten decibels take. The one exception is the calibration,
  * which a calibrator gives to a tenth — kept as [`Tenths`], still an integer.
  *
- * Levels are in dB SPL when [`Shoutbox::calibration_db`] is set, and in
- * weighted dBFS when it is not. The curve is written in whichever the page
- * shows, so setting a calibration later moves what the numbers mean — which
- * the page says beside the box.
+ * The room's levels — the reading and the curve's quiet threshold — are in
+ * dB SPL, A-weighted, always: what an engineer thinks in. Without a
+ * calibration they are an estimate, read through
+ * [`Shoutbox::ESTIMATED_CALIBRATION_DB`]. The program's levels — the gate and
+ * the ceiling — stay in dBFS, because they are the signal's and not the
+ * room's.
  */
 export type StoredShoutbox = { enabled: boolean, 
 /**
@@ -535,16 +537,19 @@ reference: StoredInputRoute,
  */
 output: StoredOutputRoute, 
 /**
- * The averaging time of the room measurement.
+ * The averaging time of the room measurement. Short by default: it
+ * slows the gain on top of the rise and fall, and a second leaves those
+ * two in charge of how fast the shoutbox follows.
  */
 windowMs: number, 
 /**
  * Added to weighted dBFS to read dB SPL, read off an SPL meter or set
- * with a calibrator. Negative for a hot input. `None` is uncalibrated.
+ * with a calibrator. `None` is uncalibrated, and reads through
+ * [`Shoutbox::ESTIMATED_CALIBRATION_DB`] instead.
  */
 calibrationDb?: number | null, 
 /**
- * Below this room level nothing changes.
+ * Below this room level, in dB SPL, nothing changes.
  */
 quietDb: number, 
 /**
@@ -560,13 +565,13 @@ slopePercent: number,
  */
 maxGainDb: number, 
 /**
- * How long a rise of 10 dB takes. Faster than the fall, so a loud song
- * is followed within seconds.
+ * How long a rise of 10 dB takes, so a loud song is followed within
+ * seconds.
  */
 riseMs: number, 
 /**
- * How long a fall of 10 dB takes. Slow, so a break between two loud
- * numbers does not drop the shoutbox under the next.
+ * How long a fall of 10 dB takes. 0 is no limit: the averaging window
+ * alone slows the fall, which is often slow enough on its own.
  */
 fallMs: number, 
 /**

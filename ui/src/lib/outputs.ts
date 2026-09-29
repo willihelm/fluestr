@@ -3,7 +3,7 @@
 // an engineer would otherwise do on a napkin — the calibration offset and the
 // curve.
 
-import { DEFAULT_OUTPUTS, type StoredShoutbox } from "./bridge";
+import { DEFAULT_OUTPUTS, SHOUTBOX_ESTIMATED_CALIBRATION_DB, type StoredShoutbox } from "./bridge";
 
 export interface ChannelChoice {
   /// What the route stores, zero-based.
@@ -56,21 +56,40 @@ export const encodeChannels = (channels: number[]): string => channels.join(",")
 export const decodeChannels = (value: string): number[] =>
   value === "" ? [] : value.split(",").map((c) => Number(c));
 
+/// The offset the room is read through, weighted dBFS to dB SPL: the
+/// calibration, or the estimate until there is one. Mirrors
+/// `config::Shoutbox::offset_db`.
+export const offsetOf = (calibrationDb: number | null | undefined): number =>
+  calibrationDb ?? SHOUTBOX_ESTIMATED_CALIBRATION_DB;
+
 /// The calibration offset that makes the page read what the SPL meter beside
 /// the mic reads.
 ///
 /// `shownDb` is the level the page shows now, which already includes the
-/// offset in force; `meterDb` is what the meter says. `null` while there is
-/// no reading to calibrate against. To a tenth, as a calibrator gives it, and
-/// negative for an input that runs hotter than the room.
+/// offset in force — the estimate, when `currentOffset` is `null`; `meterDb`
+/// is what the meter says. `null` while there is no reading to calibrate
+/// against. To a tenth, as a calibrator gives it, and negative for an input
+/// that runs hotter than the room.
 export const calibrationFor = (
   meterDb: number,
   shownDb: number | null,
   currentOffset: number | null,
 ): number | null => {
   if (shownDb === null || !Number.isFinite(meterDb)) return null;
-  const uncalibrated = shownDb - (currentOffset ?? 0);
+  const uncalibrated = shownDb - offsetOf(currentOffset);
   return roundTenth(meterDb - uncalibrated);
+};
+
+/// Sets the calibration and keeps the curve where it was in the room.
+///
+/// A new offset changes what every room level on the page reads, the quiet
+/// threshold's included; moved by the same amount, the threshold stays at the
+/// same sound in the room, and the shoutbox behaves as it did — only the
+/// numbers become the right ones. Whole dB, like the threshold is stored.
+export const recalibrate = (shoutbox: StoredShoutbox, next: number | null) => {
+  const shift = offsetOf(next) - offsetOf(shoutbox.calibrationDb);
+  shoutbox.calibrationDb = next;
+  shoutbox.quietDb = Math.round(shoutbox.quietDb + shift);
 };
 
 /// A level to one decimal, the resolution the calibration is stored at.
@@ -84,6 +103,3 @@ export const curveTarget = (shoutbox: StoredShoutbox, levelDb: number): number =
   const max = Math.max(shoutbox.maxGainDb, shoutbox.baseGainDb);
   return Math.min(max, shoutbox.baseGainDb + slope * above);
 };
-
-/// "10 dB in 5 s" — how a speed is set and read.
-export const speed = (ms: number) => `10 dB in ${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;

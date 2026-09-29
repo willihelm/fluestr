@@ -2404,12 +2404,19 @@ it may be on any device.
 
 - **Weighted and averaged.** Always A-weighted, like the SPL meter or
   calibrator the offset is read off — not a setting; an Leq over a sliding
-  window of a few seconds (a setting).
-- **Calibration is optional.** An input delivers dBFS, not dB SPL. An offset —
-  read off an SPL meter or set with a 94 dB calibrator — makes the display read
-  dB(A); without it the control works relative, since it only needs *louder*
-  and *quieter*. Calibrated values are what an engineer thinks in, and the
-  only ones that carry from one evening to the next if the preamp gain moves.
+  window, a second by default (a setting) — short, so that the rise and fall
+  decide how fast the gain follows rather than the averaging.
+- **In dB SPL, calibrated or estimated.** An input delivers dBFS, not dB SPL.
+  The room reading and the curve's quiet threshold are in dB(A) always, read
+  through an offset: one read off an SPL meter or set with a 94 dB calibrator,
+  or — until there is one — an estimate of +100 dB, marked as estimated on the
+  page and easily ten off either way. The control only needs *louder* and
+  *quieter*, so an estimate steers as well as a calibration; what the
+  calibration adds is numbers that are right, and that carry from one evening
+  to the next if the preamp gain moves. Calibrating moves the quiet threshold
+  with the offset, so the curve stays at the same sound in the room. (Version 3
+  of the file; a version 2 curve written in weighted dBFS is lifted by the
+  estimate on the way in.)
 - **The shoutbox hears itself.** The mic is in the same room; if it picks up
   the shoutbox, louder shoutbox means more measured level means more gain — a
   positive loop that ends at the ceiling. Installation ANC answers this by
@@ -2428,9 +2435,10 @@ it may be on any device.
 **The control law.** The gain in dB is a line with two corners: below a
 *quiet level*, the *base gain*; above it, a *slope* in dB of gain per dB of
 room (typically 0.5 to 1); capped at *maximum gain*. Its speed is
-slew-limited, and **rising is faster than falling** — seconds up, tens of
-seconds down — so a single hit does not raise it, a loud song does, and a short
-break in the song does not drop it. Every value is a setting on a Shoutbox page,
+slew-limited, up and down separately — by default 10 dB in 5 s either way. The
+averaging window slows both already, so a single hit does not raise it and a
+short break in a song does not drop it; the fall may therefore be set to no
+limit at all, and then follows the averaged room down alone. Every value is a setting on a Shoutbox page,
 live the way P12's thresholds are, with the curve drawn and the current point
 on it. The operator can always beat the automation: a trim and a mute beside
 the meter.
