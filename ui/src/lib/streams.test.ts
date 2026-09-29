@@ -23,6 +23,7 @@ const channel = (device: number, label = `Channel ${device + 1}`, language = "de
   color: "#888888",
   gainDb: 0,
   muted: false,
+  description: "",
 });
 
 describe("validate", () => {

@@ -238,7 +238,15 @@ gainDb: number,
  * `default` — unmuted — for a configuration written before mute existed,
  * which is exactly what every channel in it did.
  */
-muted: boolean, };
+muted: boolean, 
+/**
+ * Text that looks like this channel, put into whisper's prompt for it
+ * after the global vocabulary (P25) — see
+ * [`crate::config::StoredChannel::description`].
+ *
+ * `default` — empty, nothing — for a caller written before it existed.
+ */
+description: string, };
 
 /**
  * Level and health of one stream.
@@ -286,7 +294,12 @@ gainDb?: number | null,
  * Whether the channel is muted — the M beside the meter, pressed during
  * a show, which is the only time it is ever pressed.
  */
-muted?: boolean | null, };
+muted?: boolean | null, 
+/**
+ * The channel's description for the model (P25). Empty removes it.
+ * Reaches the next segment a worker takes, not the ones already decoded.
+ */
+description?: string | null, };
 
 /**
  * A finished transcript on its way to the chat view.

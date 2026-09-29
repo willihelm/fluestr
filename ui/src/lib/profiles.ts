@@ -79,6 +79,11 @@ export const clampTuning = (tuning: Tuning): Tuning => ({
   speechThresholdPercent: Number.isFinite(tuning.speechThresholdPercent)
     ? Math.min(100, Math.max(0, Math.trunc(tuning.speechThresholdPercent)))
     : GENERATED_TUNING.speechThresholdPercent,
+  // A file written before the switch existed has no such field, and the
+  // default is on — the same answer the backend gives it.
+  carryContext: typeof tuning.carryContext === "boolean"
+    ? tuning.carryContext
+    : GENERATED_TUNING.carryContext,
 });
 
 const clampMs = (value: number, min: number, max: number, fallback: number): number =>
@@ -187,6 +192,7 @@ export const toStored = (profile: Profile): StoredProfile => {
       color: c.color,
       gainDb: clampGain(c.gainDb),
       muted: c.muted,
+      description: c.description,
     })),
     groups: profile.groups.map((g) => ({
       name: g.name,

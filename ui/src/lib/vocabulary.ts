@@ -49,6 +49,35 @@ export const lengthWarning = (text: string): string | null => {
   return null;
 };
 
+/// Tokens kept free for the channel's previous sentence (P25), which the
+/// backend carries at up to 200 characters — see `prompt::CARRY_CHARS`.
+export const CARRY_RESERVE = 50;
+
+/// What to tell the operator about one channel's whole prompt, or `null`.
+///
+/// A channel's prompt is the vocabulary, then its description, then — when it
+/// is carried — the sentence it said last, and all three share whisper's one
+/// window. The vocabulary box alone cannot tell whether a channel's prompt is
+/// too long any more, so the channel row asks this instead. What is lost when
+/// it is over is the vocabulary: whisper drops the front.
+export const channelPromptWarning = (
+  vocabulary: string,
+  description: string,
+  carry: boolean,
+): string | null => {
+  if (description.trim() === "") return null;
+  const reserve = carry ? CARRY_RESERVE : 0;
+  const tokens = estimatedTokens(vocabulary) + estimatedTokens(description) + reserve;
+  const carried = carry ? `, with room for the previous sentence` : "";
+  if (tokens > TOKEN_LIMIT) {
+    return `About ${tokens} of ${TOKEN_LIMIT} tokens with the vocabulary${carried} — the vocabulary's first terms will be dropped on this channel.`;
+  }
+  if (tokens > TOKEN_LIMIT * 0.8) {
+    return `About ${tokens} of ${TOKEN_LIMIT} tokens with the vocabulary${carried}. Long prompts make hallucination on quiet channels more likely.`;
+  }
+  return null;
+};
+
 /// What `start_session` is sent. Empty means no prompt at all rather than an
 /// empty one, so a cleared box really does turn the vocabulary off — which is
 /// how its effect gets measured (P14).

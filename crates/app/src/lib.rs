@@ -27,6 +27,7 @@ pub mod history;
 pub mod models;
 pub mod monitor;
 pub mod pool;
+pub mod prompt;
 pub mod remote;
 pub mod resources;
 pub mod rules;

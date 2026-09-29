@@ -32,6 +32,7 @@
 //! which is also what keeps [`Reorder`] from stalling behind a segment that
 //! never produced text.
 
+use crate::prompt::Prompter;
 use crate::worker::{Killer, Ready, Worker};
 use anyhow::{bail, Context, Result};
 use audio_core::{Segment, StreamId};
@@ -159,6 +160,15 @@ pub struct PoolConfig {
     /// on purpose.
     pub queue_capacity: Option<usize>,
     pub decode_timeout: Duration,
+    /// Composes each segment's prompt at the moment a worker takes it (P25),
+    /// replacing whatever the segment was cut with.
+    ///
+    /// Here rather than in the segmenter because part of the prompt is the
+    /// previous segment's *result*, which does not exist yet when the next one
+    /// is cut — see [`crate::prompt`]. `None` sends each segment with the
+    /// prompt it already carries, which is what the tests that drive the pool
+    /// directly rely on.
+    pub prompter: Option<Arc<Prompter>>,
 }
 
 impl PoolConfig {
@@ -171,6 +181,7 @@ impl PoolConfig {
             threads_per_worker: DEFAULT_THREADS_PER_WORKER,
             queue_capacity: None,
             decode_timeout: DEFAULT_DECODE_TIMEOUT,
+            prompter: None,
         }
     }
 }
@@ -661,6 +672,12 @@ fn worker_loop(
     live: Arc<AtomicUsize>,
 ) {
     while let Some(mut job) = queue.pop() {
+        // Now and not when the segment was cut: this is the latest moment the
+        // predecessor's text can have arrived by. A retried segment is
+        // composed again, and may find it this time.
+        if let Some(prompter) = &config.prompter {
+            job.segment.initial_prompt = prompter.compose(&job.segment);
+        }
         slot.begin(Instant::now() + config.decode_timeout);
         let result = worker.transcribe(&job.segment);
         let killed = slot.end();

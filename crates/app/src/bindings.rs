@@ -103,14 +103,16 @@ export const MAX_SEGMENT_MS_MAX = {max_segment_max};
 
 /**
  * The three detection thresholds as they stand when nobody has moved them
- * (P12). Mirrors `config::Tuning::default()`, which is itself the constants
- * the app compiled in before they were settings — so a file written before
- * that and a fresh install describe the same pipeline.
+ * (P12), and whether a channel's previous sentence is carried into its next
+ * prompt (P25). Mirrors `config::Tuning::default()`, which is itself the
+ * constants the app compiled in before they were settings — so a file written
+ * before that and a fresh install describe the same pipeline.
  */
 export const DEFAULT_TUNING = {{
   silenceTimeoutMs: {default_silence},
   maxSegmentMs: {default_max_segment},
   speechThresholdPercent: {default_threshold},
+  carryContext: {default_carry},
 }};
 "#,
         version = crate::config::VERSION,
@@ -127,6 +129,7 @@ export const DEFAULT_TUNING = {{
         default_silence = crate::config::Tuning::default().silence_timeout_ms,
         default_max_segment = crate::config::Tuning::default().max_segment_ms,
         default_threshold = crate::config::Tuning::default().speech_threshold_percent,
+        default_carry = crate::config::Tuning::default().carry_context,
     )
 }
 

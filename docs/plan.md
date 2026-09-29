@@ -135,6 +135,10 @@ for now, with the reason recorded in the package.
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
 | P20 | Streaming recognition as a second engine | **Open** | Everything — it is a measurement before it is a feature |
 | P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that waits on a Developer ID, see P13 |
+| P22 | Replaying a bubble's audio | **Open** | Everything — an idea of 2026-09-28 |
+| P23 | "Speaking…" placeholder | **Open** | Everything — an idea of 2026-09-28 |
+| P24 | Ticker window | **Open** | Everything — an idea of 2026-09-28 |
+| P25 | Channel context for the model | **Partial** | Built on 2026-09-28; the sidecar test with a description and an evening in the house are missing |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -2042,6 +2046,203 @@ first launch on a machine that has never seen it, which needs a build somebody
 can install, so it is the same acceptance half P11 is waiting on and it belongs
 to P13.
 
+### P22 — Replaying a bubble's audio — **Open**
+
+*An idea of 2026-09-28, not yet a decision to build.*
+
+**What it is.** A play button on a bubble that plays what was actually said —
+the audio whisper was given for it, from memory. It is for the moment the text
+is plausible and wrong: a cue number, a name, a word in the noise of a
+beltpack. Today the operator can only guess; with this, they listen.
+
+**Why it fits.** The segmenter already cuts exactly the audio that belongs to
+a bubble, at 16 kHz mono, and hands it to the pool (P3, P5). Keeping it for a
+while after the transcript comes back is a buffer, not a pipeline. And because
+it is the segment and not the raw channel, it plays what passed the speech
+gate — which makes it a diagnostic for P12's thresholds as well: a bubble whose
+first word is missing and whose audio starts mid-word says the gate opened
+late, not that whisper misheard.
+
+**The shape it would take.**
+
+- The segment's samples are kept beside the transcript, keyed by
+  `(stream, seq)`, and a bubble that merged several segments plays them in
+  order.
+- **Memory only, bounded by time and by bytes.** 16 kHz as `i16` is ~1.9 MB per
+  minute of *speech* per channel, and only speech is kept — silence never
+  becomes a segment. A limit in minutes (a setting, ten by default) and a hard
+  byte ceiling behind it; the oldest goes first. A bubble whose audio has been
+  dropped loses its button rather than failing when pressed.
+- This keeps P10's decision intact: nothing reaches the disk, and a killed app
+  takes the audio with it, exactly as it takes the chat. **Clear all
+  communication** clears the audio too — it is the same crew communication.
+- Played through the webview, as a WAV fetched by one command, so the system
+  output is the default and a choice of output device can come later if the
+  house asks for it.
+- The LAN remote gets it through the same command, since it is a full peer
+  (P16). A bubble's audio is a few hundred kilobytes; the network is not the
+  question, the key is.
+
+**Accepted when:** in the house, a bubble whose text came out wrong can be
+listened to in one click, and the audio is the audio of that bubble — no
+neighbour's segment, no gap at a merge.
+
+### P23 — "Speaking…" placeholder — **Open**
+
+*An idea of 2026-09-28, not yet a decision to build.*
+
+**What it is.** The moment the speech gate opens on a channel, a placeholder
+bubble appears in that channel's colour, where its bubble will land, with an
+animated "speaking…". The transcript replaces it. Nothing gets faster, but the
+wait stops being blank: the operator sees at once *who* is talking, and the
+~500 ms silence timeout plus the ~330 ms decode (P20's diagnosis) are spent
+watching a bubble fill rather than watching nothing.
+
+**Why it comes before P20.** It is also the cheapest test of whether P20 is
+worth measuring at all. If the complaint was "I don't see that somebody is
+talking" rather than "the text comes too late", this answers it for an
+afternoon's work instead of a second engine.
+
+**The shape it would take.**
+
+- A new event, `speech-activity`, carrying the stream and *started* / *ended*.
+  Edge-triggered from the segmenter's state, never per frame — the levels event
+  already covers the per-frame case.
+- **Every placeholder has to end.** A gate that opened on a cough, a segment
+  whisper returns empty or only as a non-speech annotation the chat filters
+  out, a segment shed
+  under overload (P5) — each has to remove its placeholder, so the pipeline has
+  to report "this segment produced nothing" rather than staying silent about
+  it. A timeout behind it is the safety net, not the mechanism.
+- A channel whose last bubble is still open (the same speaker continuing, P7's
+  merging) shows the indicator on that bubble instead of a new one.
+- Rules never see a placeholder (P19): they fire on text.
+- It reaches the LAN remote and detached group windows the way every other
+  event does.
+
+**Accepted when:** on a show, nobody reports a placeholder that stayed, and
+the operator can say from the chat which channel is talking before any text
+arrives.
+
+### P24 — Ticker window — **Open**
+
+*An idea of 2026-09-28, not yet a decision to build.*
+
+**What it is.** A small window, always on top, one to three lines high: the
+latest messages of one view, with the channel's colour and label, the newest at
+the edge the reading direction (P7) puts it. For the laptop at FOH beside the
+DAW, where a full chat window costs space nobody has.
+
+**Why it fits.** Detached group windows already exist (P7); this is a variant
+of one that is laid out for the least room rather than a new kind of window.
+It shows one view — a group or everything — and answers to P19's view
+addressing as that view, so a flash meant for the stage manager's group floods
+the ticker showing it and no other.
+
+**The shape it would take.**
+
+- Opened from the sidebar beside "detach", and remembered per view with its
+  position and size, like a detached window.
+- No sidebar, no search, no controls; the text wraps or truncates, it never
+  scrolls. A click brings the main window forward at that message.
+- Always on top through Tauri. **The risk to check first:** on macOS, staying
+  above a DAW in fullscreen needs the window to join all Spaces and sit at a
+  higher window level, which is not what `always_on_top` alone does. That is
+  an hour with the target DAW, and it decides whether this is small or not.
+
+**Accepted when:** the ticker stays readable and on top beside the DAW the
+house actually runs, fullscreen included, for a whole show.
+
+### P25 — Channel context for the model — **Partial**
+
+*An idea of 2026-09-28, built the same day.*
+
+**Built:** `prompt::Prompter` composes each segment's prompt when a worker
+takes it (`PoolConfig::prompter`), in the order and under the rules below; the
+segmenter no longer attaches one. The description is a field on the channel
+(`StoredChannel::description`), a line under each row on the Settings page,
+live through `update_stream_config`, with a per-channel estimate against the
+shared window. Carrying the previous sentence is `Tuning::carry_context`, on by
+default and switched on the Detection page, live like the thresholds. The
+aggregator records only text that reached the chat; a language change forgets
+the channel's sentence. Constants: `CARRY_WITHIN` 10 s, `CARRY_CHARS` 200.
+**Missing:** the sidecar test named under *Accepted when*, the latency cost of
+the longer prompt read off it, and the house.
+
+**What it is.** Two additions to what whisper is told per segment, on top of
+P15's global vocabulary: a **description per channel**, written by the
+operator, and optionally the **previous sentence of the same channel**. Both
+exist to make the decode of *that* channel better — the lighting channel has
+other words than the stage manager's, and a sentence cut in two by the
+segmenter is easier to get right when the model has read its first half.
+
+**What whisper can and cannot do with it — the thing to be clear about.**
+Whisper does not follow instructions. The `initial_prompt` is read as the
+transcript that came *before* this segment, and nothing else. So a description
+like *"This is the lighting channel, please spell cue numbers as digits"* does
+not instruct anything; at best it primes a few words, at worst whisper
+continues it on a quiet channel — the hallucination P15 warns about. What works
+is text that *looks like the channel*: its terms, its names, written the way
+they should come out. *"Licht. Stellwerk, Moving Heads, Fokus, Preset 12,
+Verfolger 2, Blackout."* The editor has to say so beside the box, with an
+example, or it will be filled with instructions.
+
+**The shape it would take.**
+
+- `description` on the channel in the profile, beside the label, the language
+  and the colour — per channel because it describes the patch, in the profile
+  because the patch is. Editable while the session runs, the way labels and
+  languages are.
+- The prompt a segment gets is composed per stream: **global vocabulary, then
+  channel description, then the previous sentence.** The order is not
+  cosmetic: an over-long prompt loses what comes *first* (P15), so what is
+  most specific to this segment goes last and survives.
+- **One budget for all three.** The 224-token window is shared, so P15's
+  estimate has to count the composed prompt per channel, and the warning moves
+  to the channel whose composition is too long. The vocabulary box alone no
+  longer tells the whole story.
+- **The previous sentence is the risky half,** and behind its own switch.
+  Carrying text forward also carries errors forward — a word transcribed wrong
+  once is primed to come out wrong again — and it gives whisper something to
+  continue on silence. So it is only carried within a short gap (the same
+  speaker still talking, seconds rather than minutes), never across a
+  language change on the channel, and never a non-speech annotation the chat
+  filtered out.
+- **The previous sentence may not exist yet.** Segments of one stream are
+  decoded independently, and under a backlog segment *n+1* can be taken by one
+  worker while *n* is still queued or decoding on another — or requeued after a
+  crash (P5). Two consequences. The prompt is composed when a worker **takes**
+  the job, not when the segmenter closes it, as `initial_prompt` is today;
+  without a backlog that is enough, because *n+1* cannot close sooner than
+  one silence timeout plus its own speech after *n*, and *n* decodes in ~330 ms.
+  And when *n*'s text is not there yet, *n+1* goes **without** the previous
+  sentence rather than waiting for it: waiting would serialise the stream
+  exactly when the pool is behind, trading latency — the first priority — for
+  a little precision. Only the direct predecessor counts: if *n* failed, was
+  dropped or came back empty, *n+1* gets no carried text, never *n−1*'s.
+- **The overlap of a forced cut** repeats ~500 ms of audio at the start of the
+  next segment (P3), and with the previous sentence in the prompt those words
+  are also the prompt's last. Whether whisper then drops the duplicate — which
+  would be welcome — or swallows a real word is something to watch in the
+  house, not to assume.
+- **Why not whisper's own context.** The sidecar sets `no_context` on purpose:
+  a worker's state is shared by every stream it decodes, so whisper's built-in
+  carry would hand the lighting channel's sentence to the stage manager's
+  next segment. Carrying it explicitly, per stream, through the prompt is the
+  version of the same idea that respects that.
+- The plumbing is small: `initial_prompt` is already per request
+  (`session.rs`, where every stream today receives the same
+  `config.vocabulary`); this changes what is put into it, not how it travels.
+  The prompt is decoder prefill, so it costs a little latency per token — to be
+  read off the existing sidecar test with a long prompt, not guessed.
+
+**Accepted when:** as for P15, by ear and honestly so: a term that came out
+wrong on one channel and not on the others is fixed by that channel's
+description, without the others changing. Plus one sidecar test in the manner
+of `vocabulary_prompt_prevents_germanising_english_technical_terms`, showing a
+channel description turning a term right that the global vocabulary alone does
+not.
+
 ---
 
 
@@ -2084,6 +2285,12 @@ P20 is drawn nowhere on purpose. It reaches back into P3, P4, P5 and P7 if it
 is ever answered with a yes, and into nothing at all if it is answered with a
 no — and until it has been measured, which of the two it is remains unknown.
 Sequencing it into the graph would claim a decision this file has not made.
+
+P22 to P25, the ideas of 2026-09-28, are not drawn either, for a smaller
+version of the same reason: none is decided yet. Where they would hang is
+plain — P22 off P3 and P5, whose segment it keeps, and P7, which plays it;
+P23 off P3's gate state through P6 into P7; P24 off P7's detached windows and
+P19's view addressing; P25 off P15 and the channel map in P12.
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached, and
 confirmed on real hardware in the live session of 2026-09-21.*
@@ -2137,6 +2344,14 @@ worked from a second machine. What was third is now first.
    is the hardware question in its **Risk** — which channels the interface
    exposes through WASAPI — because it can be answered on the target machine in
    an afternoon and decides the shape of the rest.
+
+**Beside the list, not in it: P22 to P25**, added on 2026-09-28 as ideas. If
+they are taken up, the cheapest first: **P23** is an event and a placeholder,
+and it answers part of P20's question for free; **P25**'s channel description
+is a field and a composed prompt, its previous-sentence half a switch behind
+it; **P24** is small unless the fullscreen check says otherwise; **P22** is the
+largest, a bounded audio store and a player, and the one that pays most on a
+show.
 
 ## Whole-system verification
 

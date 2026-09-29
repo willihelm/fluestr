@@ -59,7 +59,23 @@ gainDb: number,
  * `#[serde(default)]` for the trim's reason: a file written before mute
  * existed describes channels that were all unmuted.
  */
-muted: boolean, };
+muted: boolean, 
+/**
+ * Text that looks like this channel — its terms and names, written the
+ * way they should come out — put into whisper's prompt for this channel
+ * only, after the global vocabulary (P25).
+ *
+ * Not an instruction: whisper reads its prompt as what was said before
+ * the segment, and a sentence telling it what to do is at best ignored
+ * and at worst continued on a quiet channel. On the channel rather than
+ * beside the vocabulary because it describes a position in the patch,
+ * and the patch is the profile's. Carried into the session as
+ * [`crate::session::StreamConfig::description`].
+ *
+ * `#[serde(default)]`: a file written before it existed has channels
+ * with nothing to describe them, which is an empty one.
+ */
+description: string, };
 
 /**
  * The whole configuration file.
@@ -494,4 +510,18 @@ maxSegmentMs: number,
  * Percent rather than a probability for this struct's reason, and `u8`
  * because the range is 0–100 and nothing here needs more.
  */
-speechThresholdPercent: number, };
+speechThresholdPercent: number, 
+/**
+ * Whether a channel's previous sentence goes into the prompt of its next
+ * segment (P25).
+ *
+ * On by default, and a switch rather than a fixture, because it is the
+ * risky half of the context: a word transcribed wrong once is primed to
+ * come out wrong again, and whisper may continue carried text on a quiet
+ * channel. An operator who hears either has to be able to turn it off
+ * during the show. See [`crate::prompt`] for when it lapses on its own.
+ *
+ * `default = "enabled"` so that a file written before this existed gets
+ * the default rather than `false`.
+ */
+carryContext: boolean, };

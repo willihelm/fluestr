@@ -293,7 +293,13 @@
   /// get it the same way and at the same time.
   const liveStream = (
     streamId: number,
-    update: { label?: string; language?: string; gainDb?: number; muted?: boolean },
+    update: {
+      label?: string;
+      language?: string;
+      gainDb?: number;
+      muted?: boolean;
+      description?: string;
+    },
   ) => {
     updateStreamConfig({ streamId, ...update })
       .then(() => (liveError = null))

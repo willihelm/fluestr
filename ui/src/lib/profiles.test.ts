@@ -44,8 +44,16 @@ const anOldFile = <T>(written: unknown): T => written as T;
 const aProfile = (): Profile => {
   const channels = [
     restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false }),
-    // Trimmed, so the round trip has a value to lose.
-    restoreChannel({ channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9, muted: true }),
+    // Trimmed and described, so the round trip has values to lose.
+    restoreChannel({
+      channel: 3,
+      label: "Licht",
+      language: "en",
+      color: "#5fd38d",
+      gainDb: 9,
+      muted: true,
+      description: "Licht. Verfolger 2, Preset 12",
+    }),
   ];
 
   const groups = [restoreGroup("Bühne", [channels[1].key])];
@@ -89,8 +97,24 @@ const stored: StoredProfile = {
   deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
   language: "de",
   channels: [
-    { channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false },
-    { channel: 3, label: "Licht", language: "en", color: "#5fd38d", gainDb: 9, muted: true },
+    {
+      channel: 0,
+      label: "Regie",
+      language: "de",
+      color: "#6ea8fe",
+      gainDb: 0,
+      muted: false,
+      description: "",
+    },
+    {
+      channel: 3,
+      label: "Licht",
+      language: "en",
+      color: "#5fd38d",
+      gainDb: 9,
+      muted: true,
+      description: "Licht. Verfolger 2, Preset 12",
+    },
   ],
   groups: [{ name: "Bühne", onTop: false, members: [1] }],
   rules: [
@@ -383,12 +407,14 @@ describe("the configuration as a whole", () => {
       silenceTimeoutMs: 350,
       maxSegmentMs: 4_000,
       speechThresholdPercent: 65,
+      carryContext: false,
     });
 
     expect(config.tuning).toEqual({
       silenceTimeoutMs: 350,
       maxSegmentMs: 4_000,
       speechThresholdPercent: 65,
+      carryContext: false,
     });
   });
 
@@ -420,6 +446,7 @@ describe("the configuration as a whole", () => {
       silenceTimeoutMs: 5,
       maxSegmentMs: 600_000,
       speechThresholdPercent: 250,
+      carryContext: true,
     });
 
     expect(clamped.silenceTimeoutMs).toBeGreaterThanOrEqual(150);
@@ -432,6 +459,7 @@ describe("the configuration as a whole", () => {
       silenceTimeoutMs: Number.NaN,
       maxSegmentMs: Number.NaN,
       speechThresholdPercent: Number.NaN,
+      carryContext: true,
     });
 
     expect(clamped).toEqual(DEFAULT_TUNING);
@@ -763,7 +791,12 @@ describe("adopting a configuration", () => {
       // `fromStoredConfig` drops but both sides default the same way round
       // trips perfectly and is still the bug described above.
       "newest-top",
-      { silenceTimeoutMs: 350, maxSegmentMs: 4_000, speechThresholdPercent: 60 },
+      {
+        silenceTimeoutMs: 350,
+        maxSegmentMs: 4_000,
+        speechThresholdPercent: 60,
+        carryContext: false,
+      },
       true,
       true,
     );

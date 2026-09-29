@@ -117,7 +117,13 @@
     live:
       | ((
           streamId: number,
-          update: { label?: string; language?: string; gainDb?: number; muted?: boolean },
+          update: {
+            label?: string;
+            language?: string;
+            gainDb?: number;
+            muted?: boolean;
+            description?: string;
+          },
         ) => void)
       | null;
     /// The levels to show beside the channels. Empty while nothing is
@@ -484,6 +490,8 @@
             {locked}
             {live}
             {levels}
+            {vocabulary}
+            carry={tuning.carryContext}
           />
 
           {#if meterError}

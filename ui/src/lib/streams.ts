@@ -28,6 +28,12 @@ export interface Channel {
   /// Not the same thing as a channel the device does not have — see
   /// [`absentChannels`]. One is a decision, the other is an interface.
   muted: boolean;
+  /// Text that looks like this channel — its terms and names, written the way
+  /// they should come out — which whisper reads before every segment of this
+  /// channel, after the global vocabulary (P25). Not an instruction: whisper
+  /// takes its prompt as what was said before, and continues rather than
+  /// obeys it.
+  description: string;
 }
 
 /// A trim the backend will accept unchanged.
@@ -84,6 +90,9 @@ export const newChannel = (
     gainDb: 0,
     // Open, for the same reason: a channel is added in order to be heard.
     muted: false,
+    // Nothing to describe it yet: the global vocabulary is the whole prompt
+    // until somebody has heard what this channel gets wrong.
+    description: "",
   };
 };
 
@@ -96,10 +105,13 @@ export const newChannel = (
 /// reused stale keys would collide with the ones a later `newChannel` hands
 /// out.
 export const restoreChannel = (
-  // `muted` optional, unlike the rest: a file written before the M existed
-  // does not carry it, and the frontend reads those files as well as the
-  // backend does.
-  stored: Omit<Channel, "key" | "muted"> & { muted?: boolean },
+  // `muted` and `description` optional, unlike the rest: a file written
+  // before either existed does not carry it, and the frontend reads those
+  // files as well as the backend does.
+  stored: Omit<Channel, "key" | "muted" | "description"> & {
+    muted?: boolean;
+    description?: string;
+  },
 ): Channel => ({
   ...stored,
   key: nextKey++,
@@ -110,6 +122,7 @@ export const restoreChannel = (
   // A file written before mute existed has no such field, and every channel
   // in it was open.
   muted: stored.muted ?? false,
+  description: stored.description ?? "",
 });
 
 /// Every channel put onto one language.
@@ -139,6 +152,7 @@ export const toConfig = (channels: Channel[]): StreamConfig[] =>
     language: c.language.trim().toLowerCase(),
     gainDb: clampGain(c.gainDb),
     muted: c.muted,
+    description: c.description.trim(),
   }));
 
 /// Why the setup cannot be started, or `null` if it can.

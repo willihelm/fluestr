@@ -13,6 +13,12 @@
   // intercom is to hear is a property of the house and its beltpacks, and it
   // outlives any one production.
   //
+  // Beside them, one switch that is not a threshold: whether a channel's
+  // previous sentence is carried into the prompt of its next segment (P25).
+  // Here because it is the same kind of decision — what the pipeline hands
+  // whisper — and because it is the one an operator reaches for when they hear
+  // a wrong word coming back again and again.
+  //
   // **Every change reaches the session that is already running**, on the next
   // segment rather than at the next Start. That is the whole point of the
   // page: an operator turns one of these while somebody talks, and listens to
@@ -40,7 +46,8 @@
   const isDefault = $derived(
     tuning.silenceTimeoutMs === DEFAULT_TUNING.silenceTimeoutMs &&
       tuning.maxSegmentMs === DEFAULT_TUNING.maxSegmentMs &&
-      tuning.speechThresholdPercent === DEFAULT_TUNING.speechThresholdPercent,
+      tuning.speechThresholdPercent === DEFAULT_TUNING.speechThresholdPercent &&
+      tuning.carryContext === DEFAULT_TUNING.carryContext,
   );
 
   const reset = () => (tuning = { ...DEFAULT_TUNING });
@@ -133,6 +140,19 @@
     </p>
   </div>
 
+  <div class="control">
+    <label class="switch">
+      <input type="checkbox" bind:checked={tuning.carryContext} />
+      Carry the previous sentence into the next segment
+    </label>
+    <p class="note">
+      The model reads what the same channel said last before it decodes the next
+      segment, so a sentence cut in two comes out whole. Only within a few seconds, and
+      never across a language change. Turn it off if one wrong word keeps coming back, or
+      if a quiet channel starts repeating what was said before.
+    </p>
+  </div>
+
   <p class="budget">
     Worst case from the last word to the line appearing: <strong>{worstCase}</strong> — the
     ceiling, the pause and about 330 ms of decoding. Somebody who pauses normally waits the
@@ -190,6 +210,19 @@
     font-weight: 400;
     font-variant-numeric: tabular-nums;
     color: var(--text-dim);
+  }
+
+  /* The label reads as the switch's own sentence, not as a heading over a
+     control: there is no number to show beside it. */
+  .control label.switch {
+    justify-content: flex-start;
+    align-items: center;
+    cursor: pointer;
+  }
+
+  .switch input {
+    margin: 0;
+    accent-color: var(--accent);
   }
 
   input[type="range"] {

@@ -36,6 +36,7 @@
 //! That is why [`WorkerPool::submit`] never blocks.
 
 use crate::pool::{Completed, Outcome, PoolConfig, PoolEvent, Reorder, WorkerPool};
+use crate::prompt::Prompter;
 use anyhow::{bail, Context, Result};
 use audio_core::{
     gain::Gain, ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession,
@@ -127,6 +128,13 @@ pub struct StreamConfig {
     /// which is exactly what every channel in it did.
     #[serde(default)]
     pub muted: bool,
+    /// Text that looks like this channel, put into whisper's prompt for it
+    /// after the global vocabulary (P25) — see
+    /// [`crate::config::StoredChannel::description`].
+    ///
+    /// `default` — empty, nothing — for a caller written before it existed.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// A change to one channel of a session that is already running (P6).
@@ -174,6 +182,11 @@ pub struct StreamUpdate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub muted: Option<bool>,
+    /// The channel's description for the model (P25). Empty removes it.
+    /// Reaches the next segment a worker takes, not the ones already decoded.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub description: Option<String>,
 }
 
 /// What the UI sends to start a session.
@@ -512,6 +525,11 @@ pub struct Session {
     /// decoded rather than left in the segmenter until the channel comes
     /// back. That is a comparison the reader makes, not a message it is sent.
     mutes: HashMap<u16, Arc<AtomicBool>>,
+    /// What whisper is told before each segment (P25), shared with the pool
+    /// that reads it and the aggregator that feeds it each channel's last
+    /// sentence. Here so that a description typed during a show, a language
+    /// change and the switch on the Detection page reach it.
+    prompter: Arc<Prompter>,
     /// The running state exactly as it was announced.
     ///
     /// Kept so an update can re-announce it — same session id, same zero point,
@@ -658,6 +676,17 @@ impl Session {
                 );
             }
         }
+        // Every stream's description, the absent ones included: a stream id
+        // with no pipeline never produces a segment to compose for, and one
+        // that is patched later in the session still finds its text here.
+        let prompter = Arc::new(Prompter::new(
+            config.vocabulary.clone(),
+            config.tuning.carry_context,
+        ));
+        for (index, stream) in config.streams.iter().enumerate() {
+            prompter.set_description(index as u16, &stream.description);
+        }
+        pool_config.prompter = Some(prompter.clone());
         let (pool, results) = WorkerPool::spawn(pool_config).context("starting the sidecar")?;
         let pool = Arc::new(pool);
         let ready = pool.ready().clone();
@@ -752,9 +781,11 @@ impl Session {
                         language_mode: LanguageMode::Fixed {
                             language: LanguageCode::new(&stream.language),
                         },
-                        // The same vocabulary on every stream — see
-                        // [`SessionConfig::vocabulary`].
-                        initial_prompt: config.vocabulary.clone(),
+                        // None: the pool composes the prompt when a worker
+                        // takes the segment — vocabulary, description and the
+                        // previous sentence, which does not exist yet at this
+                        // point. See [`crate::prompt`].
+                        initial_prompt: None,
                         ..Default::default()
                     },
                 ),
@@ -776,7 +807,13 @@ impl Session {
         let stop = Arc::new(AtomicBool::new(false));
         let (languages, language_rx) = mpsc::channel();
         let (tuning, tuning_rx) = mpsc::channel();
-        let aggregating = spawn_aggregator(session_id, results, labels.clone(), events.clone());
+        let aggregating = spawn_aggregator(
+            session_id,
+            results,
+            labels.clone(),
+            prompter.clone(),
+            events.clone(),
+        );
 
         // The session's zero point, read once in both clocks. `started_at_ms`
         // is what the UI adds a bubble's offset to; `started` is what the
@@ -835,6 +872,7 @@ impl Session {
                 tuning,
                 gains,
                 mutes,
+                prompter,
                 running: std::sync::Mutex::new(state.clone()),
                 events,
             },
@@ -914,7 +952,16 @@ impl Session {
             tracing::info!(stream_id = update.stream_id, muted, "stream mute changed");
         }
 
+        if let Some(description) = update.description {
+            self.prompter
+                .set_description(update.stream_id, &description);
+        }
+
         if let Some(language) = update.language {
+            // What the channel said in the old language is no context for the
+            // new one. The prompter would also refuse it by comparing the two,
+            // but only once a segment in the new language exists to compare.
+            self.prompter.forget(update.stream_id);
             // A closed channel means the processing thread has already left —
             // the device was unplugged, or Stop is in flight. Not worth an
             // error: the session is ending, and there is no segmenter left for
@@ -942,6 +989,9 @@ impl Session {
     /// processing thread has left, the session is ending, and there are no
     /// segmenters for the change to reach.
     pub fn update_tuning(&self, tuning: crate::config::Tuning) {
+        // Straight to the prompter rather than through the processing thread:
+        // it is read by the workers, not by the segmenters.
+        self.prompter.set_carry(tuning.carry_context);
         let _ = self.tuning.send(tuning);
     }
 
@@ -1297,6 +1347,7 @@ fn spawn_aggregator(
     session_id: u64,
     results: Receiver<PoolEvent>,
     labels: Labels,
+    prompter: Arc<Prompter>,
     events: Arc<dyn EventSink>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
@@ -1310,7 +1361,7 @@ fn spawn_aggregator(
                 match event {
                     PoolEvent::Completed(completed) => {
                         for ready in reorder.accept(completed) {
-                            emit(session_id, &events, &labels, ready, &mut dropped);
+                            emit(session_id, &events, &labels, &prompter, ready, &mut dropped);
                         }
                     }
                     // Not a session error: the pool healed itself, and the
@@ -1331,7 +1382,7 @@ fn spawn_aggregator(
             // to arrive. Holding its successors back now would lose the last
             // words spoken rather than the one segment that went astray.
             for ready in reorder.drain() {
-                emit(session_id, &events, &labels, ready, &mut dropped);
+                emit(session_id, &events, &labels, &prompter, ready, &mut dropped);
             }
 
             match fatal {
@@ -1346,6 +1397,7 @@ fn emit(
     session_id: u64,
     events: &Arc<dyn EventSink>,
     labels: &Labels,
+    prompter: &Prompter,
     completed: Completed,
     dropped: &mut HashMap<u16, u64>,
 ) {
@@ -1414,6 +1466,10 @@ fn emit(
                 "transcript"
             );
             tracing::debug!(stream_id, seq, text = %text, "transcript text");
+
+            // What reached the chat and nothing else: text that was filtered
+            // above is never context for the next segment.
+            prompter.remember(stream_id, seq, t_end, detected_language.as_deref(), &text);
 
             events.transcript(TranscriptEvent {
                 session_id,
@@ -1573,7 +1629,13 @@ mod tests {
                 .map(|(id, label)| (id, label.to_string()))
                 .collect(),
         ));
-        let handle = spawn_aggregator(session_id, rx, labels, sink);
+        let handle = spawn_aggregator(
+            session_id,
+            rx,
+            labels,
+            Arc::new(Prompter::new(None, true)),
+            sink,
+        );
         for event in events {
             tx.send(event).unwrap();
         }
@@ -1597,7 +1659,13 @@ mod tests {
             0,
             "Regie".to_string(),
         )])));
-        let handle = spawn_aggregator(1, rx, labels.clone(), sink);
+        let handle = spawn_aggregator(
+            1,
+            rx,
+            labels.clone(),
+            Arc::new(Prompter::new(None, true)),
+            sink,
+        );
 
         tx.send(spoken(0, "vor der Umbenennung")).unwrap();
         // Waited for, so the rename cannot race the line before it: the point
@@ -1748,6 +1816,46 @@ mod tests {
         let texts = recorder.transcripts.lock().unwrap();
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].text, "Standby für Cue fünf");
+    }
+
+    /// Only what reached the chat becomes the next segment's context (P25).
+    ///
+    /// An annotation carried forward would teach whisper to caption the next
+    /// quiet stretch the same way — the one thing the filter above exists to
+    /// stop.
+    #[test]
+    fn only_text_that_reached_the_chat_is_carried_into_the_next_prompt() {
+        let prompter = Arc::new(Prompter::new(None, true));
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_aggregator(
+            1,
+            rx,
+            Arc::new(std::sync::Mutex::new(HashMap::new())),
+            prompter.clone(),
+            Arc::new(Recorder::default()),
+        );
+        tx.send(spoken_on(0, 0, "Standby für Cue fünf")).unwrap();
+        tx.send(spoken_on(1, 0, "[BREAK]")).unwrap();
+        drop(tx);
+        handle.join().unwrap();
+
+        let next = |stream: u16| Segment {
+            stream_id: StreamId(stream),
+            seq: 1,
+            t_start: Duration::from_millis(600),
+            t_end: Duration::from_millis(1_600),
+            lag: Duration::ZERO,
+            pcm: Vec::new(),
+            language_mode: LanguageMode::Fixed {
+                language: LanguageCode::new("de"),
+            },
+            initial_prompt: None,
+        };
+        assert_eq!(
+            prompter.compose(&next(0)).as_deref(),
+            Some("Standby für Cue fünf")
+        );
+        assert_eq!(prompter.compose(&next(1)), None);
     }
 
     fn closed(lag_ms: u64, seconds: f64) -> Segment {

@@ -97,6 +97,21 @@ pub struct StoredChannel {
     /// existed describes channels that were all unmuted.
     #[serde(default)]
     pub muted: bool,
+    /// Text that looks like this channel — its terms and names, written the
+    /// way they should come out — put into whisper's prompt for this channel
+    /// only, after the global vocabulary (P25).
+    ///
+    /// Not an instruction: whisper reads its prompt as what was said before
+    /// the segment, and a sentence telling it what to do is at best ignored
+    /// and at worst continued on a quiet channel. On the channel rather than
+    /// beside the vocabulary because it describes a position in the patch,
+    /// and the patch is the profile's. Carried into the session as
+    /// [`crate::session::StreamConfig::description`].
+    ///
+    /// `#[serde(default)]`: a file written before it existed has channels
+    /// with nothing to describe them, which is an empty one.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// A named view onto some of the channels.
@@ -383,6 +398,19 @@ pub struct Tuning {
     /// Percent rather than a probability for this struct's reason, and `u8`
     /// because the range is 0–100 and nothing here needs more.
     pub speech_threshold_percent: u8,
+    /// Whether a channel's previous sentence goes into the prompt of its next
+    /// segment (P25).
+    ///
+    /// On by default, and a switch rather than a fixture, because it is the
+    /// risky half of the context: a word transcribed wrong once is primed to
+    /// come out wrong again, and whisper may continue carried text on a quiet
+    /// channel. An operator who hears either has to be able to turn it off
+    /// during the show. See [`crate::prompt`] for when it lapses on its own.
+    ///
+    /// `default = "enabled"` so that a file written before this existed gets
+    /// the default rather than `false`.
+    #[serde(default = "enabled")]
+    pub carry_context: bool,
 }
 
 impl Default for Tuning {
@@ -395,6 +423,7 @@ impl Default for Tuning {
             silence_timeout_ms: segmenter.silence_timeout.as_millis() as u64,
             max_segment_ms: segmenter.max_segment.as_millis() as u64,
             speech_threshold_percent: (audio_core::silero::DEFAULT_ONSET * 100.0).round() as u8,
+            carry_context: true,
         }
     }
 }
@@ -988,6 +1017,7 @@ mod tests {
                 silence_timeout_ms: 350,
                 max_segment_ms: 4_000,
                 speech_threshold_percent: 60,
+                carry_context: false,
             },
             auto_start: true,
             setup_done: true,
@@ -1004,6 +1034,7 @@ mod tests {
                         color: "#6ea8fe".into(),
                         gain_db: 0,
                         muted: false,
+                        description: String::new(),
                     }],
                     groups: vec![],
                     all_channels_flash: false,
@@ -1022,6 +1053,7 @@ mod tests {
                             color: "#6ea8fe".into(),
                             gain_db: 0,
                             muted: false,
+                            description: String::new(),
                         },
                         StoredChannel {
                             channel: 3,
@@ -1036,6 +1068,7 @@ mod tests {
                             // patched but nobody sits on it, and it would
                             // otherwise fill the chat with the room it is in.
                             muted: true,
+                            description: "Licht. Verfolger 2, Preset 12, Blackout.".into(),
                         },
                     ],
                     groups: vec![StoredGroup {
@@ -1163,6 +1196,8 @@ mod tests {
         // And its chat reads the way it read then: a file with nothing to say
         // about the direction must not come back turned over.
         assert_eq!(config.chat_sort, SortDirection::NewestBottom);
+        // And its channels have nothing to describe them to the model.
+        assert_eq!(config.profiles[0].channels[0].description, "");
     }
 
     /// The acceptance criterion P19 is signed off against: a version 1 file
@@ -1399,6 +1434,9 @@ mod tests {
         assert_eq!(loaded.tuning.max_segment_ms, *Tuning::MAX_SEGMENT_MS.end());
         assert_eq!(loaded.tuning.speech_threshold_percent, 100);
         assert_eq!(loaded.tuning.speech_threshold(), 1.0);
+        // Written before the switch existed: the context is carried, which is
+        // the default, rather than switched off by a field that is missing.
+        assert!(loaded.tuning.carry_context);
     }
 
     #[test]
@@ -1451,7 +1489,12 @@ mod tests {
         );
         assert_eq!(
             keys(&json["tuning"]),
-            ["maxSegmentMs", "silenceTimeoutMs", "speechThresholdPercent"]
+            [
+                "carryContext",
+                "maxSegmentMs",
+                "silenceTimeoutMs",
+                "speechThresholdPercent"
+            ]
         );
         assert_eq!(
             keys(&json["profiles"][0]),
@@ -1459,7 +1502,15 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
-            ["channel", "color", "gainDb", "label", "language", "muted"]
+            [
+                "channel",
+                "color",
+                "description",
+                "gainDb",
+                "label",
+                "language",
+                "muted"
+            ]
         );
         // The second profile, because it is the one with groups in it.
         assert_eq!(
