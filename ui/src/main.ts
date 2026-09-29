@@ -6,14 +6,16 @@
 // the query string says it in a browser; both are readable before the first
 // paint, so a detached view never renders the main view for a frame and then
 // replaces it. See `windows.ts`. A ticker (P24) is a detached view laid out
-// for the least room, told apart by its own label prefix.
+// for the least room, told apart by its own label prefix. The shoutbox window
+// (P26) is no view at all but the shoutbox's controls, under a label of its own.
 
 import { mount } from "svelte";
 import App from "./App.svelte";
 import GroupWindow from "./lib/GroupWindow.svelte";
 import TickerWindow from "./lib/TickerWindow.svelte";
+import ShoutboxWindow from "./lib/ShoutboxWindow.svelte";
 import RemoteGate from "./lib/RemoteGate.svelte";
-import { currentGroup, currentTicker } from "./lib/windows";
+import { currentGroup, currentTicker, isShoutboxWindow } from "./lib/windows";
 import { watchForAttention } from "./lib/flash";
 import { isRemote } from "./lib/transport";
 import "./app.css";
@@ -34,9 +36,11 @@ if (isRemote) watchForAttention();
 // what puts the key screen in front of a browser that has nothing to get in
 // with.
 //
-// A ticker skips it: it only exists in the app, where the gate lets
-// everything through anyway.
-export default ticker !== null
+// A ticker skips it, and so does the shoutbox window: both only exist in the
+// app, where the gate lets everything through anyway.
+export default isShoutboxWindow()
+  ? mount(ShoutboxWindow, { target })
+  : ticker !== null
   ? mount(TickerWindow, { target, props: { view: ticker } })
   : group === null
     ? mount(RemoteGate, { target, props: { view: App } })

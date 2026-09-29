@@ -599,7 +599,7 @@ export const reuseKeys = (fresh: Profile[], previous: Profile[]): Profile[] =>
 /// its own field order and fills in what the file left out. Comparing the raw
 /// JSON would call every one of those a foreign change, which is the same
 /// thing as having no echo suppression at all.
-export const canonical = (config: StoredConfig): string =>
+export const canonical = (config: unknown): string =>
   JSON.stringify(config, (_key, value) =>
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? Object.fromEntries(

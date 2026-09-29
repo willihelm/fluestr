@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "shoutbox-window",
+  "description": "What the shoutbox window (P26) needs beyond the default capability: to put itself in front of other windows, like a plug-in window beside the DAW. Its own file, so that what it may do never widens what any other window may.",
+  "windows": ["shoutbox"],
+  "permissions": ["core:window:allow-set-always-on-top"]
+}

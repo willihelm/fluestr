@@ -6,10 +6,16 @@
   // shoutbox that stopped is a position that went deaf without anybody
   // noticing, because nobody was talking at the time. So its state is on
   // screen for as long as it is switched on, and red when it is not running.
+  //
+  // Its name opens the shoutbox window, in the app: the controls beside the
+  // DAW, like a plug-in's. In a browser it is only a name — the shoutbox is
+  // tuned there on the Settings page.
 
   import { onMount } from "svelte";
   import {
+    isRemote,
     onShoutboxStatus,
+    openShoutboxWindow,
     setShoutboxLive,
     shoutboxStatus,
     type ShoutboxStatus,
@@ -55,7 +61,18 @@
 {#if shoutbox?.enabled}
   <span class="badge" {title}>
     <span class="dot" class:ok={running} class:bad={status?.state === "failed"}>●</span>
-    <span>Shoutbox</span>
+    {#if isRemote}
+      <span>Shoutbox</span>
+    {:else}
+      <button
+        type="button"
+        class="open"
+        onclick={() => void openShoutboxWindow().catch((e) => console.warn("the shoutbox window did not open:", e))}
+        title="Open the shoutbox in a window of its own"
+      >
+        Shoutbox
+      </button>
+    {/if}
     {#if gain !== null}
       <span class="gain">{gain > 0 ? "+" : ""}{gain} dB</span>
     {:else if status?.state === "failed"}
@@ -110,6 +127,19 @@
     font-size: 0.75rem;
     font-weight: 600;
     cursor: pointer;
+  }
+
+  button.open {
+    border: none;
+    padding: 0;
+    font-size: inherit;
+    font-weight: inherit;
+    color: inherit;
+  }
+
+  button.open:hover {
+    color: var(--text);
+    text-decoration: underline;
   }
 
   button.on {

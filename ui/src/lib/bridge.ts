@@ -313,6 +313,27 @@ export const openTickerWindow = (group: GroupView, name: string): Promise<void> 
     geometry: loadGeometry(group),
   });
 
+/// Opens the shoutbox window (P26), or brings it forward. Desktop only, like
+/// a ticker: the status bar does not offer it in a browser.
+export const openShoutboxWindow = (): Promise<void> => invoke<void>("open_shoutbox_window");
+
+/// The shoutbox window asking for its edit to be stored.
+///
+/// To the main window rather than to the backend, for `requestGroupOnTop`'s
+/// reason: the configuration has one writer, and it saves the whole file
+/// through its debounce. `profile` is the profile's position, so an edit that
+/// crosses a profile switch lands on the profile it was made to or nowhere.
+export interface ShoutboxEdit {
+  profile: number;
+  shoutbox: StoredShoutbox;
+}
+
+export const requestShoutboxEdit = (profile: number, shoutbox: StoredShoutbox) =>
+  emit("shoutbox-edit", { profile, shoutbox } satisfies ShoutboxEdit);
+
+export const onShoutboxEdit = (fn: (e: ShoutboxEdit) => void): Promise<UnlistenFn> =>
+  on<ShoutboxEdit>("shoutbox-edit", (payload) => fn(payload));
+
 /// A ticker asking the main window to show one of its lines (P24).
 ///
 /// `view` is the view the ticker shows, so the main window can switch to it

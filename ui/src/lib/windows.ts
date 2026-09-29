@@ -90,6 +90,23 @@ export const currentTicker = (): GroupView | null => {
   }
 };
 
+/// The label of the shoutbox window (P26), kept in step with
+/// `SHOUTBOX_WINDOW` on the Rust side. One window and not one per view: there
+/// is one shoutbox, the active profile's.
+export const SHOUTBOX_WINDOW = "shoutbox";
+
+/// Whether this window is the shoutbox window. Only ever in the app, like a
+/// ticker: in a browser the shoutbox is tuned on the Settings page.
+export const isShoutboxWindow = (): boolean => {
+  if (isRemote) return false;
+
+  try {
+    return getCurrentWindow().label === SHOUTBOX_WINDOW;
+  } catch {
+    return false;
+  }
+};
+
 /// The view a URL asks for, or `null` for the main view.
 ///
 /// As strict as `groupIndexOf`, and for the same reason: a view of group `NaN`

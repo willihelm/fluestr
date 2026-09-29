@@ -45,6 +45,7 @@
     loadConfig,
     onCleared,
     onConfigChanged,
+    onShoutboxEdit,
     onConnection,
     onGroupOnTop,
     onRevealMessage,
@@ -930,6 +931,13 @@
         const target = active.groups[group];
         if (!target || target.onTop === onTop) return;
         target.onTop = onTop;
+      }),
+      // An edit made in the shoutbox window (P26), stored here for the
+      // reason the pin above is: the configuration has one writer. The
+      // Settings page, open or not, shows it the moment it lands.
+      onShoutboxEdit(({ profile, shoutbox }) => {
+        const target = profiles[profile];
+        if (target) target.outputs.shoutbox = shoutbox;
       }),
       // A ticker's line clicked (P24). The chat is shown — Settings is a
       // dialog over it, and every field there saves as it is typed — and put

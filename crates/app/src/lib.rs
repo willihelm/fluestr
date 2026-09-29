@@ -525,6 +525,42 @@ fn open_group_window<R: Runtime>(
         })
 }
 
+/// The label of the shoutbox window (P26). Kept in step with
+/// `SHOUTBOX_WINDOW` in `ui/src/lib/windows.ts`.
+pub const SHOUTBOX_WINDOW: &str = "shoutbox";
+
+/// Opens the shoutbox window (P26), or brings it forward.
+///
+/// Its controls — mute, trim, the readings and the curve — in a window of
+/// their own, like a plug-in's beside the DAW. One window, because there is
+/// one shoutbox: the active profile's. It stays open across a profile switch
+/// and follows the new profile, since it is not a view of any of its
+/// channels.
+#[tauri::command]
+fn open_shoutbox_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window(SHOUTBOX_WINDOW) {
+        let _ = existing.unminimize();
+        let _ = existing.show();
+        return existing.set_focus().map_err(|err| err.to_string());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        SHOUTBOX_WINDOW,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Shoutbox — Fluestr")
+    // The curve beside its four fields, and the readings above them.
+    .inner_size(760.0, 520.0)
+    .min_inner_size(420.0, 320.0)
+    .build()
+    .map(|_| ())
+    .map_err(|err| {
+        tracing::error!(error = ?err, "opening the shoutbox window failed");
+        err.to_string()
+    })
+}
+
 /// Closes every detached group window, and every ticker (P24).
 ///
 /// Called when the active profile changes. A group window is a view onto a
@@ -767,6 +803,7 @@ pub fn run() {
             request_attention,
             open_group_window,
             close_group_windows,
+            open_shoutbox_window,
             ticker::open_ticker_window,
             ticker::focus_main_window
         ])
