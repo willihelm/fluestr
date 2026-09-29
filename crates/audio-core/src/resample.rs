@@ -199,6 +199,63 @@ impl Resampler {
     }
 }
 
+/// Converts a whole mono buffer from `from` Hz to `to` Hz, off the realtime
+/// path (P22).
+///
+/// For a replay: a bubble's audio is kept at 16 kHz and played at whatever
+/// the output runs at. rubato already starts its output at the input's first
+/// sample; what this adds is flushing the filter's tail out of the back, so
+/// the result is the same audio, of the same length at the new rate — a
+/// replay that loses its last syllable would be the one thing worse than
+/// none.
+pub fn convert(samples: &[f32], from: u32, to: u32) -> Result<Vec<f32>> {
+    if from == 0 || to == 0 {
+        return Err(AudioError::Resample("sample rate is zero".into()));
+    }
+    if from == to || samples.is_empty() {
+        return Ok(samples.to_vec());
+    }
+
+    let parameters = SincInterpolationParameters {
+        sinc_len: SINC_LEN,
+        f_cutoff: calculate_cutoff(SINC_LEN, window()),
+        oversampling_factor: OVERSAMPLING,
+        interpolation: SincInterpolationType::Linear,
+        window: window(),
+    };
+    let ratio = to as f64 / from as f64;
+    let mut resampler = SincFixedIn::<f32>::new(ratio, 1.0, parameters, CHUNK_FRAMES, 1)
+        .map_err(|e| AudioError::Resample(e.to_string()))?;
+
+    // How far the filter lags, which is how much input past the end has to
+    // be fed as zeros before the last real sample is out.
+    let delay = resampler.output_delay();
+    let expected = (samples.len() as f64 * ratio).round() as usize;
+    let mut out = Vec::with_capacity(expected + delay + 2 * CHUNK_FRAMES);
+    let mut input = resampler.input_buffer_allocate(true);
+    let mut output = resampler.output_buffer_allocate(true);
+
+    let mut position = 0;
+    // Zeros after the end until the delayed tail is out as well.
+    while out.len() < expected + delay {
+        let chunk = resampler.input_frames_next();
+        let take = chunk.min(samples.len().saturating_sub(position));
+        input[0][..take].copy_from_slice(&samples[position..position + take]);
+        input[0][take..chunk].fill(0.0);
+        position += take;
+        let (_, written) = resampler
+            .process_into_buffer(&input, &mut output, None)
+            .map_err(|e| AudioError::Resample(e.to_string()))?;
+        out.extend_from_slice(&output[0][..written]);
+    }
+
+    out.truncate(expected);
+    for sample in &mut out {
+        *sample = sample.clamp(-1.0, 1.0);
+    }
+    Ok(out)
+}
+
 /// One stream's processing side: drain the ring, resample, hand on 16 kHz mono.
 ///
 /// Deliberately not a thread. The caller owns the scheduling — P3 will pull
@@ -501,5 +558,28 @@ mod tests {
             "12 kHz tone folded to 4 kHz: {alias:.6} ({:.0} dB below full scale)",
             20.0 * alias.max(f32::MIN_POSITIVE).log10()
         );
+    }
+
+    #[test]
+    fn a_whole_replay_keeps_its_length_and_its_timing() {
+        // A click half a second into a 16 kHz buffer has to land half a
+        // second into the 48 kHz one: the filter's delay is taken off.
+        let mut input = vec![0.0f32; SAMPLE_RATE as usize];
+        input[SAMPLE_RATE as usize / 2] = 1.0;
+        let out = convert(&input, SAMPLE_RATE, 48_000).unwrap();
+        assert_eq!(out.len(), 48_000);
+        let (at, _) = out.iter().enumerate().fold((0, 0.0f32), |best, (i, &s)| {
+            if s.abs() > best.1 {
+                (i, s.abs())
+            } else {
+                best
+            }
+        });
+        assert!((at as i64 - 24_000).abs() <= 3, "the click landed at {at}");
+
+        // And the tone is still the tone.
+        let tone = convert(&sine(1_000.0, SAMPLE_RATE, 1.0), SAMPLE_RATE, 48_000).unwrap();
+        let level = magnitude_at(&tone[4_800..43_200], 1_000.0, 48_000);
+        assert!((level - 1.0).abs() < 0.05, "{level}");
     }
 }

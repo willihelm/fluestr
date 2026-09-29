@@ -150,6 +150,7 @@ mod tests {
             alerts: Vec::new(),
             actions: Vec::new(),
             flash_views: None,
+            audio: false,
         }
     }
 

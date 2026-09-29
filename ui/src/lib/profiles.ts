@@ -25,6 +25,7 @@ import { restoreRule, type Rule } from "./rules";
 import { DEFAULT_DIRECTION, type SortDirection } from "./sort";
 import {
   CONFIG_VERSION,
+  DEFAULT_OUTPUTS,
   DEFAULT_TUNING as GENERATED_TUNING,
   MAX_SEGMENT_MS_MAX,
   MAX_SEGMENT_MS_MIN,
@@ -34,6 +35,7 @@ import {
   SILENCE_MS_MIN,
   type DeviceOption,
   type StoredConfig,
+  type StoredOutputs,
   type StoredProfile,
   type StoredRemote,
   type Tuning,
@@ -56,6 +58,33 @@ export const NO_REMOTE: StoredRemote = {
 /// to render before the first save — and the numbers come from the backend's
 /// own constants, so "the default" means one thing on both sides.
 export const DEFAULT_TUNING: Tuning = GENERATED_TUNING;
+
+/// Where audio leaves the app in a profile that never chose (P22, P26):
+/// replays on the system output, no shoutbox. A fresh copy each time, because
+/// a profile's outputs are edited in place and two profiles must not share
+/// one object.
+///
+/// Laid over the defaults field by field, so a file written by a version
+/// that had fewer of them comes back with the rest filled in rather than
+/// `undefined` on the page.
+export const restoreOutputs = (stored?: Partial<StoredOutputs> | null): StoredOutputs => {
+  const base = structuredClone(DEFAULT_OUTPUTS);
+  return {
+    listen: {
+      ...base.listen,
+      ...(stored?.listen ?? {}),
+      output: { ...base.listen.output, ...(stored?.listen?.output ?? {}) },
+    },
+    shoutbox: {
+      ...base.shoutbox,
+      ...(stored?.shoutbox ?? {}),
+      program: { ...base.shoutbox.program, ...(stored?.shoutbox?.program ?? {}) },
+      reference: { ...base.shoutbox.reference, ...(stored?.shoutbox?.reference ?? {}) },
+      output: { ...base.shoutbox.output, ...(stored?.shoutbox?.output ?? {}) },
+      calibrationDb: stored?.shoutbox?.calibrationDb ?? null,
+    },
+  };
+};
 
 /// Thresholds a session can actually be started with.
 ///
@@ -138,6 +167,11 @@ export interface Profile {
   /// neither exists outside a profile. A shared list could hold "anything on
   /// channel 3", and channel 3 is a different channel in the next production.
   rules: Rule[];
+  /// Where audio leaves the app (P22, P26): the listen output replays are
+  /// heard on, and the shoutbox that follows the room. On the profile because
+  /// both are patched on the interface it names. Held in the file's own
+  /// shape: nothing in it is keyed.
+  outputs: StoredOutputs;
 }
 
 let nextKey = 0;
@@ -168,6 +202,7 @@ export const newProfile = (
   // Quiet to begin with, for the reason a new group is: an app that starts by
   // flashing at everything gets its attention requests ignored.
   rules: [],
+  outputs: restoreOutputs(),
 });
 
 /// A profile as the file holds it. Membership translated from channel keys to
@@ -230,6 +265,10 @@ export const toStored = (profile: Profile): StoredProfile => {
       webhook: rule.webhook,
       minIntervalMs: rule.minIntervalMs,
     })),
+    // A copy, so the object the page is editing is not the one on its way to
+    // the backend. Through JSON rather than `structuredClone`, which refuses
+    // the reactive proxy the page holds it in; the shape is plain data.
+    outputs: JSON.parse(JSON.stringify(profile.outputs)) as StoredOutputs,
   };
 };
 
@@ -284,6 +323,9 @@ export const fromStored = (stored: StoredProfile): Profile => {
         minIntervalMs: rule.minIntervalMs ?? 0,
       }),
     ),
+    // A file written before P22 has none, which is no shoutbox and replays
+    // on the system output.
+    outputs: restoreOutputs(stored.outputs),
   };
 };
 

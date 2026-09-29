@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CHARS, MAX_GAP_MS, MAX_SPAN_MS, mergeHistory, toBubbles } from "./bubbles";
+import { MAX_CHARS, MAX_GAP_MS, MAX_SPAN_MS, audible, mergeHistory, toBubbles } from "./bubbles";
 import type { TranscriptEvent } from "./bridge";
 
 // A transcript event with only the fields that decide grouping spelled out.
@@ -19,6 +19,7 @@ const event = (e: Partial<TranscriptEvent> & { tStartMs: number }): TranscriptEv
   latencyMs: 330,
   alerts: [],
   actions: [],
+  audio: true,
   ...e,
 });
 
@@ -208,5 +209,40 @@ describe("mergeHistory", () => {
   it("is the history alone when nothing arrived in between", () => {
     const history = [event({ tStartMs: 0 })];
     expect(mergeHistory(history, [])).toEqual(history);
+  });
+});
+
+describe("replaying a bubble (P22)", () => {
+  it("asks for every part of the bubble, in order", () => {
+    const [bubble] = toBubbles([
+      event({ tStartMs: 0, tEndMs: 1000, seq: 4 }),
+      event({ tStartMs: 1200, tEndMs: 2000, seq: 5 }),
+    ]);
+    expect(bubble.segments).toEqual([
+      { sessionId: 1, streamId: 0, seq: 4 },
+      { sessionId: 1, streamId: 0, seq: 5 },
+    ]);
+  });
+
+  it("has no button if any part arrived without its audio", () => {
+    const [bubble] = toBubbles([
+      event({ tStartMs: 0, tEndMs: 1000 }),
+      event({ tStartMs: 1200, tEndMs: 2000, audio: false }),
+    ]);
+    expect(audible(bubble, null)).toBe(false);
+  });
+
+  it("loses its button once its first part is behind the horizon", () => {
+    const [bubble] = toBubbles([
+      event({ tStartMs: 0, tEndMs: 1000 }),
+      event({ tStartMs: 1200, tEndMs: 2000 }),
+    ]);
+    expect(audible(bubble, null)).toBe(true);
+    expect(audible(bubble, { sessionId: 1, tEndMs: 1000 })).toBe(true);
+    expect(audible(bubble, { sessionId: 1, tEndMs: 1001 })).toBe(false);
+    // An earlier session's line says nothing about this one; a later one
+    // says everything.
+    expect(audible(bubble, { sessionId: 0, tEndMs: 99_999 })).toBe(true);
+    expect(audible(bubble, { sessionId: 2, tEndMs: 0 })).toBe(false);
   });
 });

@@ -27,6 +27,7 @@ const event = (
   tEndMs: tStartMs + 900,
   text,
   detectedLanguage: "de",
+  audio: true,
   decodeMs: 10,
   latencyMs: 20,
   alerts,

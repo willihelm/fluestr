@@ -135,10 +135,11 @@ for now, with the reason recorded in the package.
 | P19 | Rules: triggers and actions | **Done** | One outbound action: a free-text HTTP request, written host-only. The MIDI cue was folded into it — Companion reaches the desk |
 | P20 | Streaming recognition as a second engine | **Open** | Everything — it is a measurement before it is a feature |
 | P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that waits on a Developer ID, see P13 |
-| P22 | Replaying a bubble's audio | **Open** | Everything — an idea of 2026-09-28 |
+| P22 | Replaying a bubble's audio | **Partial** | Built on 2026-09-29, listen output included; not yet used in the house |
 | P23 | "Speaking…" placeholder | **Open** | Everything — an idea of 2026-09-28 |
 | P24 | Ticker window | **Open** | Everything — an idea of 2026-09-28 |
 | P25 | Channel context for the model | **Partial** | Built on 2026-09-28; the sidecar test with a description and an evening in the house are missing |
+| P26 | Shoutbox following the room's level | **Partial** | Built on 2026-09-29 and run on a loopback device; a real mic, a real speaker and a show are missing |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -1992,8 +1993,10 @@ should be made on a running screen before any of this is built.
 first transcription without opening the Settings page on their own and without
 being told which of three models to pick.
 
-`SetupGuide.svelte`, over both pages, in five steps: what the app is, the
-models, the audio interface and its channels, groups, and what to press. What
+`SetupGuide.svelte`, over both pages, in six steps: what the app is, the
+models, the audio interface and its channels, groups, where audio leaves the
+app (the listen output and the shoutbox, P22/P26 — optional, and the Settings
+page's own section), and what to press. What
 it replaces is a fresh install whose entire onboarding was one sentence in the
 status bar — "no speech model installed — download one on the Settings page" —
 which is correct, and which asks a new user to find a section they have no
@@ -2046,9 +2049,23 @@ first launch on a machine that has never seen it, which needs a build somebody
 can install, so it is the same acceptance half P11 is waiting on and it belongs
 to P13.
 
-### P22 — Replaying a bubble's audio — **Open**
+### P22 — Replaying a bubble's audio — **Partial**
 
-*An idea of 2026-09-28, not yet a decision to build.*
+*An idea of 2026-09-28, built on 2026-09-29 together with P26's output layer.*
+
+**Built:** `replay::ReplayStore` keeps each segment as `i16` from the moment
+the processing thread submits it, keyed by `(session, stream, seq)`, and the
+aggregator forgets what turned out not to be speech or was shed. Bounded by
+`Listen::keep_minutes` (ten by default, on the Audio output page) and by
+`replay::MAX_BYTES`; the oldest goes first and moves a *horizon* — one
+`replay-horizon` event rather than a flag per bubble — before which bubbles
+lose their ▶. A merged bubble plays its segments in order with the forced-cut
+overlap trimmed. `play_replay` resamples to the listen output
+(`resample::convert`) and plays it through `playback::Player`, which moves
+buffers in and out of the output callback through rings; the listen output is
+opened at the first replay. `replay_wav` hands the LAN remote a WAV to play in
+its own browser. **Clear all communication** clears the store.
+**Missing:** the house.
 
 **What it is.** A play button on a bubble that plays what was actually said —
 the audio whisper was given for it, from memory. It is for the moment the text
@@ -2076,16 +2093,34 @@ late, not that whisper misheard.
 - This keeps P10's decision intact: nothing reaches the disk, and a killed app
   takes the audio with it, exactly as it takes the chat. **Clear all
   communication** clears the audio too — it is the same crew communication.
-- Played through the webview, as a WAV fetched by one command, so the system
-  output is the default and a choice of output device can come later if the
-  house asks for it.
-- The LAN remote gets it through the same command, since it is a full peer
-  (P16). A bubble's audio is a few hundred kilobytes; the network is not the
-  question, the key is.
+- **Played on an output of its own — the *listen* output — chosen in
+  Settings.** A device and a channel or a pair, typically the headphone out of
+  the interface or of the laptop, so that a replay reaches the operator's ears
+  and nobody else's. Added on 2026-09-29, and it moves playback out of the
+  webview into Rust, onto the output layer P26 introduces: WKWebView cannot be
+  pointed at an output device reliably, and its default is the system output,
+  which on a show machine is often the interface's main outs — the one place a
+  replay must not go.
+- **Or into the shoutbox, on purpose.** The listen target can instead be P26's
+  shoutbox output, for the case where the whole position should hear what was
+  said. The replay is then mixed in *before* P26's gain, so it arrives at the
+  level the room currently needs rather than at a fixed one. Headphones stay
+  the default; the shoutbox is a choice, never a fallback.
+- Until a listen output is chosen, the system output is used, so the feature
+  works without P26 having been set up. A chosen output that is missing at
+  start is not replaced by another device; the button says why it is silent.
+- 16 kHz mono is resampled to the output's rate (`rubato`, P2 the other way
+  round) and sent to both sides of a pair. One replay at a time: pressing a
+  second stops the first, and a playing bubble shows a stop control.
+- The LAN remote plays in **its own browser**, as a WAV fetched through one
+  command, since it is a full peer (P16): somebody sitting elsewhere wants it
+  in their own ears, not in the host's headphones. A bubble's audio is a few
+  hundred kilobytes; the network is not the question, the key is.
 
 **Accepted when:** in the house, a bubble whose text came out wrong can be
 listened to in one click, and the audio is the audio of that bubble — no
-neighbour's segment, no gap at a merge.
+neighbour's segment, no gap at a merge — coming out of the chosen listen
+output and no other.
 
 ### P23 — "Speaking…" placeholder — **Open**
 
@@ -2243,6 +2278,135 @@ of `vocabulary_prompt_prevents_germanising_english_technical_terms`, showing a
 channel description turning a term right that the global vocabulary alone does
 not.
 
+### P26 — Shoutbox following the room's level — **Partial**
+
+*An idea of 2026-09-29, built the same day.*
+
+**Built:** the output half of `AudioBackend` (`output_devices`,
+`open_output`, stable ids for outputs through `stable_id::Direction`),
+`playback::Spreader` for mono onto chosen channels, and
+`audio_core::shoutbox`: A/C weighting after IEC 61672 (tested against its
+table), the `Controller` with the averaging window, the gap gate, the curve,
+separate rise and fall limits and the mic-lost hold, and `ShoutboxSource` —
+program ring with a bounded fill, replay mixed in before the gain, gain ramp,
+instant peak limiter under a hard clamp. `outputs::Engine` follows the active
+profile's `outputs` at startup and on every save, reopens streams only when the
+patch changes, retries a missing device every three seconds and reports
+`shoutbox-status`. Trim and mute go live through `set_shoutbox_live` and are
+the only part a remote may write. The page is **Settings → Audio output**, with
+a calibration helper against an SPL meter and the curve drawn with the current
+point; the status bar carries the shoutbox's gain and mute.
+**Missing:** a real measurement mic and speaker — so far it has run only on a
+loopback device, where it correctly reported the silent mic as lost and held
+the gain — and a show.
+
+**What it is.** One channel of audio passed through the app to a shoutbox —
+the talkback speaker at a position — with its level following an SPL
+measurement microphone, slowly: quiet in the quiet moments of a show, so the
+shoutbox does not carry into the house during a ballad, and above the room in
+the loud ones, so it is still heard in the finale. Installation DSPs call this
+ambient noise compensation; this is it for a position that has a laptop and
+no such DSP. Three routing points, each a device and a channel:
+
+| Point | What it carries |
+|---|---|
+| **Program input** | The audio for the shoutbox — an intercom channel, often one that is also transcribed |
+| **Reference input** | The measurement microphone in the room |
+| **Shoutbox output** | The speaker, optionally with P22's replays mixed in |
+
+P22's *listen* output is the fourth routing point and deliberately a separate
+one, so a replay can go to headphones without the shoutbox hearing it.
+
+**What changes with it — the thing to be clear about.** Until now the app only
+listens. With this it is **in the signal path** for the first time: if it
+hangs, crashes or is quit, the shoutbox goes silent, and because nobody may be
+talking at that moment, nobody notices. That shapes the design more than the
+control law does.
+
+- **Independent of the transcription session.** Stopping a session, changing
+  the model, a sidecar restart (P4, P5) must not be audible on the shoutbox.
+  Today capture is one `CaptureSession` held by the session
+  (`app/src/session.rs`), so the pass-through gets **its own input and output
+  streams** rather than a sink on that capture. Opening the interface a second
+  time costs nothing: CoreAudio is multi-client, and so is WASAPI shared mode
+  (P18). It runs whenever it is switched on and its devices are present.
+- **Visible state.** On/off, program level, measured level and current gain
+  beside the meters of P8, and a stream-health style warning when an output
+  or input of it disappears.
+- **Never louder than set.** A hard ceiling on the gain and a peak limiter
+  behind it, both independent of the curve below.
+- **Never the wrong speaker.** Devices are stored by name in the profile
+  (P12), like the channel map; one that is missing at start leaves the
+  shoutbox off with a warning. Silently falling back to another output could
+  put talkback on the PA, which is the worst failure this package can have.
+
+**The audio path.** At the device's native rate, **not** through the 16 kHz
+pipeline: input callback → lock-free SPSC ring → output callback, the gain
+applied per sample along a smoothed ramp, the limiter last. P1's realtime rules
+hold on both sides — no allocation, no lock, no logging. Latency is two device
+buffers plus the ring's headroom, a target under 20 ms — irrelevant for a
+talkback speaker. **Clocks** are the real question: program input and
+shoutbox output on the same interface share a clock; on two devices they drift
+and the ring runs dry or full over minutes. The first build therefore requires
+both on one device (a macOS aggregate device with drift correction counts);
+an asynchronous resampler steered by the ring's fill level comes second, if
+the house asks for it. The reference input is only measured, never played, so
+it may be on any device.
+
+**The measurement.**
+
+- **Weighted and averaged.** A-weighting by default, C as an option for shows
+  whose low end is the loud part; an Leq over a sliding window of a few seconds
+  (a setting).
+- **Calibration is optional.** An input delivers dBFS, not dB SPL. An offset —
+  read off an SPL meter or set with a 94 dB calibrator — makes the display read
+  dB(A); without it the control works relative, since it only needs *louder*
+  and *quieter*. Calibrated values are what an engineer thinks in, and the
+  only ones that carry from one evening to the next if the preamp gain moves.
+- **The shoutbox hears itself.** The mic is in the same room; if it picks up
+  the shoutbox, louder shoutbox means more measured level means more gain — a
+  positive loop that ends at the ceiling. Installation ANC answers this by
+  measuring in the gaps, and intercom makes that natural: **the level is only
+  measured while the program input is quiet**, behind a gate with a hold
+  (the energy detector of P3 is enough), and **the gain is frozen while the
+  program is active.** Intercom talk lasts seconds, a room changes over tens
+  of seconds, so a frozen gain is the right one — and it has a second virtue:
+  the level never moves in the middle of a sentence, only between them.
+- **A mic that fails reads as a quiet room.** A pulled cable or digital
+  silence would drive the gain to its minimum, and the shoutbox would be
+  inaudible exactly in the finale. Implausible readings — exact zero, below the
+  mic's own noise floor, a drop of tens of dB within a frame — hold the last
+  gain and warn. It fails towards audible.
+
+**The control law.** The gain in dB is a line with two corners: below a
+*quiet level*, the *base gain*; above it, a *slope* in dB of gain per dB of
+room (typically 0.5 to 1); capped at *maximum gain*. Its speed is
+slew-limited, and **rising is faster than falling** — seconds up, tens of
+seconds down — so a single hit does not raise it, a loud song does, and a short
+break in the song does not drop it. Every value is a setting on a Shoutbox page,
+live the way P12's thresholds are, with the curve drawn and the current point
+on it. The operator can always beat the automation: a trim and a mute beside
+the meter.
+
+**LAN remote.** Sees the meters and the gain and may use trim and mute; the
+routing and the curve are host-only, like the webhook in P19 — the outputs are
+the host machine's.
+
+**Build order.** The output layer first — output devices in `AudioBackend`
+beside the input devices, an output stream, resampling to the device rate —
+because it is the smaller half and P22's replay is the easiest test of it.
+Then the pass-through with a fixed gain, then the measurement, then the
+control law.
+
+**Accepted when:** in the house, over a whole show with loud and quiet
+passages, the shoutbox is heard at its position in the loudest part without
+being heard in the house in the quietest; the gain changes between sentences,
+never during one; talking on a quiet stage for a minute does not make it
+climb on its own voice; a pulled mic cable holds the gain and warns; stopping
+and starting a transcription session cannot be heard on the shoutbox. Plus
+unit tests with synthetic levels for the curve, the slew limits and the gap
+gate, and one proving the limiter's ceiling.
+
 ---
 
 
@@ -2290,7 +2454,10 @@ P22 to P25, the ideas of 2026-09-28, are not drawn either, for a smaller
 version of the same reason: none is decided yet. Where they would hang is
 plain — P22 off P3 and P5, whose segment it keeps, and P7, which plays it;
 P23 off P3's gate state through P6 into P7; P24 off P7's detached windows and
-P19's view addressing; P25 off P15 and the channel map in P12.
+P19's view addressing; P25 off P15 and the channel map in P12. P26, added on
+2026-09-29, hangs off P1 — whose `AudioBackend` gains an output half — and off
+P3's energy detector, P8's meters and P12's profile; P22's listen output hangs
+off P26's output layer.
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached, and
 confirmed on real hardware in the live session of 2026-09-21.*
@@ -2352,6 +2519,11 @@ is a field and a composed prompt, its previous-sentence half a switch behind
 it; **P24** is small unless the fullscreen check says otherwise; **P22** is the
 largest, a bounded audio store and a player, and the one that pays most on a
 show.
+
+**P26**, added on 2026-09-29, is larger still and different in kind: it puts
+the app into the signal path. It was built the same day with P22; what both
+need now is an evening in the house — P26 with a measurement mic and the
+shoutbox it is meant to drive, heard from the position and from the house.
 
 ## Whole-system verification
 

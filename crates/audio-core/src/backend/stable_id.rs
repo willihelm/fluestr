@@ -26,28 +26,39 @@
 //! Anything this cannot answer comes back as `None`, and the caller falls back
 //! to the name.
 
+/// Which side of a device a list is about.
+///
+/// Matters for the match, not only for the filter: the catalogue has to hold
+/// exactly the devices cpal enumerated, or an output-only interface takes a
+/// name away from the input device of the same name (P22, P26).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Input,
+    Output,
+}
+
 /// A stable id per name in `names`, in the same order.
 ///
 /// `None` means "no stable id for this device" — not an error: the caller has
 /// the name and is expected to keep using it.
-pub fn assign(names: &[String]) -> Vec<Option<String>> {
-    by_name(names, catalogue())
+pub fn assign(names: &[String], direction: Direction) -> Vec<Option<String>> {
+    by_name(names, catalogue(direction))
 }
 
-/// Every input device the platform can name and identify, in enumeration
-/// order, as `(name, stable id)`.
+/// Every device of one direction the platform can name and identify, in
+/// enumeration order, as `(name, stable id)`.
 #[cfg(target_os = "macos")]
-fn catalogue() -> Vec<(String, String)> {
-    macos::input_devices()
+fn catalogue(direction: Direction) -> Vec<(String, String)> {
+    macos::devices(direction)
 }
 
 #[cfg(windows)]
-fn catalogue() -> Vec<(String, String)> {
-    wasapi::input_devices()
+fn catalogue(direction: Direction) -> Vec<(String, String)> {
+    wasapi::devices(direction)
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-fn catalogue() -> Vec<(String, String)> {
+fn catalogue(_: Direction) -> Vec<(String, String)> {
     // No platform id to read: every device falls back to its name, which is
     // what the whole app did before this module existed.
     Vec::new()
@@ -76,24 +87,31 @@ mod macos {
     use objc2_core_audio::{
         kAudioDevicePropertyDeviceUID, kAudioDevicePropertyStreams, kAudioHardwarePropertyDevices,
         kAudioObjectPropertyElementMain, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
-        kAudioObjectPropertyScopeInput, kAudioObjectSystemObject, AudioObjectGetPropertyData,
-        AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress,
-        AudioObjectPropertySelector,
+        kAudioObjectPropertyScopeInput, kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
+        AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+        AudioObjectPropertyAddress, AudioObjectPropertySelector,
     };
     use objc2_core_foundation::{CFRetained, CFString};
     use std::ffi::c_void;
     use std::mem;
     use std::ptr::{null, NonNull};
 
-    /// `(name, UID)` for every device that has at least one input stream.
+    use super::Direction;
+
+    /// `(name, UID)` for every device that has at least one stream in
+    /// `direction`.
     ///
     /// A device CoreAudio will not name, or will not give a UID for, is left
     /// out entirely rather than half-described: the caller's fallback is the
     /// name it already has from cpal.
-    pub(super) fn input_devices() -> Vec<(String, String)> {
+    pub(super) fn devices(direction: Direction) -> Vec<(String, String)> {
+        let scope = match direction {
+            Direction::Input => kAudioObjectPropertyScopeInput,
+            Direction::Output => kAudioObjectPropertyScopeOutput,
+        };
         device_ids()
             .into_iter()
-            .filter(|&id| has_input(id))
+            .filter(|&id| has_streams(id, scope))
             .filter_map(|id| {
                 let name = string_property(id, kAudioObjectPropertyName)?;
                 let uid = string_property(id, kAudioDevicePropertyDeviceUID)?;
@@ -147,13 +165,13 @@ mod macos {
         ids
     }
 
-    /// Whether the device carries input streams.
+    /// Whether the device carries streams in `scope`.
     ///
     /// The device list is every audio object, output-only interfaces
     /// included, and those must not take a name away from the input device
-    /// the picker is actually offering.
-    fn has_input(device: AudioObjectID) -> bool {
-        let address = address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput);
+    /// the picker is actually offering — nor an input-only one from an output.
+    fn has_streams(device: AudioObjectID, scope: u32) -> bool {
+        let address = address(kAudioDevicePropertyStreams, scope);
         property_size(device, &address).is_some_and(|size| size > 0)
     }
 
@@ -212,28 +230,35 @@ mod wasapi {
     use windows::core::BSTR;
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Media::Audio::{
-        eCapture, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+        eCapture, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
         COINIT_APARTMENTTHREADED, STGM_READ,
     };
 
-    /// `(friendly name, endpoint id)` for every active capture endpoint.
+    use super::Direction;
+
+    /// `(friendly name, endpoint id)` for every active endpoint in
+    /// `direction` — capture for inputs, render for outputs.
     ///
     /// An endpoint that will not give both is left out, as on macOS: the
     /// caller already has its name from cpal.
-    pub(super) fn input_devices() -> Vec<(String, String)> {
+    pub(super) fn devices(direction: Direction) -> Vec<(String, String)> {
         let _com = Com::init();
         // SAFETY: COM is initialised on this thread for the guard's lifetime,
         // which outlives every interface pointer created below.
-        unsafe { endpoints() }.unwrap_or_default()
+        unsafe { endpoints(direction) }.unwrap_or_default()
     }
 
-    unsafe fn endpoints() -> windows::core::Result<Vec<(String, String)>> {
+    unsafe fn endpoints(direction: Direction) -> windows::core::Result<Vec<(String, String)>> {
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-        let collection = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)?;
+        let flow = match direction {
+            Direction::Input => eCapture,
+            Direction::Output => eRender,
+        };
+        let collection = enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)?;
 
         let mut devices = Vec::new();
         for index in 0..collection.GetCount()? {
@@ -370,7 +395,7 @@ mod tests {
     #[test]
     #[ignore = "needs the machine's audio endpoints"]
     fn catalogue_on_this_machine() {
-        let devices = super::catalogue();
+        let devices = super::catalogue(super::Direction::Input);
         for (name, id) in &devices {
             println!("{name:40} {id}");
         }

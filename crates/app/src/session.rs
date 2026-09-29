@@ -37,6 +37,7 @@
 
 use crate::pool::{Completed, Outcome, PoolConfig, PoolEvent, Reorder, WorkerPool};
 use crate::prompt::Prompter;
+use crate::replay::{ClipKey, Horizon, ReplayStore};
 use anyhow::{bail, Context, Result};
 use audio_core::{
     gain::Gain, ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession,
@@ -311,6 +312,13 @@ pub struct TranscriptEvent {
     /// only when `actions` holds `flash`.
     #[serde(default)]
     pub flash_views: Option<Vec<u16>>,
+    /// Whether this segment's audio is held and can be heard again (P22).
+    ///
+    /// True when it arrives, unless replays are switched off; it stops being
+    /// true later without this event changing, which is what the
+    /// `replay-horizon` event is for.
+    #[serde(default)]
+    pub audio: bool,
 }
 
 /// Level and health of one stream.
@@ -450,6 +458,9 @@ pub trait EventSink: Send + Sync + 'static {
     fn levels(&self, event: LevelsEvent);
     fn overload(&self, event: OverloadEvent);
     fn state(&self, event: SessionState);
+    /// Older audio was dropped to make room for newer (P22). A default, so
+    /// a sink that has no chat to mark does not have to say so.
+    fn horizon(&self, _horizon: Horizon) {}
 }
 
 /// Everything one channel needs between the ring and the queue.
@@ -572,6 +583,7 @@ impl Session {
         events: Arc<dyn EventSink>,
         models: Option<crate::models::Resolved>,
         workers: Option<usize>,
+        replay: Arc<ReplayStore>,
     ) -> Result<(Self, SessionState)> {
         if config.streams.is_empty() {
             bail!("no channels configured");
@@ -813,6 +825,7 @@ impl Session {
             labels.clone(),
             prompter.clone(),
             events.clone(),
+            replay.clone(),
         );
 
         // The session's zero point, read once in both clocks. `started_at_ms`
@@ -834,6 +847,8 @@ impl Session {
                 events: events.clone(),
                 device_name: info.name.clone(),
                 started,
+                session_id,
+                replay,
             },
         );
 
@@ -1105,6 +1120,10 @@ struct Wiring {
     /// The session's zero point on the monotonic clock, against which every
     /// segment is dated — see [`anchor`].
     started: Instant,
+    /// What the segments are keyed under in the replay store.
+    session_id: u64,
+    /// Where each segment's audio is kept for replaying (P22).
+    replay: Arc<ReplayStore>,
 }
 
 fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<()> {
@@ -1117,7 +1136,28 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
         events,
         device_name,
         started,
+        session_id,
+        replay,
     } = wiring;
+    // Every segment goes through here on its way to the pool, so this is
+    // where its audio is kept (P22): a copy, before the pool takes it.
+    let (submit_pool, submit_events) = (pool.clone(), events.clone());
+    let submit = move |segment: Segment, now: Instant| {
+        let key = ClipKey {
+            session_id,
+            stream_id: segment.stream_id.0,
+            seq: segment.seq,
+        };
+        if let Some(horizon) = replay.insert(
+            key,
+            segment.t_start.as_millis() as u64,
+            segment.t_end.as_millis() as u64,
+            &segment.pcm,
+        ) {
+            submit_events.horizon(horizon);
+        }
+        submit_pool.submit(segment, now);
+    };
     std::thread::Builder::new()
         .name("processing".into())
         .spawn(move || {
@@ -1220,7 +1260,7 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                             if let Some(mut segment) = pipeline.segmenter.finish() {
                                 let now = Instant::now();
                                 anchor(&mut segment, now - started);
-                                pool.submit(segment, now);
+                                submit(segment, now);
                             }
                         }
                     }
@@ -1237,7 +1277,7 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                         for mut segment in pipeline.segmenter.push(&buffer) {
                             let now = Instant::now();
                             anchor(&mut segment, now - started);
-                            pool.submit(segment, now);
+                            submit(segment, now);
                         }
                     }
                 }
@@ -1274,7 +1314,7 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                 if let Some(mut segment) = pipeline.segmenter.finish() {
                     let now = Instant::now();
                     anchor(&mut segment, now - started);
-                    pool.submit(segment, now);
+                    submit(segment, now);
                 }
             }
         })
@@ -1349,6 +1389,7 @@ fn spawn_aggregator(
     labels: Labels,
     prompter: Arc<Prompter>,
     events: Arc<dyn EventSink>,
+    replay: Arc<ReplayStore>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("aggregate".into())
@@ -1361,7 +1402,15 @@ fn spawn_aggregator(
                 match event {
                     PoolEvent::Completed(completed) => {
                         for ready in reorder.accept(completed) {
-                            emit(session_id, &events, &labels, &prompter, ready, &mut dropped);
+                            emit(
+                                session_id,
+                                &events,
+                                &labels,
+                                &prompter,
+                                &replay,
+                                ready,
+                                &mut dropped,
+                            );
                         }
                     }
                     // Not a session error: the pool healed itself, and the
@@ -1382,7 +1431,15 @@ fn spawn_aggregator(
             // to arrive. Holding its successors back now would lose the last
             // words spoken rather than the one segment that went astray.
             for ready in reorder.drain() {
-                emit(session_id, &events, &labels, &prompter, ready, &mut dropped);
+                emit(
+                    session_id,
+                    &events,
+                    &labels,
+                    &prompter,
+                    &replay,
+                    ready,
+                    &mut dropped,
+                );
             }
 
             match fatal {
@@ -1398,6 +1455,7 @@ fn emit(
     events: &Arc<dyn EventSink>,
     labels: &Labels,
     prompter: &Prompter,
+    replay: &ReplayStore,
     completed: Completed,
     dropped: &mut HashMap<u16, u64>,
 ) {
@@ -1410,6 +1468,14 @@ fn emit(
         outcome,
     } = completed;
     let stream_id = stream_id.0;
+    // The segment's audio, kept since it was submitted (P22). Whatever does
+    // not become a bubble is forgotten here, so the store holds speech and
+    // not the room.
+    let clip = ClipKey {
+        session_id,
+        stream_id,
+        seq,
+    };
 
     match outcome {
         Outcome::Text {
@@ -1449,6 +1515,7 @@ fn emit(
                     reason,
                     "not speech, dropped"
                 );
+                replay.remove(&clip);
                 return;
             }
 
@@ -1497,14 +1564,17 @@ fn emit(
                 alerts: Vec::new(),
                 actions: Vec::new(),
                 flash_views: None,
+                audio: replay.contains(&clip),
             });
         }
         // One segment lost, the session intact — a sidecar that rejected it,
         // or a worker that died with it twice over.
         Outcome::Failed(message) => {
             tracing::warn!(stream_id, seq, message, "a segment was lost");
+            replay.remove(&clip);
         }
         Outcome::Overloaded => {
+            replay.remove(&clip);
             let total = dropped.entry(stream_id).or_default();
             *total += 1;
             tracing::warn!(stream_id, seq, total, "segment dropped, queue full");
@@ -1635,6 +1705,7 @@ mod tests {
             labels,
             Arc::new(Prompter::new(None, true)),
             sink,
+            Arc::new(crate::replay::ReplayStore::default()),
         );
         for event in events {
             tx.send(event).unwrap();
@@ -1665,6 +1736,7 @@ mod tests {
             labels.clone(),
             Arc::new(Prompter::new(None, true)),
             sink,
+            Arc::new(crate::replay::ReplayStore::default()),
         );
 
         tx.send(spoken(0, "vor der Umbenennung")).unwrap();
@@ -1833,6 +1905,7 @@ mod tests {
             Arc::new(std::sync::Mutex::new(HashMap::new())),
             prompter.clone(),
             Arc::new(Recorder::default()),
+            Arc::new(crate::replay::ReplayStore::default()),
         );
         tx.send(spoken_on(0, 0, "Standby für Cue fünf")).unwrap();
         tx.send(spoken_on(1, 0, "[BREAK]")).unwrap();
@@ -2005,6 +2078,7 @@ mod tests {
             alerts: vec![crate::alerts::AlertMatch { start: 8, end: 16 }],
             actions: vec![crate::rules::Action::Highlight],
             flash_views: Some(vec![1]),
+            audio: true,
         })
         .unwrap();
 
@@ -2017,6 +2091,7 @@ mod tests {
         assert_eq!(json["alerts"][0]["end"], 16);
         assert_eq!(json["actions"][0], "highlight");
         assert_eq!(json["flashViews"][0], 1);
+        assert_eq!(json["audio"], true);
     }
 
     #[test]

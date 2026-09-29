@@ -17,6 +17,7 @@ import {
   fromStored,
   fromStoredConfig,
   newProfile,
+  restoreOutputs,
   reuseKeys,
   toStored,
   toStoredConfig,
@@ -88,6 +89,7 @@ const aProfile = (): Profile => {
         minIntervalMs: 1_000,
       }),
     ],
+    outputs: restoreOutputs(),
   };
 };
 
@@ -139,6 +141,7 @@ const stored: StoredProfile = {
       minIntervalMs: 1_000,
     },
   ],
+  outputs: restoreOutputs(),
 };
 
 describe("toStored", () => {
@@ -153,6 +156,31 @@ describe("toStored", () => {
     profile.groups[0].members = [profile.channels[1].key, 12345];
 
     expect(toStored(profile).groups[0].members).toEqual([1]);
+  });
+});
+
+describe("restoreOutputs", () => {
+  it("fills in what a file written before the outputs existed does not have", () => {
+    const outputs = restoreOutputs(null);
+    expect(outputs.shoutbox.enabled).toBe(false);
+    expect(outputs.listen.keepMinutes).toBe(10);
+    expect(outputs.listen.output.deviceId).toBe("");
+  });
+
+  it("keeps what was stored and fills in only what is missing", () => {
+    const outputs = restoreOutputs({
+      shoutbox: { ...restoreOutputs().shoutbox, enabled: true, trimDb: -4 },
+    } as never);
+    expect(outputs.shoutbox.enabled).toBe(true);
+    expect(outputs.shoutbox.trimDb).toBe(-4);
+    expect(outputs.listen.keepMinutes).toBe(10);
+  });
+
+  it("hands every profile an outputs object of its own", () => {
+    const a = restoreOutputs();
+    const b = restoreOutputs();
+    a.shoutbox.muted = true;
+    expect(b.shoutbox.muted).toBe(false);
   });
 });
 

@@ -26,6 +26,8 @@ fn constants() -> String {
 // has nothing to say about them. Written by `export_constants` in
 // `crates/app/src/bindings.rs`.
 
+import type {{ StoredOutputs }} from "./config";
+
 /**
  * Schema version of the configuration file, sent on every save. Mirrors
  * `config::VERSION`; the backend refuses to reinterpret a file claiming a
@@ -114,6 +116,26 @@ export const DEFAULT_TUNING = {{
   speechThresholdPercent: {default_threshold},
   carryContext: {default_carry},
 }};
+
+/**
+ * Where audio leaves the app in a profile that never chose (P22, P26): replays
+ * on the system output, ten minutes kept, no shoutbox. Mirrors
+ * `config::Outputs::default()`.
+ */
+export const DEFAULT_OUTPUTS: StoredOutputs = {default_outputs};
+
+/**
+ * The shoutbox's gain range, for the curve's base and maximum. Mirrors
+ * `config::Shoutbox::GAIN_DB`.
+ */
+export const SHOUTBOX_GAIN_DB_MIN = {shout_gain_min};
+export const SHOUTBOX_GAIN_DB_MAX = {shout_gain_max};
+
+/**
+ * The shoutbox's trim range. Mirrors `config::Shoutbox::TRIM_DB`.
+ */
+export const SHOUTBOX_TRIM_DB_MIN = {shout_trim_min};
+export const SHOUTBOX_TRIM_DB_MAX = {shout_trim_max};
 "#,
         version = crate::config::VERSION,
         custom = crate::models::CUSTOM,
@@ -130,6 +152,12 @@ export const DEFAULT_TUNING = {{
         default_max_segment = crate::config::Tuning::default().max_segment_ms,
         default_threshold = crate::config::Tuning::default().speech_threshold_percent,
         default_carry = crate::config::Tuning::default().carry_context,
+        default_outputs = serde_json::to_string_pretty(&crate::config::Outputs::default())
+            .expect("the default outputs serialise"),
+        shout_gain_min = crate::config::Shoutbox::GAIN_DB.start(),
+        shout_gain_max = crate::config::Shoutbox::GAIN_DB.end(),
+        shout_trim_min = crate::config::Shoutbox::TRIM_DB.start(),
+        shout_trim_max = crate::config::Shoutbox::TRIM_DB.end(),
     )
 }
 

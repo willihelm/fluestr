@@ -258,6 +258,65 @@ members: Array<number>,
 onTop: boolean, };
 
 /**
+ * One input channel of a device, as a route is stored (P26).
+ */
+export type StoredInputRoute = { 
+/**
+ * Empty means "not patched yet".
+ */
+device: string, deviceId: string, 
+/**
+ * Zero-based channel on that device.
+ */
+channel: number, };
+
+/**
+ * How a bubble's audio is heard again (P22).
+ */
+export type StoredListen = { 
+/**
+ * The *listen* output — typically headphones — so a replay reaches the
+ * operator's ears and nobody else's. An empty device is the system
+ * output, which is where replays go until somebody chooses.
+ */
+output: StoredOutputRoute, 
+/**
+ * Into the shoutbox instead, for the position to hear it. Mixed in
+ * before the shoutbox's gain, so it arrives at the level the room needs.
+ */
+toShoutbox: boolean, 
+/**
+ * How many minutes of *speech* are kept for replaying, across every
+ * channel. 0 keeps nothing. Behind it stands a hard byte ceiling —
+ * see `replay::MAX_BYTES`.
+ */
+keepMinutes: number, };
+
+/**
+ * One output of a device, as a route is stored (P22, P26).
+ *
+ * Name and id together, like [`Profile::device`]: the id is what is opened,
+ * the name is how a device that is not plugged in is still named.
+ */
+export type StoredOutputRoute = { 
+/**
+ * Empty for the listen output means the system's default output; for
+ * the shoutbox it means "not patched yet".
+ */
+device: string, deviceId: string, 
+/**
+ * Zero-based output channels the mono signal goes to: one for a
+ * speaker, two for a pair of headphones. Empty is the first two of the
+ * device, or its only one.
+ */
+channels: Array<number>, };
+
+/**
+ * Everything about where audio leaves the app (P22, P26).
+ */
+export type StoredOutputs = { listen: StoredListen, shoutbox: StoredShoutbox, };
+
+/**
  * One production's setup: which interface, which channels, which views.
  */
 export type StoredProfile = { 
@@ -319,7 +378,21 @@ language: string, channels: Array<StoredChannel>, groups: Array<StoredGroup>,
  * `#[serde(default)]` because a file written before P19 has no such
  * field; [`Config::migrate`] is what fills it in for those.
  */
-rules: Array<StoredRule>, };
+rules: Array<StoredRule>, 
+/**
+ * Where audio leaves the app (P22, P26): the output replays are heard
+ * on, and the shoutbox that follows the room.
+ *
+ * On the profile rather than beside it, because both are patched on the
+ * interface the profile names: the shoutbox's program is one of its
+ * intercom channels, and the headphones are on its outputs. A patch
+ * carried to the next production carries these with it.
+ *
+ * `#[serde(default)]` — no shoutbox, replays on the system output —
+ * because a file written before these existed describes an app that
+ * never sent audio anywhere.
+ */
+outputs: StoredOutputs, };
 
 /**
  * Whether the listener runs, and where.
@@ -439,6 +512,86 @@ webhook: Webhook | null,
 minIntervalMs: number, };
 
 /**
+ * The shoutbox that follows the room (P26).
+ *
+ * **Whole numbers throughout**, for [`Tuning`]'s reasons: the file is read
+ * and repaired by hand, and `==` is how a save that changes nothing is told
+ * from one that does. Levels are whole dB, the slope is percent, speeds are
+ * the milliseconds ten decibels take.
+ *
+ * Levels are in dB SPL when [`Shoutbox::calibration_db`] is set, and in
+ * weighted dBFS when it is not. The curve is written in whichever the page
+ * shows, so setting a calibration later moves what the numbers mean — which
+ * the page says beside the box.
+ */
+export type StoredShoutbox = { enabled: boolean, 
+/**
+ * The intercom channel the shoutbox plays.
+ */
+program: StoredInputRoute, 
+/**
+ * The measurement microphone.
+ */
+reference: StoredInputRoute, 
+/**
+ * The speaker. Has to be on the program's interface — one clock, or the
+ * pass-through drifts.
+ */
+output: StoredOutputRoute, weighting: StoredWeighting, 
+/**
+ * The averaging time of the room measurement.
+ */
+windowMs: number, 
+/**
+ * Added to weighted dBFS to read dB SPL, read off an SPL meter or set
+ * with a calibrator. `None` is uncalibrated.
+ */
+calibrationDb?: number | null, 
+/**
+ * Below this room level nothing changes.
+ */
+quietDb: number, 
+/**
+ * The gain at and below the quiet level.
+ */
+baseGainDb: number, 
+/**
+ * dB of gain per dB of room, in percent.
+ */
+slopePercent: number, 
+/**
+ * The most the curve will ask for.
+ */
+maxGainDb: number, 
+/**
+ * How long a rise of 10 dB takes. Faster than the fall, so a loud song
+ * is followed within seconds.
+ */
+riseMs: number, 
+/**
+ * How long a fall of 10 dB takes. Slow, so a break between two loud
+ * numbers does not drop the shoutbox under the next.
+ */
+fallMs: number, 
+/**
+ * Above this pre-gain peak the shoutbox counts as playing, and the room
+ * is not measured — it would be measuring itself.
+ */
+gateDbfs: number, 
+/**
+ * How long it keeps counting as playing after the last word.
+ */
+gateHoldMs: number, 
+/**
+ * Nothing leaves above this, whatever the curve asked for.
+ */
+ceilingDbfs: number, 
+/**
+ * The operator's hand on top of the automation.
+ */
+trimDb: number, muted: boolean, };
+
+/**
  * Which end of the chat new lines arrive at (P7).
  *
  * Stored rather than only chosen in a window, because it is the one thing
@@ -453,6 +606,12 @@ minIntervalMs: number, };
  * caller is asking the same question about the same thing.
  */
 export type StoredSortDirection = "newest-bottom" | "newest-top";
+
+/**
+ * How the room is weighted before it is measured (P26). See
+ * [`audio_core::shoutbox::Weighting`].
+ */
+export type StoredWeighting = "a" | "c" | "z";
 
 /**
  * The three numbers that decide how the pipeline cuts and what it listens

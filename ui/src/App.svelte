@@ -7,6 +7,7 @@
   import ClearCommunication from "./lib/ClearCommunication.svelte";
   import SetupGuide from "./lib/SetupGuide.svelte";
   import ResourceMeter from "./lib/ResourceMeter.svelte";
+  import ShoutboxBadge from "./lib/ShoutboxBadge.svelte";
   import { toConfig, validate, absentChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
   import { forget as forgetInRules } from "./lib/rules";
@@ -1195,6 +1196,9 @@
          reading at the very end of the bar also stops the button moving
          sideways as the numbers in it change width. -->
     <div class="right">
+      {#if active}
+        <ShoutboxBadge bind:shoutbox={active.outputs.shoutbox} />
+      {/if}
       <ClearCommunication empty={messages.length === 0} clear={clearCommunication} />
       <ResourceMeter {usage} />
     </div>

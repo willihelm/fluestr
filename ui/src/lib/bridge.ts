@@ -50,7 +50,21 @@ import type {
   StoredRule,
   StoredSortDirection,
   Tuning,
+  StoredOutputs,
+  StoredOutputRoute,
+  StoredInputRoute,
+  StoredListen,
+  StoredShoutbox,
+  StoredWeighting,
 } from "./generated/config";
+import type {
+  OutputDeviceOption,
+  ReplayStarted,
+  ReplayWav,
+  ShoutboxState,
+  ShoutboxStatus,
+} from "./generated/outputs";
+import type { ClipKey, Horizon } from "./generated/replay";
 import type {
   DownloadStage,
   ModelKind,
@@ -103,6 +117,19 @@ export type {
   StreamUpdate,
   TranscriptEvent,
   Tuning,
+  StoredOutputs,
+  StoredOutputRoute,
+  StoredInputRoute,
+  StoredListen,
+  StoredShoutbox,
+  StoredWeighting,
+  OutputDeviceOption,
+  ReplayStarted,
+  ReplayWav,
+  ShoutboxState,
+  ShoutboxStatus,
+  ClipKey,
+  Horizon,
 };
 
 // The values the two sides agree on that are not types — a schema version, a
@@ -112,6 +139,7 @@ export type {
 export {
   CONFIG_VERSION,
   CUSTOM_MODEL,
+  DEFAULT_OUTPUTS,
   DEFAULT_WORKERS,
   DEFAULT_TUNING,
   GAIN_DB_MAX,
@@ -120,6 +148,10 @@ export {
   MAX_SEGMENT_MS_MIN,
   MAX_WORKERS,
   REMOTE_DEFAULT_PORT,
+  SHOUTBOX_GAIN_DB_MAX,
+  SHOUTBOX_GAIN_DB_MIN,
+  SHOUTBOX_TRIM_DB_MAX,
+  SHOUTBOX_TRIM_DB_MIN,
   SILENCE_MS_MAX,
   SILENCE_MS_MIN,
 } from "./generated/constants";
@@ -399,6 +431,41 @@ export const onWebhookStatus = (fn: (status: WebhookStatus) => void): Promise<Un
   on<WebhookStatus>("webhook-status", (payload) => fn(payload));
 
 export type { WebhookStatus };
+
+// --- Where audio leaves the app (P22, P26) --------------------------------
+//
+// Mirrors `crates/app/src/outputs.rs`. The routes and the curve are part of
+// the profile like everything else on the Settings page and reach the backend
+// through the save; what is asked for here is what the file cannot say — which
+// output devices exist, what the shoutbox is doing — and the two things that
+// cannot wait for a debounce: a replay, and the shoutbox's mute.
+
+export const listOutputDevices = () => call<OutputDeviceOption[]>("list_output_devices");
+
+/// Plays a bubble on this machine's listen output, or into the shoutbox if
+/// that is where the profile sends replays. The app's own windows only: a
+/// browser plays in its own ears — see `replayWav`.
+export const playReplay = (segments: ClipKey[]) =>
+  call<ReplayStarted>("play_replay", { segments });
+export const stopReplay = () => call<void>("stop_replay");
+
+/// A bubble's audio as a base64 WAV, for the LAN remote to play itself.
+export const replayWav = (segments: ClipKey[]) => call<ReplayWav>("replay_wav", { segments });
+
+/// Where the line through the chat is, before which bubbles have lost their
+/// audio. `null` while nothing has been dropped.
+export const replayHorizon = () => call<Horizon | null>("replay_horizon");
+export const onReplayHorizon = (fn: (h: Horizon) => void): Promise<UnlistenFn> =>
+  on<Horizon>("replay-horizon", (payload) => fn(payload));
+
+export const shoutboxStatus = () => call<ShoutboxStatus>("shoutbox_status");
+export const onShoutboxStatus = (fn: (s: ShoutboxStatus) => void): Promise<UnlistenFn> =>
+  on<ShoutboxStatus>("shoutbox-status", (payload) => fn(payload));
+
+/// The shoutbox's trim and mute, at once. The profile still stores them
+/// through the save; this is only the half that cannot wait for it.
+export const setShoutboxLive = (trimDb: number, muted: boolean) =>
+  call<void>("set_shoutbox_live", { trimDb, muted });
 
 export { isRemote } from "./transport";
 export { onConnection, connectionState, onReconnected, type Connection } from "./transport";

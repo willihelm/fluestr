@@ -361,4 +361,12 @@ actions: Array<Action>,
  * the view knows which one it is. Read by `ui/src/lib/attention.ts`, and
  * only when `actions` holds `flash`.
  */
-flashViews: Array<number> | null, };
+flashViews: Array<number> | null, 
+/**
+ * Whether this segment's audio is held and can be heard again (P22).
+ *
+ * True when it arrives, unless replays are switched off; it stops being
+ * true later without this event changing, which is what the
+ * `replay-horizon` event is for.
+ */
+audio: boolean, };

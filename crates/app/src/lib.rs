@@ -26,9 +26,11 @@ pub mod gpu;
 pub mod history;
 pub mod models;
 pub mod monitor;
+pub mod outputs;
 pub mod pool;
 pub mod prompt;
 pub mod remote;
+pub mod replay;
 pub mod resources;
 pub mod rules;
 pub mod session;
@@ -80,6 +82,11 @@ pub const EVENT_REMOTE_STATUS: &str = "remote-status";
 /// drop is the interesting one — a dead endpoint is otherwise the one failure
 /// this app can have that nobody notices until a cue does not happen.
 pub const EVENT_WEBHOOK_STATUS: &str = "webhook-status";
+/// Older replay audio was dropped to make room (P22): the line through the
+/// chat before which bubbles have lost their play button.
+pub const EVENT_REPLAY_HORIZON: &str = "replay-horizon";
+/// What the shoutbox is doing, ten times a second while it runs (P26).
+pub const EVENT_SHOUTBOX: &str = "shoutbox-status";
 
 /// What a detached group window's label starts with, followed by the group's
 /// position in the active profile.
@@ -212,6 +219,28 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
         }
         broadcast(&self.app, EVENT_SESSION_STATE, event);
     }
+
+    fn horizon(&self, horizon: replay::Horizon) {
+        broadcast(&self.app, EVENT_REPLAY_HORIZON, horizon);
+    }
+}
+
+/// Brings the outputs into line with the active profile of `config` (P22,
+/// P26) — at startup and on every save, like the LAN remote.
+pub(crate) fn apply_outputs<R: Runtime>(app: &AppHandle<R>, config: &config::Config) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let outputs = config
+        .profiles
+        .get(config.active)
+        .map(|profile| profile.outputs.clone())
+        .unwrap_or_default();
+    let handle = app.clone();
+    let emit: outputs::Emit = Arc::new(move |status| broadcast(&handle, EVENT_SHOUTBOX, status));
+    if let Some(horizon) = state.outputs.apply(&outputs, &state.replay, emit) {
+        broadcast(app, EVENT_REPLAY_HORIZON, horizon);
+    }
 }
 
 /// Everything the commands work on.
@@ -284,6 +313,12 @@ pub struct AppState {
     /// through it on every event, and a state that had to be checked for
     /// existence first would be checked at every emit site.
     pub(crate) remote: Arc<Hub>,
+    /// The audio behind the bubbles, for replaying (P22). Shared with every
+    /// session, which fills it, and outliving them, like the history.
+    pub(crate) replay: Arc<replay::ReplayStore>,
+    /// Where audio leaves the app: the listen output and the shoutbox (P22,
+    /// P26). Independent of any session.
+    pub(crate) outputs: outputs::Engine,
 }
 
 impl AppState {
@@ -577,7 +612,13 @@ pub(crate) fn start_session<R: Runtime>(
     };
 
     let events = events(app)?;
-    match Session::start(config, events.clone(), models, state.workers()) {
+    match Session::start(
+        config,
+        events.clone(),
+        models,
+        state.workers(),
+        Arc::clone(&state.replay),
+    ) {
         Ok((session, running)) => {
             *slot = Some(session);
             // Announced as well as returned. The view that pressed Start
@@ -663,6 +704,16 @@ pub fn run() {
                         // window opens.
                         tauri::async_runtime::block_on(remote::apply(&handle, &wanted));
                     }
+                }
+            }
+
+            // The outputs, for the same reason as the remote above: a
+            // shoutbox that was on last night is on this morning without
+            // anybody opening Settings (P26).
+            let handle = app.handle().clone();
+            if let Some(state) = handle.try_state::<AppState>() {
+                if let Ok(path) = state.config_path() {
+                    apply_outputs(&handle, &config::load(&path));
                 }
             }
 

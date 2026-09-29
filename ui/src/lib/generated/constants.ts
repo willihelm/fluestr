@@ -4,6 +4,8 @@
 // has nothing to say about them. Written by `export_constants` in
 // `crates/app/src/bindings.rs`.
 
+import type { StoredOutputs } from "./config";
+
 /**
  * Schema version of the configuration file, sent on every save. Mirrors
  * `config::VERSION`; the backend refuses to reinterpret a file claiming a
@@ -92,3 +94,65 @@ export const DEFAULT_TUNING = {
   speechThresholdPercent: 50,
   carryContext: true,
 };
+
+/**
+ * Where audio leaves the app in a profile that never chose (P22, P26): replays
+ * on the system output, ten minutes kept, no shoutbox. Mirrors
+ * `config::Outputs::default()`.
+ */
+export const DEFAULT_OUTPUTS: StoredOutputs = {
+  "listen": {
+    "output": {
+      "device": "",
+      "deviceId": "",
+      "channels": []
+    },
+    "toShoutbox": false,
+    "keepMinutes": 10
+  },
+  "shoutbox": {
+    "enabled": false,
+    "program": {
+      "device": "",
+      "deviceId": "",
+      "channel": 0
+    },
+    "reference": {
+      "device": "",
+      "deviceId": "",
+      "channel": 0
+    },
+    "output": {
+      "device": "",
+      "deviceId": "",
+      "channels": []
+    },
+    "weighting": "a",
+    "windowMs": 3000,
+    "calibrationDb": null,
+    "quietDb": -50,
+    "baseGainDb": -12,
+    "slopePercent": 70,
+    "maxGainDb": 0,
+    "riseMs": 5000,
+    "fallMs": 20000,
+    "gateDbfs": -45,
+    "gateHoldMs": 1500,
+    "ceilingDbfs": -1,
+    "trimDb": 0,
+    "muted": false
+  }
+};
+
+/**
+ * The shoutbox's gain range, for the curve's base and maximum. Mirrors
+ * `config::Shoutbox::GAIN_DB`.
+ */
+export const SHOUTBOX_GAIN_DB_MIN = -40;
+export const SHOUTBOX_GAIN_DB_MAX = 12;
+
+/**
+ * The shoutbox's trim range. Mirrors `config::Shoutbox::TRIM_DB`.
+ */
+export const SHOUTBOX_TRIM_DB_MIN = -20;
+export const SHOUTBOX_TRIM_DB_MAX = 12;

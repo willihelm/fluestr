@@ -1,5 +1,6 @@
 //! Audio core of the intercom transcription: capture, ring buffers,
-//! resampling and segmentation.
+//! resampling and segmentation — and, since P22 and P26, the few places audio
+//! leaves the app again.
 //!
 //! This crate knows nothing about Tauri or the UI. That keeps the
 //! realtime-critical paths unit-testable and confines the later Windows port
@@ -10,20 +11,26 @@ pub mod capture;
 pub mod device;
 pub mod gain;
 pub mod lang;
+pub mod playback;
 pub mod repetition;
 pub mod resample;
 pub mod ring;
 pub mod segment;
 pub mod segmenter;
+pub mod shoutbox;
 #[cfg(feature = "silero")]
 pub mod silero;
 pub mod vad;
 
 pub use backend::CpalBackend;
 pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSink};
-pub use device::{AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo};
+pub use device::{
+    AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo, OutputConfig,
+    PlaybackSession,
+};
 pub use gain::Gain;
 pub use lang::{LanguageCode, LanguageMode};
+pub use playback::{Player, PlayerHandle, SampleSource};
 pub use repetition::collapse_repetitions;
 pub use resample::{Resampler, StreamProcessor};
 pub use ring::{RingSink, RingSource, RingStats};

@@ -2,6 +2,7 @@
   export type Section =
     | "profiles"
     | "audio"
+    | "output"
     | "groups"
     | "rules"
     | "models"
@@ -59,6 +60,7 @@
   import RemoteSettings from "./RemoteSettings.svelte";
   import ViewSettings from "./ViewSettings.svelte";
   import DetectionSettings from "./DetectionSettings.svelte";
+  import OutputSettings from "./OutputSettings.svelte";
   import { lengthWarning } from "./vocabulary";
   import { connectedDevice, type ModelChoice, type Profile } from "./profiles";
   import type { SortDirection } from "./sort";
@@ -260,6 +262,9 @@
     // profile list, and it is said once in the strip at the top of the page.
     profiles: null,
     audio: problem === null ? null : "warn",
+    // Never flagged: the shoutbox reports its own trouble inside the section,
+    // and it is off on most machines.
+    output: null,
     groups: null,
     // Never flagged: an empty rule list is the normal state, not a problem.
     rules: null,
@@ -301,6 +306,9 @@
       items: [
         { id: "profiles", title: "Profiles" },
         { id: "audio", title: "Audio input" },
+        // Beside the input because both are patched on the profile's
+        // interface: the replay headphones and the shoutbox (P22, P26).
+        { id: "output", title: "Audio output" },
         { id: "groups", title: "Groups" },
         // With the profile, because a trigger names channels and groups and
         // neither exists outside one.
@@ -497,6 +505,10 @@
           {#if meterError}
             <p class="failed">The input could not be metered: {meterError}</p>
           {/if}
+        </div>
+
+        <div class="sheet" hidden={section !== "output"}>
+          <OutputSettings bind:outputs={active.outputs} inputDevices={devices} />
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>

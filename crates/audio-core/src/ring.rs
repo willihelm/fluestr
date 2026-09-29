@@ -75,6 +75,13 @@ impl RingSource {
         self.consumer.pop_slice(out)
     }
 
+    /// Throws away up to `count` of the oldest samples and returns how many
+    /// went. For a reader that plays what it reads (P26) and would rather
+    /// lose a few milliseconds than let its latency grow.
+    pub fn skip(&mut self, count: usize) -> usize {
+        self.consumer.skip(count)
+    }
+
     /// Samples currently waiting. A steadily growing value means the consumer
     /// is falling behind — surfaced by P8.
     pub fn available(&self) -> usize {

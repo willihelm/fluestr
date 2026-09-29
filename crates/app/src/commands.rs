@@ -141,6 +141,31 @@ pub enum Command {
     /// it opens, the way the chat snapshot is: the counters are cumulative and
     /// a window opened after a cue failed has to see that it did.
     WebhookStatus,
+    /// Every output device, for the listen and shoutbox pickers (P22, P26).
+    ListOutputDevices,
+    /// Plays a bubble's audio on the machine's listen output, or into the
+    /// shoutbox (P22). The app's own windows only: a browser plays in its own
+    /// ears, through `replay_wav`.
+    PlayReplay {
+        segments: Vec<crate::replay::ClipKey>,
+    },
+    StopReplay,
+    /// A bubble's audio as a WAV, for the LAN remote to play itself (P22).
+    ReplayWav {
+        segments: Vec<crate::replay::ClipKey>,
+    },
+    /// Where the line through the chat is, before which bubbles have lost
+    /// their audio. Asked for once as a view opens.
+    ReplayHorizon,
+    /// What the shoutbox is doing, asked for once as a view opens (P26).
+    ShoutboxStatus,
+    /// The shoutbox's trim and mute, at once rather than after the save's
+    /// debounce — a mute a second late is a second of talkback in the house.
+    /// The one part of the outputs the remote may touch.
+    SetShoutboxLive {
+        trim_db: i32,
+        muted: bool,
+    },
 }
 
 /// Who is asking.
@@ -255,7 +280,58 @@ pub async fn dispatch<R: Runtime>(
             }
         }
         Command::WebhookStatus => json(state(app)?.webhooks.status()),
+        Command::ListOutputDevices => json(
+            tauri::async_runtime::spawn_blocking(crate::outputs::list_output_devices)
+                .await
+                .map_err(|err| err.to_string())?
+                .map_err(|err| err.to_string())?,
+        ),
+        Command::PlayReplay { segments } => {
+            if remote {
+                // The host's headphones are not the remote's: a browser on
+                // the LAN hears a bubble through `replay_wav`, in its own
+                // ears.
+                return Err("a remote plays replays in the browser".into());
+            }
+            let app = app.clone();
+            json(
+                tauri::async_runtime::spawn_blocking(move || {
+                    let state = state(&app)?;
+                    state.outputs.play(&state.replay, &segments)
+                })
+                .await
+                .map_err(|err| err.to_string())??,
+            )
+        }
+        Command::StopReplay => {
+            if !remote {
+                state(app)?.outputs.stop_replay();
+            }
+            json(())
+        }
+        Command::ReplayWav { segments } => json(replay_wav(app, &segments)?),
+        Command::ReplayHorizon => json(state(app)?.replay.horizon()),
+        Command::ShoutboxStatus => json(state(app)?.outputs.current_status()),
+        Command::SetShoutboxLive { trim_db, muted } => {
+            state(app)?.outputs.set_live(trim_db, muted);
+            json(())
+        }
     }
+}
+
+/// A bubble's audio as a base64 WAV at 16 kHz, which every browser plays.
+fn replay_wav<R: Runtime>(
+    app: &AppHandle<R>,
+    segments: &[crate::replay::ClipKey],
+) -> Result<crate::outputs::ReplayWav, String> {
+    let audio = state(app)?
+        .replay
+        .assemble(segments)
+        .ok_or_else(|| "This audio is no longer held.".to_string())?;
+    Ok(crate::outputs::ReplayWav {
+        duration_ms: (audio.len() as u64 * 1000) / audio_core::SAMPLE_RATE as u64,
+        wav: crate::replay::base64(&crate::replay::wav(&audio, audio_core::SAMPLE_RATE)),
+    })
 }
 
 /// A result on its way back through either transport.
@@ -336,6 +412,7 @@ async fn save_config<R: Runtime>(
         // field and change it back. `apply` is a no-op when the listener
         // already matches, so this costs the ordinary save nothing.
         remote::apply(app, &config.remote).await;
+        crate::apply_outputs(app, &config);
         return Ok(());
     }
 
@@ -350,6 +427,9 @@ async fn save_config<R: Runtime>(
     // of the same setting, and the two would disagree the first time a save
     // and a click landed together.
     remote::apply(app, &config.remote).await;
+    // The outputs follow it the same way (P22, P26): a shoutbox switched on
+    // on the Settings page is switched on here, and nowhere else.
+    crate::apply_outputs(app, &config);
 
     // Announced to every view, which is how a detached group window (P7)
     // learns that its group was renamed, refilled or switched to another
@@ -581,6 +661,8 @@ fn clear_communication<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .lock()
         .map_err(|_| "the chat history is poisoned".to_string())?
         .clear();
+    // The same crew communication, so it goes with the chat (P22).
+    state(app)?.replay.clear();
     crate::broadcast(app, EVENT_CLEARED, ());
     Ok(())
 }

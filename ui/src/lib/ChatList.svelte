@@ -2,7 +2,8 @@
   import { tick, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { TranscriptEvent } from "./bridge";
-  import { toBubbles, type Bubble } from "./bubbles";
+  import { audible, toBubbles, type Bubble } from "./bubbles";
+  import { replay, toggle, watchReplay } from "./replay.svelte";
   import { findAll, matches, split } from "./search";
   import {
     arrange,
@@ -66,6 +67,10 @@
   }
 
   let { messages, colors, starts, direction, running, startHint = null }: Props = $props();
+
+  // Hearing a bubble again (P22). Every view follows the same horizon, and
+  // plays its own replays — see `replay.svelte.ts`.
+  watchReplay();
 
   // --- Search and filter (P9) ---------------------------------------------
   //
@@ -587,6 +592,25 @@
         <span class="latency" title={latencyTitle(bubble)}>
           {(bubble.latencyMs / 1000).toFixed(1)} s
         </span>
+        <!-- Only while the audio is held: a button that fails when pressed is
+             worse than none, and the oldest audio goes first (P22). -->
+        {#if audible(bubble, replay.horizon)}
+          <button
+            class="replay"
+            class:playing={replay.playing === bubble.key}
+            onclick={() => toggle(bubble.key, bubble.segments)}
+            title={replay.playing === bubble.key ? "Stop" : "Listen to what was said"}
+            aria-label={replay.playing === bubble.key ? "Stop the replay" : "Listen to this message"}
+          >
+            <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+              {#if replay.playing === bubble.key}
+                <rect x="2" y="2" width="8" height="8" fill="currentColor" />
+              {:else}
+                <path d="M3 1.5v9l7.5-4.5z" fill="currentColor" />
+              {/if}
+            </svg>
+          </button>
+        {/if}
       </header>
       <!-- The alert terms, marked where the backend found them (P17). Written
            out piece by piece rather than through `{@html}`: a transcript is
@@ -597,6 +621,9 @@
            pieces, and an indented loop body would put a line break into the
            middle of every highlighted word. -->
       <p>{#each split(bubble.text, bubble.alerts, findAll(bubble.text, query)) as piece}{#if piece.alert || piece.hit}<mark class:hit={piece.hit} class:alert={piece.alert}>{piece.text}</mark>{:else}{piece.text}{/if}{/each}</p>
+      {#if replay.error?.key === bubble.key}
+        <p class="replay-error">Could not play: {replay.error.message}</p>
+      {/if}
     </article>
   {/each}
 
@@ -689,6 +716,38 @@
 
   .latency {
     margin-left: auto;
+  }
+
+  /* Small and in the header's own dim colour: it is there when the text is
+     doubted, and must not compete with the text when it is not. */
+  .replay {
+    align-self: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.35rem;
+    height: 1.35rem;
+    padding: 0;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .replay:hover {
+    color: var(--text);
+  }
+
+  .replay.playing {
+    color: var(--channel);
+    border-color: var(--channel);
+  }
+
+  .replay-error {
+    margin-top: 0.2rem;
+    font-size: 0.75rem;
+    color: #ff6b6b;
   }
 
   article p {

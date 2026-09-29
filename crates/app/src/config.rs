@@ -309,6 +309,267 @@ pub struct Profile {
     /// field; [`Config::migrate`] is what fills it in for those.
     #[serde(default)]
     pub rules: Vec<StoredRule>,
+    /// Where audio leaves the app (P22, P26): the output replays are heard
+    /// on, and the shoutbox that follows the room.
+    ///
+    /// On the profile rather than beside it, because both are patched on the
+    /// interface the profile names: the shoutbox's program is one of its
+    /// intercom channels, and the headphones are on its outputs. A patch
+    /// carried to the next production carries these with it.
+    ///
+    /// `#[serde(default)]` — no shoutbox, replays on the system output —
+    /// because a file written before these existed describes an app that
+    /// never sent audio anywhere.
+    #[serde(default)]
+    pub outputs: Outputs,
+}
+
+/// One output of a device, as a route is stored (P22, P26).
+///
+/// Name and id together, like [`Profile::device`]: the id is what is opened,
+/// the name is how a device that is not plugged in is still named.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts", rename = "StoredOutputRoute")]
+pub struct OutputRoute {
+    /// Empty for the listen output means the system's default output; for
+    /// the shoutbox it means "not patched yet".
+    #[serde(default)]
+    pub device: String,
+    #[serde(default)]
+    pub device_id: String,
+    /// Zero-based output channels the mono signal goes to: one for a
+    /// speaker, two for a pair of headphones. Empty is the first two of the
+    /// device, or its only one.
+    #[serde(default)]
+    pub channels: Vec<u16>,
+}
+
+/// One input channel of a device, as a route is stored (P26).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts", rename = "StoredInputRoute")]
+pub struct InputRoute {
+    /// Empty means "not patched yet".
+    #[serde(default)]
+    pub device: String,
+    #[serde(default)]
+    pub device_id: String,
+    /// Zero-based channel on that device.
+    #[serde(default)]
+    pub channel: u16,
+}
+
+/// How a bubble's audio is heard again (P22).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts", rename = "StoredListen")]
+pub struct Listen {
+    /// The *listen* output — typically headphones — so a replay reaches the
+    /// operator's ears and nobody else's. An empty device is the system
+    /// output, which is where replays go until somebody chooses.
+    #[serde(default)]
+    pub output: OutputRoute,
+    /// Into the shoutbox instead, for the position to hear it. Mixed in
+    /// before the shoutbox's gain, so it arrives at the level the room needs.
+    #[serde(default)]
+    pub to_shoutbox: bool,
+    /// How many minutes of *speech* are kept for replaying, across every
+    /// channel. 0 keeps nothing. Behind it stands a hard byte ceiling —
+    /// see `replay::MAX_BYTES`.
+    #[serde(default = "default_keep_minutes")]
+    pub keep_minutes: u32,
+}
+
+fn default_keep_minutes() -> u32 {
+    10
+}
+
+impl Default for Listen {
+    fn default() -> Self {
+        Self {
+            output: OutputRoute::default(),
+            to_shoutbox: false,
+            keep_minutes: default_keep_minutes(),
+        }
+    }
+}
+
+/// How the room is weighted before it is measured (P26). See
+/// [`audio_core::shoutbox::Weighting`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "config.ts", rename = "StoredWeighting")]
+pub enum Weighting {
+    #[default]
+    A,
+    C,
+    Z,
+}
+
+impl From<Weighting> for audio_core::shoutbox::Weighting {
+    fn from(w: Weighting) -> Self {
+        match w {
+            Weighting::A => Self::A,
+            Weighting::C => Self::C,
+            Weighting::Z => Self::Z,
+        }
+    }
+}
+
+/// The shoutbox that follows the room (P26).
+///
+/// **Whole numbers throughout**, for [`Tuning`]'s reasons: the file is read
+/// and repaired by hand, and `==` is how a save that changes nothing is told
+/// from one that does. Levels are whole dB, the slope is percent, speeds are
+/// the milliseconds ten decibels take.
+///
+/// Levels are in dB SPL when [`Shoutbox::calibration_db`] is set, and in
+/// weighted dBFS when it is not. The curve is written in whichever the page
+/// shows, so setting a calibration later moves what the numbers mean — which
+/// the page says beside the box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, export_to = "config.ts", rename = "StoredShoutbox")]
+pub struct Shoutbox {
+    pub enabled: bool,
+    /// The intercom channel the shoutbox plays.
+    pub program: InputRoute,
+    /// The measurement microphone.
+    pub reference: InputRoute,
+    /// The speaker. Has to be on the program's interface — one clock, or the
+    /// pass-through drifts.
+    pub output: OutputRoute,
+    pub weighting: Weighting,
+    /// The averaging time of the room measurement.
+    pub window_ms: u32,
+    /// Added to weighted dBFS to read dB SPL, read off an SPL meter or set
+    /// with a calibrator. `None` is uncalibrated.
+    #[ts(optional = nullable)]
+    pub calibration_db: Option<i32>,
+    /// Below this room level nothing changes.
+    pub quiet_db: i32,
+    /// The gain at and below the quiet level.
+    pub base_gain_db: i32,
+    /// dB of gain per dB of room, in percent.
+    pub slope_percent: u32,
+    /// The most the curve will ask for.
+    pub max_gain_db: i32,
+    /// How long a rise of 10 dB takes. Faster than the fall, so a loud song
+    /// is followed within seconds.
+    pub rise_ms: u32,
+    /// How long a fall of 10 dB takes. Slow, so a break between two loud
+    /// numbers does not drop the shoutbox under the next.
+    pub fall_ms: u32,
+    /// Above this pre-gain peak the shoutbox counts as playing, and the room
+    /// is not measured — it would be measuring itself.
+    pub gate_dbfs: i32,
+    /// How long it keeps counting as playing after the last word.
+    pub gate_hold_ms: u32,
+    /// Nothing leaves above this, whatever the curve asked for.
+    pub ceiling_dbfs: i32,
+    /// The operator's hand on top of the automation.
+    pub trim_db: i32,
+    pub muted: bool,
+}
+
+impl Default for Shoutbox {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            program: InputRoute::default(),
+            reference: InputRoute::default(),
+            output: OutputRoute::default(),
+            weighting: Weighting::A,
+            window_ms: 3_000,
+            calibration_db: None,
+            quiet_db: -50,
+            base_gain_db: -12,
+            slope_percent: 70,
+            max_gain_db: 0,
+            rise_ms: 5_000,
+            fall_ms: 20_000,
+            gate_dbfs: -45,
+            gate_hold_ms: 1_500,
+            ceiling_dbfs: -1,
+            trim_db: 0,
+            muted: false,
+        }
+    }
+}
+
+impl Shoutbox {
+    /// The ranges the page offers and the file is clamped into.
+    pub const GAIN_DB: std::ops::RangeInclusive<i32> = -40..=12;
+    pub const TRIM_DB: std::ops::RangeInclusive<i32> = -20..=12;
+    pub const LEVEL_DB: std::ops::RangeInclusive<i32> = -120..=140;
+    pub const WINDOW_MS: std::ops::RangeInclusive<u32> = 500..=30_000;
+    pub const SPEED_MS: std::ops::RangeInclusive<u32> = 500..=120_000;
+    pub const GATE_DBFS: std::ops::RangeInclusive<i32> = -80..=-10;
+    pub const HOLD_MS: std::ops::RangeInclusive<u32> = 200..=10_000;
+    pub const CEILING_DBFS: std::ops::RangeInclusive<i32> = -20..=0;
+    pub const SLOPE_PERCENT: std::ops::RangeInclusive<u32> = 0..=200;
+
+    fn clamp(&mut self) {
+        let clamp_i =
+            |v: &mut i32, r: &std::ops::RangeInclusive<i32>| *v = (*v).clamp(*r.start(), *r.end());
+        let clamp_u =
+            |v: &mut u32, r: &std::ops::RangeInclusive<u32>| *v = (*v).clamp(*r.start(), *r.end());
+        clamp_i(&mut self.base_gain_db, &Self::GAIN_DB);
+        clamp_i(&mut self.max_gain_db, &Self::GAIN_DB);
+        clamp_i(&mut self.trim_db, &Self::TRIM_DB);
+        clamp_i(&mut self.quiet_db, &Self::LEVEL_DB);
+        clamp_i(&mut self.gate_dbfs, &Self::GATE_DBFS);
+        clamp_i(&mut self.ceiling_dbfs, &Self::CEILING_DBFS);
+        clamp_u(&mut self.window_ms, &Self::WINDOW_MS);
+        clamp_u(&mut self.rise_ms, &Self::SPEED_MS);
+        clamp_u(&mut self.fall_ms, &Self::SPEED_MS);
+        clamp_u(&mut self.gate_hold_ms, &Self::HOLD_MS);
+        clamp_u(&mut self.slope_percent, &Self::SLOPE_PERCENT);
+        if let Some(offset) = self.calibration_db.as_mut() {
+            *offset = (*offset).clamp(0, 200);
+        }
+    }
+
+    /// The controller's view of these settings.
+    pub fn control(&self) -> audio_core::shoutbox::ControlSettings {
+        use audio_core::shoutbox::{ControlSettings, Curve};
+        let per_second = |ms: u32| 10.0 / (ms.max(1) as f32 / 1000.0);
+        ControlSettings {
+            curve: Curve {
+                quiet_db: self.quiet_db as f32,
+                base_gain_db: self.base_gain_db as f32,
+                slope: self.slope_percent as f32 / 100.0,
+                max_gain_db: self.max_gain_db as f32,
+            },
+            rise_db_per_s: per_second(self.rise_ms),
+            fall_db_per_s: per_second(self.fall_ms),
+            window: std::time::Duration::from_millis(self.window_ms as u64),
+            calibration_db: self.calibration_db.unwrap_or(0) as f32,
+            gate_threshold_dbfs: self.gate_dbfs as f32,
+            gate_hold: std::time::Duration::from_millis(self.gate_hold_ms as u64),
+        }
+    }
+
+    /// Whether `other` needs the streams reopened, rather than only new
+    /// numbers handed to the running controller.
+    pub fn same_streams(&self, other: &Shoutbox) -> bool {
+        self.enabled == other.enabled
+            && self.program == other.program
+            && self.reference == other.reference
+            && self.output == other.output
+            && self.weighting == other.weighting
+            && self.ceiling_dbfs == other.ceiling_dbfs
+    }
+}
+
+/// Everything about where audio leaves the app (P22, P26).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, export_to = "config.ts", rename = "StoredOutputs")]
+pub struct Outputs {
+    pub listen: Listen,
+    pub shoutbox: Shoutbox,
 }
 
 /// What a profile without a stored default language falls back to.
@@ -670,6 +931,8 @@ impl Config {
             for group in &mut profile.groups {
                 group.members.retain(|&m| m < channels);
             }
+            profile.outputs.shoutbox.clamp();
+            profile.outputs.listen.keep_minutes = profile.outputs.listen.keep_minutes.min(120);
             // A rule pointing at a channel or a group that is not there any
             // more is the one failure mode a rule has that an alert term did
             // not: it looks like a narrowed rule and behaves like a broader
@@ -743,6 +1006,23 @@ impl Config {
     pub fn from_remote(mut self, stored: &Config, secret: &[u8; 32]) -> Config {
         self.remote = stored.remote.clone();
         self.model_path = stored.model_path.clone();
+
+        // Where audio leaves this machine is the machine's (P22, P26): its
+        // speakers and its headphones. A remote may reach the shoutbox's trim
+        // and mute — a mute is always safe, and it is what somebody at the
+        // position needs — and nothing else of it. A profile the machine does
+        // not have yet gets no outputs at all rather than the remote's.
+        for (p, profile) in self.profiles.iter_mut().enumerate() {
+            let sent = std::mem::take(&mut profile.outputs);
+            let mut kept = stored
+                .profiles
+                .get(p)
+                .map(|same| same.outputs.clone())
+                .unwrap_or_default();
+            kept.shoutbox.trim_db = sent.shoutbox.trim_db;
+            kept.shoutbox.muted = sent.shoutbox.muted;
+            profile.outputs = kept;
+        }
 
         let known = stored.webhooks_by_fingerprint(secret);
         for (p, profile) in self.profiles.iter_mut().enumerate() {
@@ -1039,6 +1319,7 @@ mod tests {
                     groups: vec![],
                     all_channels_flash: false,
                     rules: vec![],
+                    outputs: Outputs::default(),
                 },
                 Profile {
                     name: "Grosses Haus".into(),
@@ -1100,6 +1381,40 @@ mod tests {
                             min_interval_ms: 1_000,
                         },
                     ],
+                    // Patched, so the round trip covers every field of it.
+                    outputs: Outputs {
+                        listen: Listen {
+                            output: OutputRoute {
+                                device: "MADIface".into(),
+                                device_id: "AppleUSBAudioEngine:RME:MADIface:2".into(),
+                                channels: vec![6, 7],
+                            },
+                            to_shoutbox: false,
+                            keep_minutes: 15,
+                        },
+                        shoutbox: Shoutbox {
+                            enabled: true,
+                            program: InputRoute {
+                                device: "MADIface".into(),
+                                device_id: "AppleUSBAudioEngine:RME:MADIface:2".into(),
+                                channel: 3,
+                            },
+                            reference: InputRoute {
+                                device: "MADIface".into(),
+                                device_id: "AppleUSBAudioEngine:RME:MADIface:2".into(),
+                                channel: 11,
+                            },
+                            output: OutputRoute {
+                                device: "MADIface".into(),
+                                device_id: "AppleUSBAudioEngine:RME:MADIface:2".into(),
+                                channels: vec![4],
+                            },
+                            calibration_db: Some(118),
+                            quiet_db: 70,
+                            trim_db: -3,
+                            ..Shoutbox::default()
+                        },
+                    },
                 },
             ],
         }
@@ -1498,7 +1813,23 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]),
-            ["channels", "device", "deviceId", "groups", "language", "name", "rules"]
+            ["channels", "device", "deviceId", "groups", "language", "name", "outputs", "rules"]
+        );
+        assert_eq!(
+            keys(&json["profiles"][1]["outputs"]),
+            ["listen", "shoutbox"]
+        );
+        assert_eq!(
+            keys(&json["profiles"][1]["outputs"]["listen"]),
+            ["keepMinutes", "output", "toShoutbox"]
+        );
+        assert_eq!(
+            keys(&json["profiles"][1]["outputs"]["shoutbox"]["output"]),
+            ["channels", "device", "deviceId"]
+        );
+        assert_eq!(
+            keys(&json["profiles"][1]["outputs"]["shoutbox"]["program"]),
+            ["channel", "device", "deviceId"]
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
@@ -1656,6 +1987,36 @@ mod tests {
             saved.profiles[1].rules[1].webhook,
             stored.profiles[1].rules[1].webhook
         );
+    }
+
+    /// Where audio leaves the machine is the machine's (P22, P26); the one
+    /// part a remote may reach is the shoutbox's trim and mute.
+    #[test]
+    fn a_remote_may_mute_the_shoutbox_and_nothing_else_of_the_outputs() {
+        let secret = [3u8; 32];
+        let stored = a_config();
+
+        let mut sent = stored.for_remote(&secret);
+        let outputs = &mut sent.profiles[1].outputs;
+        outputs.shoutbox.output.device_id = "Main PA".into();
+        outputs.shoutbox.max_gain_db = 12;
+        outputs.listen.output.channels = vec![0, 1];
+        outputs.shoutbox.trim_db = -8;
+        outputs.shoutbox.muted = true;
+
+        let saved = sent.from_remote(&stored, &secret);
+        let kept = &saved.profiles[1].outputs;
+        assert_eq!(
+            kept.shoutbox.output,
+            stored.profiles[1].outputs.shoutbox.output
+        );
+        assert_eq!(
+            kept.shoutbox.max_gain_db,
+            stored.profiles[1].outputs.shoutbox.max_gain_db
+        );
+        assert_eq!(kept.listen, stored.profiles[1].outputs.listen);
+        assert_eq!(kept.shoutbox.trim_db, -8);
+        assert!(kept.shoutbox.muted);
     }
 
     /// Dropping a webhook is something the remote may do: it is switching a

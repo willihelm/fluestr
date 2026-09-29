@@ -13,7 +13,7 @@
 // which is honest — someone else did speak in between.
 
 import { shift } from "./alerts";
-import type { AlertMatch, TranscriptEvent } from "./bridge";
+import type { AlertMatch, ClipKey, Horizon, TranscriptEvent } from "./bridge";
 import type { Action } from "./generated/rules";
 
 /// Silence that ends a bubble. Below this the speaker simply carried on;
@@ -60,6 +60,15 @@ export interface Bubble {
   decodeMs: number;
   latencyMs: number;
   parts: number;
+  /// Every segment the bubble is made of, in order — what its replay asks
+  /// the backend for (P22).
+  segments: ClipKey[];
+  /// Whether every part's audio was held when it arrived. Whether it still
+  /// is depends on the horizon — see `audible`.
+  audio: boolean;
+  /// When the first part ended: the oldest audio of the bubble, and so the
+  /// first of it the store lets go of.
+  firstEndMs: number;
 }
 
 /// What identifies one segment.
@@ -101,6 +110,11 @@ const open = (e: TranscriptEvent): Bubble => ({
   decodeMs: e.decodeMs,
   latencyMs: e.latencyMs,
   parts: 1,
+  segments: [{ sessionId: e.sessionId, streamId: e.streamId, seq: e.seq }],
+  // `?? false` for `alerts`' reason: a backend that predates P22 keeps no
+  // audio at all.
+  audio: e.audio ?? false,
+  firstEndMs: e.tEndMs,
 });
 
 /// Whether `e` continues `bubble` rather than starting a new one.
@@ -133,6 +147,10 @@ const append = (bubble: Bubble, e: TranscriptEvent): Bubble => {
     decodeMs: e.decodeMs,
     latencyMs: e.latencyMs,
     parts: bubble.parts + 1,
+    segments: [...bubble.segments, { sessionId: e.sessionId, streamId: e.streamId, seq: e.seq }],
+    // All or nothing: half a bubble played as though it were the whole of
+    // it would be worse than no button.
+    audio: bubble.audio && (e.audio ?? false),
   };
 };
 
@@ -181,4 +199,17 @@ export const mergeHistory = (
 ): TranscriptEvent[] => {
   const seen = new Set(live.map(segmentKey));
   return [...history.filter((e) => !seen.has(segmentKey(e))), ...live];
+};
+
+/// Whether a bubble's audio can still be heard again (P22).
+///
+/// The store drops the oldest audio first across every channel, so what is
+/// gone is exactly what ended before one line — the horizon. A bubble is
+/// audible if its audio was kept when it arrived and its *first* part ended
+/// on or after that line; one part gone is the whole bubble gone.
+export const audible = (bubble: Bubble, horizon: Horizon | null): boolean => {
+  if (!bubble.audio) return false;
+  if (horizon === null) return true;
+  if (bubble.sessionId !== horizon.sessionId) return bubble.sessionId > horizon.sessionId;
+  return bubble.firstEndMs >= horizon.tEndMs;
 };
