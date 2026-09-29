@@ -336,74 +336,6 @@
     <p class="failed">{status.message}</p>
   {/if}
 
-  <!-- The hand on top of the automation, reachable from the remote too. -->
-  <div class="live">
-    <button
-      type="button"
-      class="mute"
-      class:on={shoutbox.muted}
-      onclick={() => live(shoutbox.trimDb, !shoutbox.muted)}
-      aria-pressed={shoutbox.muted}
-    >
-      {shoutbox.muted ? "Muted" : "Mute"}
-    </button>
-    <label class="trim">
-      <span>Trim <output>{shoutbox.trimDb > 0 ? "+" : ""}{shoutbox.trimDb} dB</output></span>
-      <input
-        type="range"
-        min={SHOUTBOX_TRIM_DB_MIN}
-        max={SHOUTBOX_TRIM_DB_MAX}
-        step="1"
-        value={shoutbox.trimDb}
-        oninput={(e) => live(Number(e.currentTarget.value), shoutbox.muted)}
-      />
-    </label>
-  </div>
-
-  {#if status?.state === "running"}
-    <dl class="readings">
-      <div>
-        <dt>Room</dt>
-        <dd>
-          {fmt(status.liveDb)} {unit}
-          {#if !status.measuring && status.levelDb != null}
-            <span class="dim">· held at {fmt(status.levelDb)}</span>
-          {/if}
-        </dd>
-      </div>
-      <div>
-        <dt>Gain</dt>
-        <dd>{fmt(status.gainDb, 1)} dB <span class="dim">→ {fmt(status.targetDb, 1)}</span></dd>
-      </div>
-      <div>
-        <dt>Program</dt>
-        <dd>{fmt(status.programDbfs)} dBFS</dd>
-      </div>
-      <div>
-        <dt>Measuring</dt>
-        <dd>
-          {#if !status.referenceOk}
-            <span class="warn">Mic lost — gain held</span>
-          {:else if status.measuring}
-            Yes
-          {:else}
-            <span class="dim">Held while it plays</span>
-          {/if}
-        </dd>
-      </div>
-      <div>
-        <dt>Limiter</dt>
-        <dd class:warn={status.limitingDb < -0.5}>{fmt(status.limitingDb, 1)} dB</dd>
-      </div>
-      {#if status.underruns > 0 || status.skipped > 0}
-        <div>
-          <dt>Dropouts</dt>
-          <dd class="warn">{status.underruns} / {status.skipped} skipped</dd>
-        </div>
-      {/if}
-    </dl>
-  {/if}
-
   <h3>Patch</h3>
   <div class="row">
     <label>
@@ -551,6 +483,65 @@
       Calibrating moves what the curve's numbers mean, so set it before the curve. Read
       the meter while nothing plays on the shoutbox.
     </p>
+  {/if}
+
+  <!-- The hand on top of the automation, reachable from the remote too. -->
+  <h3>Live</h3>
+  <div class="live">
+    <button
+      type="button"
+      class="mute"
+      class:on={shoutbox.muted}
+      onclick={() => live(shoutbox.trimDb, !shoutbox.muted)}
+      aria-pressed={shoutbox.muted}
+    >
+      {shoutbox.muted ? "Muted" : "Mute"}
+    </button>
+    <label class="trim">
+      <span>Trim <output>{shoutbox.trimDb > 0 ? "+" : ""}{shoutbox.trimDb} dB</output></span>
+      <input
+        type="range"
+        min={SHOUTBOX_TRIM_DB_MIN}
+        max={SHOUTBOX_TRIM_DB_MAX}
+        step="1"
+        value={shoutbox.trimDb}
+        oninput={(e) => live(Number(e.currentTarget.value), shoutbox.muted)}
+      />
+    </label>
+  </div>
+
+  {#if status?.state === "running"}
+    <dl class="readings">
+      <div>
+        <dt>Room</dt>
+        <dd>
+          {fmt(status.liveDb)} {unit}
+          {#if !status.referenceOk}
+            <span class="warn">· mic lost, gain held</span>
+          {:else if !status.measuring && status.levelDb != null}
+            <span class="dim">· held at {fmt(status.levelDb)}</span>
+          {/if}
+        </dd>
+      </div>
+      <div>
+        <dt>Gain</dt>
+        <dd>{fmt(status.gainDb, 1)} dB <span class="dim">→ {fmt(status.targetDb, 1)}</span></dd>
+      </div>
+      <div>
+        <dt>Program</dt>
+        <dd>{fmt(status.programDbfs)} dBFS</dd>
+      </div>
+      <div>
+        <dt>Limiter</dt>
+        <dd class:warn={status.limitingDb < -0.5}>{fmt(status.limitingDb, 1)} dB</dd>
+      </div>
+      {#if status.underruns > 0 || status.skipped > 0}
+        <div>
+          <dt>Dropouts</dt>
+          <dd class="warn">{status.underruns} / {status.skipped} skipped</dd>
+        </div>
+      {/if}
+    </dl>
   {/if}
 
   <h3>Curve</h3>
@@ -833,7 +824,8 @@
 
   .readings {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     gap: 0.4rem 0.8rem;
     margin: 0.4rem 0 0;
   }
