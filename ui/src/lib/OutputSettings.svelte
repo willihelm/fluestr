@@ -288,6 +288,12 @@
 
   {#if listen.keepMinutes === 0}
     <p class="note">Nothing is kept, so no message has a ▶.</p>
+  {:else}
+    <p class="note">
+      Only speech counts, not time: silence is never kept, so on a quiet evening an old message can
+      still be replayed. Once {listen.keepMinutes} minutes of talking have piled up, the oldest message
+      goes.
+    </p>
   {/if}
   {#if listError}
     <p class="failed">The audio devices could not be listed: {listError}</p>
