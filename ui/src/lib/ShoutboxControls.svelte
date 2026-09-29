@@ -12,6 +12,7 @@
   // there — the main window's save, or an event to it — is the caller's.
 
   import {
+    DEFAULT_OUTPUTS,
     setShoutboxLive,
     SHOUTBOX_GAIN_DB_MAX,
     SHOUTBOX_GAIN_DB_MIN,
@@ -21,6 +22,7 @@
     type StoredShoutbox,
   } from "./bridge";
   import { curveTarget } from "./outputs";
+  import Knob from "./Knob.svelte";
 
   interface Props {
     shoutbox: StoredShoutbox;
@@ -38,6 +40,20 @@
   };
 
   let unit = $derived(shoutbox.calibrationDb != null ? "dB" : "dBFS");
+
+  /// What a double-tap on a knob goes back to.
+  const defaults = DEFAULT_OUTPUTS.shoutbox;
+
+  /// The quiet threshold's knob, over what the mic can read: its weighted
+  /// dBFS scale moved by the calibration offset, whatever that is. Not "SPL
+  /// when calibrated": an offset of 0 is a calibration too, and a range
+  /// guessed from the unit put the knob where the room never is. Never
+  /// narrower than the value it holds, or the knob would show it wrongly.
+  let quietRange = $derived.by(() => {
+    const offset = shoutbox.calibrationDb ?? 0;
+    const [from, to] = [Math.round(offset - 90), Math.round(offset)];
+    return { min: Math.min(from, shoutbox.quietDb), max: Math.max(to, shoutbox.quietDb) };
+  });
 
   const fmt = (db: number | null | undefined, digits = 0) =>
     db === null || db === undefined || !Number.isFinite(db) ? "—" : db.toFixed(digits);
@@ -105,17 +121,16 @@
   >
     {shoutbox.muted ? "Muted" : "Mute"}
   </button>
-  <label class="trim">
-    <span>Trim <output>{shoutbox.trimDb > 0 ? "+" : ""}{shoutbox.trimDb} dB</output></span>
-    <input
-      type="range"
-      min={SHOUTBOX_TRIM_DB_MIN}
-      max={SHOUTBOX_TRIM_DB_MAX}
-      step="1"
-      value={shoutbox.trimDb}
-      oninput={(e) => live(Number(e.currentTarget.value), shoutbox.muted)}
-    />
-  </label>
+  <Knob
+    label="Trim"
+    unit="dB"
+    value={shoutbox.trimDb}
+    min={SHOUTBOX_TRIM_DB_MIN}
+    max={SHOUTBOX_TRIM_DB_MAX}
+    origin={0}
+    reset={0}
+    onchange={(db) => live(db, shoutbox.muted)}
+  />
 </div>
 
 {#if status?.state === "running"}
@@ -197,37 +212,50 @@
       </text>
     </svg>
     <figcaption>
-      <span class="key"><span class="swatch line-key"></span>The gain the shoutbox gets at each room level</span>
-      <span class="key"><span class="swatch point-key"></span>Where it is now</span>
+      <span class="key"><span class="swatch line-key"></span>Gain target curve</span>
+      <span class="key"><span class="swatch point-key"></span>Current value</span>
     </figcaption>
   </figure>
   <div class="fields">
-    <label>
-      <span>Quiet below ({unit})</span>
-      <input type="number" bind:value={shoutbox.quietDb} />
-    </label>
-    <label>
-      <span>Gain when quiet (dB)</span>
-      <input
-        type="number"
-        min={SHOUTBOX_GAIN_DB_MIN}
-        max={SHOUTBOX_GAIN_DB_MAX}
-        bind:value={shoutbox.baseGainDb}
-      />
-    </label>
-    <label>
-      <span>dB of gain per dB of room (%)</span>
-      <input type="number" min="0" max="200" step="5" bind:value={shoutbox.slopePercent} />
-    </label>
-    <label>
-      <span>Most gain (dB)</span>
-      <input
-        type="number"
-        min={SHOUTBOX_GAIN_DB_MIN}
-        max={SHOUTBOX_GAIN_DB_MAX}
-        bind:value={shoutbox.maxGainDb}
-      />
-    </label>
+    <Knob
+      label="Quiet below"
+      {unit}
+      value={shoutbox.quietDb}
+      min={quietRange.min}
+      max={quietRange.max}
+      reset={defaults.quietDb}
+      onchange={(v) => (shoutbox.quietDb = v)}
+    />
+    <Knob
+      label="Gain when quiet"
+      unit="dB"
+      value={shoutbox.baseGainDb}
+      min={SHOUTBOX_GAIN_DB_MIN}
+      max={SHOUTBOX_GAIN_DB_MAX}
+      origin={0}
+      reset={defaults.baseGainDb}
+      onchange={(v) => (shoutbox.baseGainDb = v)}
+    />
+    <Knob
+      label="Gain per dB of room"
+      unit="%"
+      value={shoutbox.slopePercent}
+      min={0}
+      max={200}
+      step={5}
+      reset={defaults.slopePercent}
+      onchange={(v) => (shoutbox.slopePercent = v)}
+    />
+    <Knob
+      label="Most gain"
+      unit="dB"
+      value={shoutbox.maxGainDb}
+      min={SHOUTBOX_GAIN_DB_MIN}
+      max={SHOUTBOX_GAIN_DB_MAX}
+      origin={0}
+      reset={defaults.maxGainDb}
+      onchange={(v) => (shoutbox.maxGainDb = v)}
+    />
   </div>
 </div>
 
@@ -239,30 +267,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-dim);
-  }
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    font-size: 0.7rem;
-    color: var(--text-dim);
-    flex: 1 1 14rem;
-    max-width: 24rem;
-  }
-
-  input[type="number"] {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 0.3rem;
-    padding: 0.3rem 0.45rem;
-    font: inherit;
-    font-size: 0.9rem;
-  }
-
-  input[type="range"] {
-    accent-color: var(--accent);
   }
 
   button {
@@ -283,8 +287,10 @@
     margin: 0.6rem 0;
   }
 
+  /* A finger's size: this is pressed on a touchscreen as often as clicked. */
   .mute {
-    min-width: 5rem;
+    min-width: 5.5rem;
+    min-height: 3rem;
     font-weight: 600;
   }
 
@@ -293,14 +299,6 @@
     background: #c0392b;
     border-color: #c0392b;
     color: #fff;
-  }
-
-  .trim {
-    max-width: 20rem;
-  }
-
-  output {
-    font-variant-numeric: tabular-nums;
   }
 
   .readings {
@@ -344,17 +342,12 @@
     height: auto;
   }
 
+  /* Two by two beside the curve, and in one row under it when it wraps. */
   .curve .fields {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    flex: 1 1 12rem;
-  }
-
-  /* The shared label's flex basis is a width in a row; in this column it
-     would be a height, and every field 14rem tall. */
-  .curve .fields label {
-    flex: none;
+    display: grid;
+    grid-template-columns: repeat(2, max-content);
+    gap: 0.4rem 0.8rem;
+    align-content: start;
   }
 
   .line {

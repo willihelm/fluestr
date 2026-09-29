@@ -85,11 +85,23 @@
 
   const down = (event: PointerEvent) => {
     if (disabled) return;
+    // Alt-click back to 0 dB, as in a DAW. No drag follows it.
+    if (event.altKey) {
+      event.preventDefault();
+      set(0);
+      return;
+    }
     from = { y: event.clientY, db: clampGain(value) };
-    // So the drag survives the pointer leaving a 2.2 rem circle, which it
-    // does immediately — the travel is vertical and the knob is not tall.
-    event.currentTarget instanceof Element &&
+    // Or the press starts a text selection, and the drag stretches it over
+    // everything the pointer crosses. It also stops the press focusing the
+    // knob, so that is done by hand.
+    event.preventDefault();
+    if (event.currentTarget instanceof HTMLElement) {
+      event.currentTarget.focus();
+      // So the drag survives the pointer leaving a 2.2 rem circle, which it
+      // does immediately — the travel is vertical and the knob is not tall.
       event.currentTarget.setPointerCapture(event.pointerId);
+    }
   };
 
   const move = (event: PointerEvent) => {
@@ -149,7 +161,7 @@
   aria-valuenow={value}
   aria-valuetext="{value > 0 ? '+' : ''}{value} dB"
   aria-disabled={disabled}
-  title="Input gain for {label} — drag, or use the arrow keys. Double-click for 0 dB."
+  title="Input gain for {label} — drag, or use the arrow keys. Double-click or Alt-click for 0 dB."
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}
