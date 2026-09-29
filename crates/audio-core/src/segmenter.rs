@@ -36,6 +36,17 @@ use std::time::Duration;
 pub struct SegmenterConfig {
     /// Audio kept before the detected onset.
     pub pre_roll: Duration,
+    /// Audio kept after the last frame the detector called speech, when a
+    /// pause closes the segment.
+    ///
+    /// The counterpart of the pre-roll, and needed for the mirror-image
+    /// reason: the detector stops calling speech before the word is over. A
+    /// final plosive is a silent closure followed by a short, quiet burst —
+    /// the "t" of "Test" — and to the detector both look like the pause has
+    /// begun. With only a frame or two kept, whisper never hears the burst
+    /// and writes "Tess". Capped by `silence_timeout`, since that is all the
+    /// pause there is when the segment closes.
+    pub post_roll: Duration,
     /// Silence that ends a segment.
     pub silence_timeout: Duration,
     /// Hard ceiling. A speaker who never pauses would otherwise push the
@@ -68,6 +79,7 @@ impl Default for SegmenterConfig {
     fn default() -> Self {
         Self {
             pre_roll: Duration::from_millis(300),
+            post_roll: Duration::from_millis(250),
             silence_timeout: Duration::from_millis(500),
             max_segment: Duration::from_secs(6),
             forced_overlap: Duration::from_millis(500),
@@ -112,6 +124,7 @@ pub struct Segmenter {
 
     frame: usize,
     pre_roll_capacity: usize,
+    post_roll_samples: usize,
     silence_frames: usize,
     max_samples: usize,
     min_samples: usize,
@@ -155,6 +168,7 @@ impl Segmenter {
             stream_id,
             frame,
             pre_roll_capacity: samples(config.pre_roll),
+            post_roll_samples: samples(config.post_roll),
             silence_frames,
             max_samples: samples(config.max_segment).max(frame),
             min_samples: samples(config.min_segment),
@@ -336,9 +350,10 @@ impl Segmenter {
 
             if self.silence_run >= self.silence_frames {
                 self.speaking = false;
-                // Keep a short tail so the last word does not end abruptly,
-                // but not the whole pause — that is only decode time.
-                let trim = self.silence_run.saturating_sub(2) * self.frame;
+                // Keep the post-roll so the last sound survives (see
+                // `SegmenterConfig::post_roll`), but not the whole pause —
+                // the rest is only decode time.
+                let trim = (self.silence_run * self.frame).saturating_sub(self.post_roll_samples);
                 let keep = self.current.len().saturating_sub(trim);
                 if let Some(segment) = self.close_current(keep) {
                     finished.push(segment);
@@ -569,6 +584,26 @@ mod tests {
     }
 
     #[test]
+    fn the_post_roll_keeps_the_end_of_the_last_word() {
+        // The detector lets go before the word is over — a final plosive's
+        // burst comes after a silent closure — so the segment has to run on
+        // past the last speech frame. Not through the whole pause, though:
+        // that is only decode time.
+        let mut seg = segmenter(SegmenterConfig::default());
+        let mut signal = silence(0.5);
+        signal.extend(tone(1.0, 0.3));
+        signal.extend(silence(1.0));
+
+        let segments = run(&mut seg, &signal);
+        assert_eq!(segments.len(), 1);
+
+        // Speech ends at 1500 ms, the pause closes the segment 500 ms later.
+        let end = segments[0].t_end.as_millis() as i64;
+        assert!(end >= 1_700, "segment ends at {end} ms, expected the post-roll");
+        assert!(end < 1_950, "segment ends at {end} ms, expected the pause trimmed");
+    }
+
+    #[test]
     fn a_click_is_discarded() {
         let mut seg = segmenter(SegmenterConfig::default());
         let mut signal = silence(0.5);
@@ -763,9 +798,9 @@ mod tests {
 
         let segments = run(&mut seg, &signal);
         assert_eq!(segments.len(), 1);
-        // The silence the segmenter waited out before closing, less the two
-        // frames of it kept on the end of the audio: 500 ms minus 40 ms.
-        assert_eq!(segments[0].lag, Duration::from_millis(460));
+        // The silence the segmenter waited out before closing, less the
+        // post-roll kept on the end of the audio: 500 ms minus 250 ms.
+        assert_eq!(segments[0].lag, Duration::from_millis(250));
     }
 
     /// The point of the whole arrangement: a gap in what the segmenter was
@@ -783,7 +818,7 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert_eq!(
             segments[0].lag,
-            Duration::from_millis(460),
+            Duration::from_millis(250),
             "two minutes of mute are not part of how long ago this was said"
         );
     }
@@ -832,9 +867,10 @@ mod tests {
         after.extend(silence(1.0));
         let segments = run(&mut seg, &after);
         assert_eq!(segments.len(), 1);
-        // Only the 100 ms of silence in front of the tone can be pre-roll.
+        // Only the 100 ms of silence in front of the tone can be pre-roll;
+        // the 250 ms of post-roll after it are this segment's own.
         assert!(
-            segments[0].pcm_duration() <= Duration::from_millis(1_200),
+            segments[0].pcm_duration() <= Duration::from_millis(1_400),
             "pre-roll from before the mute leaked in: {:?}",
             segments[0].pcm_duration()
         );

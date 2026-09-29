@@ -285,7 +285,9 @@ measurements.md §7.
 `Vad` trait, with `SileroVad` as the implementation the app uses and
 `EnergyVad` kept as the fallback for a machine without the VAD model.
 Segmentation rules per stream: start on speech onset with ~300 ms pre-roll, end
-after ~500 ms of silence, force-flush at `max_segment_len` (6 s) **cut at the
+after ~500 ms of silence keeping ~250 ms post-roll of it (a final plosive's
+burst comes after the detector has let go — "Test" became "Tess" with only
+two frames kept), force-flush at `max_segment_len` (6 s) **cut at the
 quietest frame of the recent past that the detector also called silence**,
 discard anything under ~300 ms. A forced cut **overlaps**: `forced_overlap`
 (500 ms) of audio before the boundary is handed to the next segment as well, so
