@@ -107,7 +107,6 @@ export const DEFAULT_OUTPUTS: StoredOutputs = {
       "deviceId": "",
       "channels": []
     },
-    "toShoutbox": false,
     "keepMinutes": 10
   },
   "shoutbox": {
@@ -127,7 +126,6 @@ export const DEFAULT_OUTPUTS: StoredOutputs = {
       "deviceId": "",
       "channels": []
     },
-    "weighting": "a",
     "windowMs": 3000,
     "calibrationDb": null,
     "quietDb": -50,

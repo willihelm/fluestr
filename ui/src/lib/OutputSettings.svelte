@@ -37,6 +37,9 @@
   } from "./bridge";
   import {
     calibrationFor,
+    isShoutboxDefault,
+    roundTenth,
+    shoutboxDefaults,
     curveTarget,
     decodeChannels,
     encodeChannels,
@@ -122,6 +125,13 @@
   };
 
   let shoutbox = $derived(outputs.shoutbox);
+
+  /// The tuning back to the defaults; see `shoutboxDefaults` for what stays.
+  /// The trim goes the live way too, so the speaker follows at once.
+  const resetShoutbox = () => {
+    outputs.shoutbox = shoutboxDefaults(shoutbox);
+    live(outputs.shoutbox.trimDb, outputs.shoutbox.muted);
+  };
   let listen = $derived(outputs.listen);
 
   /// The output must be on the program's interface — one clock. Said here,
@@ -146,7 +156,9 @@
 
   // --- Calibration --------------------------------------------------------
 
-  let meterReading = $state<number | null>(null);
+  /// What a calibrator puts out, so the usual case is one press.
+  const CALIBRATOR_DB = 94;
+  let meterReading = $state<number | null>(CALIBRATOR_DB);
   let offset = $derived(
     meterReading === null
       ? null
@@ -160,8 +172,17 @@
 
   // --- The curve, drawn ---------------------------------------------------
 
-  const W = 280;
-  const H = 120;
+  // The plot sits inside margins that carry the axes: gain on the left, the
+  // room along the bottom.
+  const W = 340;
+  const H = 190;
+  const PAD = { left: 40, right: 10, top: 10, bottom: 36 };
+  const plot = {
+    left: PAD.left,
+    right: W - PAD.right,
+    top: PAD.top,
+    bottom: H - PAD.bottom,
+  };
   let span = $derived({
     from: shoutbox.quietDb - 20,
     to: shoutbox.quietDb + 50,
@@ -170,8 +191,20 @@
     from: Math.min(shoutbox.baseGainDb, shoutbox.maxGainDb) - 6,
     to: Math.max(shoutbox.baseGainDb, shoutbox.maxGainDb) + 6,
   });
-  const x = (db: number) => ((db - span.from) / (span.to - span.from)) * W;
-  const y = (db: number) => H - ((db - gainSpan.from) / (gainSpan.to - gainSpan.from)) * H;
+  const x = (db: number) =>
+    plot.left + ((db - span.from) / (span.to - span.from)) * (plot.right - plot.left);
+  const y = (db: number) =>
+    plot.bottom - ((db - gainSpan.from) / (gainSpan.to - gainSpan.from)) * (plot.bottom - plot.top);
+  /// Whole multiples of `step` inside a span, for the tick labels.
+  const ticks = (from: number, to: number, step: number) =>
+    Array.from(
+      { length: Math.floor(to / step) - Math.ceil(from / step) + 1 },
+      (_, i) => (Math.ceil(from / step) + i) * step,
+    );
+  let roomTicks = $derived(ticks(span.from, span.to, 10));
+  let gainTicks = $derived(
+    ticks(gainSpan.from, gainSpan.to, gainSpan.to - gainSpan.from > 36 ? 12 : 6),
+  );
   let path = $derived(
     Array.from({ length: 36 }, (_, i) => {
       const level = span.from + ((span.to - span.from) * i) / 35;
@@ -181,8 +214,8 @@
   let point = $derived(
     status?.state === "running" && status.levelDb != null
       ? {
-          x: Math.min(W, Math.max(0, x(status.levelDb))),
-          y: Math.min(H, Math.max(0, y(status.gainDb))),
+          x: Math.min(plot.right, Math.max(plot.left, x(status.levelDb))),
+          y: Math.min(plot.bottom, Math.max(plot.top, y(status.gainDb))),
         }
       : null,
   );
@@ -214,7 +247,7 @@
       <span>Output</span>
       <select
         value={routeKey(listen.output)}
-        disabled={isRemote || listen.toShoutbox}
+        disabled={isRemote}
         onchange={(e) => pickOutput(listen.output, e.currentTarget.value)}
       >
         <option value="">System output</option>
@@ -231,7 +264,7 @@
         <span>Channels</span>
         <select
           value={encodeChannels(listen.output.channels)}
-          disabled={isRemote || listen.toShoutbox}
+          disabled={isRemote}
           onchange={(e) => (listen.output.channels = decodeChannels(e.currentTarget.value))}
         >
           <option value="">Default</option>
@@ -253,10 +286,6 @@
     </label>
   </div>
 
-  <label class="switch">
-    <input type="checkbox" disabled={isRemote} bind:checked={listen.toShoutbox} />
-    Play replays on the shoutbox instead, for the whole position to hear
-  </label>
   {#if listen.keepMinutes === 0}
     <p class="note">Nothing is kept, so no message has a ▶.</p>
   {/if}
@@ -272,6 +301,16 @@
     <button type="button" class="link" onclick={refresh} title="Look for input and output devices again">
       Refresh devices
     </button>
+    {#if !isRemote && !isShoutboxDefault(shoutbox)}
+      <button
+        type="button"
+        class="link reset"
+        onclick={resetShoutbox}
+        title="Curve, speeds, gate, ceiling, averaging and trim. The patch, the calibration and the mute stay."
+      >
+        Back to the defaults
+      </button>
+    {/if}
   </header>
 
   <p class="hint">
@@ -457,14 +496,6 @@
   <h3>Measurement</h3>
   <div class="row">
     <label class="narrow">
-      <span>Weighting</span>
-      <select bind:value={shoutbox.weighting} disabled={isRemote}>
-        <option value="a">A — like an SPL meter</option>
-        <option value="c">C — for a loud low end</option>
-        <option value="z">Z — unweighted</option>
-      </select>
-    </label>
-    <label class="narrow">
       <span>Averaging (s)</span>
       <input
         type="number"
@@ -480,14 +511,15 @@
       <span>Calibration offset (dB)</span>
       <input
         type="number"
-        min="0"
+        min="-200"
         max="200"
+        step="0.1"
         placeholder="none"
         disabled={isRemote}
         value={shoutbox.calibrationDb ?? ""}
         onchange={(e) =>
           (shoutbox.calibrationDb =
-            e.currentTarget.value === "" ? null : Math.round(Number(e.currentTarget.value)))}
+            e.currentTarget.value === "" ? null : roundTenth(Number(e.currentTarget.value)))}
       />
     </label>
   </div>
@@ -495,17 +527,17 @@
     <div class="row calibrate">
       <label class="narrow">
         <span>An SPL meter at the mic reads (dB)</span>
-        <input type="number" min="20" max="140" bind:value={meterReading} />
+        <input type="number" min="20" max="140" step="0.1" bind:value={meterReading} />
       </label>
       <button
         type="button"
         disabled={offset === null}
         onclick={() => {
           shoutbox.calibrationDb = offset;
-          meterReading = null;
+          meterReading = CALIBRATOR_DB;
         }}
       >
-        Calibrate{offset !== null ? ` (offset ${offset} dB)` : ""}
+        Calibrate{offset !== null ? ` (offset ${offset.toFixed(1)} dB)` : ""}
       </button>
     </div>
     <p class="note">
@@ -517,13 +549,53 @@
 
   <h3>Curve</h3>
   <div class="curve">
-    <svg viewBox="0 0 {W} {H}" width={W} height={H} role="img" aria-label="Gain over room level">
-      <line x1={x(shoutbox.quietDb)} x2={x(shoutbox.quietDb)} y1="0" y2={H} class="guide" />
-      <path d={path} class="line" />
-      {#if point}
-        <circle cx={point.x} cy={point.y} r="4" class="point" />
-      {/if}
-    </svg>
+    <figure>
+      <svg
+        viewBox="0 0 {W} {H}"
+        width={W}
+        height={H}
+        role="img"
+        aria-label="Shoutbox gain over room level"
+      >
+        {#each gainTicks as g (g)}
+          <line x1={plot.left} x2={plot.right} y1={y(g)} y2={y(g)} class="grid" class:zero={g === 0} />
+          <text x={plot.left - 5} y={y(g)} class="tick" text-anchor="end" dominant-baseline="middle">
+            {g > 0 ? `+${g}` : g}
+          </text>
+        {/each}
+        {#each roomTicks as r (r)}
+          <text x={x(r)} y={plot.bottom + 12} class="tick" text-anchor="middle">{r}</text>
+        {/each}
+        <line x1={plot.left} x2={plot.right} y1={plot.bottom} y2={plot.bottom} class="axis" />
+        <line x1={plot.left} x2={plot.left} y1={plot.top} y2={plot.bottom} class="axis" />
+        <line
+          x1={x(shoutbox.quietDb)}
+          x2={x(shoutbox.quietDb)}
+          y1={plot.top}
+          y2={plot.bottom}
+          class="guide"
+        />
+        <text x={x(shoutbox.quietDb) + 4} y={plot.top + 9} class="tick">quiet</text>
+        <path d={path} class="line" />
+        {#if point}
+          <circle cx={point.x} cy={point.y} r="4" class="point" />
+        {/if}
+        <text x={(plot.left + plot.right) / 2} y={H - 4} class="axis-title" text-anchor="middle">
+          Room level ({unit})
+        </text>
+        <text
+          transform="translate(11 {(plot.top + plot.bottom) / 2}) rotate(-90)"
+          class="axis-title"
+          text-anchor="middle"
+        >
+          Shoutbox gain (dB)
+        </text>
+      </svg>
+      <figcaption>
+        <span class="key"><span class="swatch line-key"></span>The gain the shoutbox gets at each room level</span>
+        <span class="key"><span class="swatch point-key"></span>Where it is now</span>
+      </figcaption>
+    </figure>
     <div class="fields">
       <label>
         <span>Quiet below ({unit})</span>
@@ -709,6 +781,10 @@
     text-decoration: underline;
   }
 
+  .link.reset {
+    margin-left: 0;
+  }
+
   .state {
     font-size: 0.8rem;
     color: var(--text-dim);
@@ -815,6 +891,66 @@
 
   .point {
     fill: #f2b544;
+  }
+
+  .curve figure {
+    margin: 0;
+    max-width: 100%;
+  }
+
+  .grid {
+    stroke: var(--border);
+    stroke-opacity: 0.5;
+  }
+
+  .grid.zero {
+    stroke-opacity: 1;
+  }
+
+  .axis {
+    stroke: var(--text-dim);
+  }
+
+  .tick {
+    fill: var(--text-dim);
+    font-size: 9px;
+  }
+
+  .axis-title {
+    fill: var(--text-dim);
+    font-size: 10px;
+  }
+
+  .curve figcaption {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
+    margin-top: 0.3rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  .key {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .swatch {
+    display: inline-block;
+  }
+
+  .line-key {
+    width: 14px;
+    height: 2px;
+    background: var(--accent);
+  }
+
+  .point-key {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #f2b544;
   }
 
   .calibrate button {

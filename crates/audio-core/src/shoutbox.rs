@@ -9,12 +9,12 @@
 //! (`crates/app/src/outputs.rs`) opens the streams and runs [`Controller`] on a
 //! thread of its own; this module has the parts that decide what is heard:
 //!
-//! - [`Weighting`] and [`WeightingFilter`] — A or C weighting, so the room is
-//!   measured the way an SPL meter measures it;
+//! - [`WeightingFilter`] — A-weighting, so the room is measured the way an
+//!   SPL meter measures it;
 //! - [`Controller`] — the measurement window, the gap gate, the curve and the
 //!   slew limits;
-//! - [`ShoutboxSource`] — the output callback: program from a ring, a replay
-//!   mixed in, the gain ramped and a limiter last.
+//! - [`ShoutboxSource`] — the output callback: program from a ring, the gain
+//!   ramped and a limiter last.
 //!
 //! **The shoutbox hears itself.** The measurement mic is in the same room, so
 //! a louder shoutbox reads as a louder room and asks for more gain — a
@@ -25,7 +25,7 @@
 //! the frozen gain is the right one — and the level never moves in the middle
 //! of a sentence, only between them.
 
-use crate::playback::{Player, SampleSource};
+use crate::playback::SampleSource;
 use crate::ring::RingSource;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -48,18 +48,6 @@ const RAMP_SECONDS: f32 = 0.05;
 
 /// How fast the limiter lets go again.
 const LIMITER_RELEASE_SECONDS: f32 = 0.2;
-
-/// How the room is weighted before it is measured.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Weighting {
-    /// dB(A): what noise regulations and most SPL meters read. Weights the
-    /// low end down hard, which is right for how loud speech-band noise is.
-    A,
-    /// dB(C): nearly flat. For a show whose loud part is the low end.
-    C,
-    /// Unweighted.
-    Z,
-}
 
 /// One second-order section, transposed direct form II.
 #[derive(Debug, Clone)]
@@ -115,7 +103,7 @@ impl Biquad {
     }
 }
 
-/// A or C weighting as a cascade of biquads, normalised to 0 dB at 1 kHz.
+/// A-weighting as a cascade of biquads, normalised to 0 dB at 1 kHz.
 ///
 /// From the analog definition in IEC 61672: poles at 20.6 Hz (twice), 107.7 Hz,
 /// 737.9 Hz and 12.2 kHz (twice), bilinear-transformed with each pole
@@ -128,7 +116,7 @@ pub struct WeightingFilter {
 }
 
 impl WeightingFilter {
-    pub fn new(weighting: Weighting, rate: u32) -> Self {
+    pub fn new(rate: u32) -> Self {
         let rate = rate as f64;
         // Prewarped so each pole sits where the analog one does.
         let pole = |hz: f64| 2.0 * rate * (std::f64::consts::PI * hz / rate).tan();
@@ -143,15 +131,11 @@ impl WeightingFilter {
             |w: f64| Biquad::bilinear([0.0, 0.0, 1.0], [w * w, 2.0 * w, 1.0], rate);
         let low_pass_pair = |w: f64| Biquad::bilinear([1.0, 0.0, 0.0], [w * w, 2.0 * w, 1.0], rate);
 
-        let sections = match weighting {
-            Weighting::A => vec![
-                high_pass_pair(w1),
-                Biquad::bilinear([0.0, 0.0, 1.0], [w2 * w3, w2 + w3, 1.0], rate),
-                low_pass_pair(w4),
-            ],
-            Weighting::C => vec![high_pass_pair(w1), low_pass_pair(w4)],
-            Weighting::Z => Vec::new(),
-        };
+        let sections = vec![
+            high_pass_pair(w1),
+            Biquad::bilinear([0.0, 0.0, 1.0], [w2 * w3, w2 + w3, 1.0], rate),
+            low_pass_pair(w4),
+        ];
 
         let at_1k: f64 = sections
             .iter()
@@ -468,13 +452,11 @@ impl Shared {
 
 /// The output callback of the shoutbox.
 ///
-/// Program from a ring the input callback fills, a replay mixed onto it
-/// (P22), the gain ramped towards what the controller set, and a peak
-/// limiter last, so that nothing leaves above the ceiling whatever the curve
-/// or a replay asked for.
+/// Program from a ring the input callback fills, the gain ramped towards
+/// what the controller set, and a peak limiter last, so that nothing leaves
+/// above the ceiling whatever the curve asked for.
 pub struct ShoutboxSource {
     program: RingSource,
-    replay: Option<Player>,
     shared: Arc<Shared>,
     /// Whether enough program is buffered to play without running dry.
     primed: bool,
@@ -495,17 +477,10 @@ pub struct ShoutboxSource {
 
 impl ShoutboxSource {
     /// `ceiling_dbfs` is the most any sample may leave at.
-    pub fn new(
-        program: RingSource,
-        replay: Option<Player>,
-        shared: Arc<Shared>,
-        rate: u32,
-        ceiling_dbfs: f32,
-    ) -> Self {
+    pub fn new(program: RingSource, shared: Arc<Shared>, rate: u32, ceiling_dbfs: f32) -> Self {
         let rate = rate.max(1) as f32;
         Self {
             program,
-            replay,
             shared,
             primed: false,
             started: false,
@@ -553,10 +528,6 @@ impl SampleSource for ShoutboxSource {
             }
         }
 
-        if let Some(replay) = self.replay.as_mut() {
-            replay.mix_into(out);
-        }
-
         let target = f32::from_bits(self.shared.gain.load(Ordering::Relaxed));
         let mut peak = 0.0f32;
         let mut deepest = 1.0f32;
@@ -595,10 +566,10 @@ mod tests {
 
     /// The weighting of `freq`, in dB, measured on a sine after the filter
     /// has settled.
-    fn weighted_db(weighting: Weighting, freq: f32) -> f32 {
+    fn weighted_db(freq: f32) -> f32 {
         let rate = 48_000;
         let signal = sine(freq, rate, 2.0);
-        let mut filter = WeightingFilter::new(weighting, rate);
+        let mut filter = WeightingFilter::new(rate);
         // Settle, then measure the second half.
         filter.mean_square(&signal[..rate as usize]);
         let weighted = filter.mean_square(&signal[rate as usize..]).unwrap();
@@ -616,23 +587,10 @@ mod tests {
             (4_000.0, 1.0, 0.5),
             (10_000.0, -2.5, 1.5),
         ] {
-            let got = weighted_db(Weighting::A, freq);
+            let got = weighted_db(freq);
             assert!(
                 (got - expected).abs() <= tolerance,
                 "A at {freq} Hz: {got:.2} dB, expected {expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn c_weighting_leaves_the_low_end_nearly_alone() {
-        for (freq, expected, tolerance) in
-            [(1_000.0, 0.0, 0.1), (100.0, -0.3, 0.3), (31.5, -3.0, 0.5)]
-        {
-            let got = weighted_db(Weighting::C, freq);
-            assert!(
-                (got - expected).abs() <= tolerance,
-                "C at {freq} Hz: {got:.2} dB, expected {expected}"
             );
         }
     }
@@ -775,7 +733,7 @@ mod tests {
         let shared = Arc::new(Shared::default());
         // A gain far beyond anything sane, on a full-scale program.
         shared.set_gain(linear(24.0));
-        let mut out = ShoutboxSource::new(source, None, shared.clone(), rate, -1.0);
+        let mut out = ShoutboxSource::new(source, shared.clone(), rate, -1.0);
         let ceiling = linear(-1.0);
 
         let program = sine(440.0, rate, 0.5);
@@ -796,7 +754,7 @@ mod tests {
         let (mut sink, source) = ring::channel(rate, 1.0);
         let shared = Arc::new(Shared::default());
         shared.set_gain(1.0);
-        let mut out = ShoutboxSource::new(source, None, shared.clone(), rate, 0.0);
+        let mut out = ShoutboxSource::new(source, shared.clone(), rate, 0.0);
 
         // Not enough yet: silence, and nothing consumed.
         sink.push(&[0.1; 100]);

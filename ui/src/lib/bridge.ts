@@ -55,7 +55,6 @@ import type {
   StoredInputRoute,
   StoredListen,
   StoredShoutbox,
-  StoredWeighting,
 } from "./generated/config";
 import type {
   OutputDeviceOption,
@@ -122,7 +121,6 @@ export type {
   StoredInputRoute,
   StoredListen,
   StoredShoutbox,
-  StoredWeighting,
   OutputDeviceOption,
   ReplayStarted,
   ReplayWav,

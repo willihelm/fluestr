@@ -2103,11 +2103,12 @@ late, not that whisper misheard.
   pointed at an output device reliably, and its default is the system output,
   which on a show machine is often the interface's main outs — the one place a
   replay must not go.
-- **Or into the shoutbox, on purpose.** The listen target can instead be P26's
-  shoutbox output, for the case where the whole position should hear what was
-  said. The replay is then mixed in *before* P26's gain, so it arrives at the
-  level the room currently needs rather than at a fixed one. Headphones stay
-  the default; the shoutbox is a choice, never a fallback.
+- **The whole position hears it by patching, not by a switch.** For the case
+  where everyone at the position should hear what was said, the listen output
+  is set to the same device and channel as P26's shoutbox speaker. There is no
+  separate "replay into the shoutbox" mode — it would do the same thing with a
+  second setting to get wrong. The replay then plays at its own level, not
+  following the room. Headphones stay the default.
 - Until a listen output is chosen, the system output is used, so the feature
   works without P26 having been set up. A chosen output that is missing at
   start is not replaced by another device; the button says why it is silent.
@@ -2357,9 +2358,9 @@ it may be on any device.
 
 **The measurement.**
 
-- **Weighted and averaged.** A-weighting by default, C as an option for shows
-  whose low end is the loud part; an Leq over a sliding window of a few seconds
-  (a setting).
+- **Weighted and averaged.** Always A-weighted, like the SPL meter or
+  calibrator the offset is read off — not a setting; an Leq over a sliding
+  window of a few seconds (a setting).
 - **Calibration is optional.** An input delivers dBFS, not dB SPL. An offset —
   read off an SPL meter or set with a 94 dB calibrator — makes the display read
   dB(A); without it the control works relative, since it only needs *louder*

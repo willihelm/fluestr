@@ -370,10 +370,6 @@ pub struct Listen {
     /// output, which is where replays go until somebody chooses.
     #[serde(default)]
     pub output: OutputRoute,
-    /// Into the shoutbox instead, for the position to hear it. Mixed in
-    /// before the shoutbox's gain, so it arrives at the level the room needs.
-    #[serde(default)]
-    pub to_shoutbox: bool,
     /// How many minutes of *speech* are kept for replaying, across every
     /// channel. 0 keeps nothing. Behind it stands a hard byte ceiling —
     /// see `replay::MAX_BYTES`.
@@ -389,30 +385,7 @@ impl Default for Listen {
     fn default() -> Self {
         Self {
             output: OutputRoute::default(),
-            to_shoutbox: false,
             keep_minutes: default_keep_minutes(),
-        }
-    }
-}
-
-/// How the room is weighted before it is measured (P26). See
-/// [`audio_core::shoutbox::Weighting`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(export, export_to = "config.ts", rename = "StoredWeighting")]
-pub enum Weighting {
-    #[default]
-    A,
-    C,
-    Z,
-}
-
-impl From<Weighting> for audio_core::shoutbox::Weighting {
-    fn from(w: Weighting) -> Self {
-        match w {
-            Weighting::A => Self::A,
-            Weighting::C => Self::C,
-            Weighting::Z => Self::Z,
         }
     }
 }
@@ -422,7 +395,8 @@ impl From<Weighting> for audio_core::shoutbox::Weighting {
 /// **Whole numbers throughout**, for [`Tuning`]'s reasons: the file is read
 /// and repaired by hand, and `==` is how a save that changes nothing is told
 /// from one that does. Levels are whole dB, the slope is percent, speeds are
-/// the milliseconds ten decibels take.
+/// the milliseconds ten decibels take. The one exception is the calibration,
+/// which a calibrator gives to a tenth — kept as [`Tenths`], still an integer.
 ///
 /// Levels are in dB SPL when [`Shoutbox::calibration_db`] is set, and in
 /// weighted dBFS when it is not. The curve is written in whichever the page
@@ -440,13 +414,12 @@ pub struct Shoutbox {
     /// The speaker. Has to be on the program's interface — one clock, or the
     /// pass-through drifts.
     pub output: OutputRoute,
-    pub weighting: Weighting,
     /// The averaging time of the room measurement.
     pub window_ms: u32,
     /// Added to weighted dBFS to read dB SPL, read off an SPL meter or set
-    /// with a calibrator. `None` is uncalibrated.
-    #[ts(optional = nullable)]
-    pub calibration_db: Option<i32>,
+    /// with a calibrator. Negative for a hot input. `None` is uncalibrated.
+    #[ts(optional, type = "number | null")]
+    pub calibration_db: Option<Tenths>,
     /// Below this room level nothing changes.
     pub quiet_db: i32,
     /// The gain at and below the quiet level.
@@ -480,7 +453,6 @@ impl Default for Shoutbox {
             program: InputRoute::default(),
             reference: InputRoute::default(),
             output: OutputRoute::default(),
-            weighting: Weighting::A,
             window_ms: 3_000,
             calibration_db: None,
             quiet_db: -50,
@@ -509,6 +481,7 @@ impl Shoutbox {
     pub const HOLD_MS: std::ops::RangeInclusive<u32> = 200..=10_000;
     pub const CEILING_DBFS: std::ops::RangeInclusive<i32> = -20..=0;
     pub const SLOPE_PERCENT: std::ops::RangeInclusive<u32> = 0..=200;
+    pub const CALIBRATION_DB: std::ops::RangeInclusive<i32> = -200..=200;
 
     fn clamp(&mut self) {
         let clamp_i =
@@ -527,7 +500,10 @@ impl Shoutbox {
         clamp_u(&mut self.gate_hold_ms, &Self::HOLD_MS);
         clamp_u(&mut self.slope_percent, &Self::SLOPE_PERCENT);
         if let Some(offset) = self.calibration_db.as_mut() {
-            *offset = (*offset).clamp(0, 200);
+            offset.0 = offset.0.clamp(
+                *Self::CALIBRATION_DB.start() * 10,
+                *Self::CALIBRATION_DB.end() * 10,
+            );
         }
     }
 
@@ -545,7 +521,7 @@ impl Shoutbox {
             rise_db_per_s: per_second(self.rise_ms),
             fall_db_per_s: per_second(self.fall_ms),
             window: std::time::Duration::from_millis(self.window_ms as u64),
-            calibration_db: self.calibration_db.unwrap_or(0) as f32,
+            calibration_db: self.calibration_db.map_or(0.0, Tenths::db),
             gate_threshold_dbfs: self.gate_dbfs as f32,
             gate_hold: std::time::Duration::from_millis(self.gate_hold_ms as u64),
         }
@@ -558,8 +534,43 @@ impl Shoutbox {
             && self.program == other.program
             && self.reference == other.reference
             && self.output == other.output
-            && self.weighting == other.weighting
             && self.ceiling_dbfs == other.ceiling_dbfs
+    }
+}
+
+/// A level to a tenth of a dB, stored as the integer number of tenths so the
+/// file keeps comparing with `==`.
+///
+/// Written as the plain decimal (`117.4`), so the file reads as it always did
+/// and an older whole-number value (`118`) loads unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tenths(pub i32);
+
+impl Tenths {
+    pub fn from_db(db: f64) -> Self {
+        Self((db * 10.0).round() as i32)
+    }
+
+    pub fn db(self) -> f32 {
+        self.0 as f32 / 10.0
+    }
+}
+
+impl Serialize for Tenths {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f64(self.0 as f64 / 10.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Tenths {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let db = f64::deserialize(deserializer)?;
+        if !db.is_finite() {
+            return Err(serde::de::Error::custom(
+                "a level has to be a finite number",
+            ));
+        }
+        Ok(Self::from_db(db))
     }
 }
 
@@ -1389,7 +1400,6 @@ mod tests {
                                 device_id: "AppleUSBAudioEngine:RME:MADIface:2".into(),
                                 channels: vec![6, 7],
                             },
-                            to_shoutbox: false,
                             keep_minutes: 15,
                         },
                         shoutbox: Shoutbox {
@@ -1409,7 +1419,7 @@ mod tests {
                                 device_id: "AppleUSBAudioEngine:RME:MADIface:2".into(),
                                 channels: vec![4],
                             },
-                            calibration_db: Some(118),
+                            calibration_db: Some(Tenths(1183)),
                             quiet_db: 70,
                             trim_db: -3,
                             ..Shoutbox::default()
@@ -1821,7 +1831,7 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][1]["outputs"]["listen"]),
-            ["keepMinutes", "output", "toShoutbox"]
+            ["keepMinutes", "output"]
         );
         assert_eq!(
             keys(&json["profiles"][1]["outputs"]["shoutbox"]["output"]),
@@ -1991,6 +2001,28 @@ mod tests {
 
     /// Where audio leaves the machine is the machine's (P22, P26); the one
     /// part a remote may reach is the shoutbox's trim and mute.
+    #[test]
+    fn a_calibration_keeps_a_tenth_goes_negative_and_reads_old_files() {
+        let read = |json: &str| {
+            let mut shoutbox: Shoutbox = serde_json::from_str(json).expect("parsing");
+            shoutbox.clamp();
+            shoutbox.calibration_db
+        };
+        assert_eq!(read(r#"{"calibrationDb": 118}"#), Some(Tenths(1180)));
+        assert_eq!(read(r#"{"calibrationDb": 117.46}"#), Some(Tenths(1175)));
+        assert_eq!(read(r#"{"calibrationDb": -2.3}"#), Some(Tenths(-23)));
+        assert_eq!(read(r#"{"calibrationDb": -500}"#), Some(Tenths(-2000)));
+        assert_eq!(read(r#"{"calibrationDb": null}"#), None);
+
+        let shoutbox = Shoutbox {
+            calibration_db: Some(Tenths(-23)),
+            ..Shoutbox::default()
+        };
+        let json = serde_json::to_string(&shoutbox).expect("writing");
+        assert!(json.contains(r#""calibrationDb":-2.3"#), "{json}");
+        assert_eq!(shoutbox.control().calibration_db, -2.3);
+    }
+
     #[test]
     fn a_remote_may_mute_the_shoutbox_and_nothing_else_of_the_outputs() {
         let secret = [3u8; 32];

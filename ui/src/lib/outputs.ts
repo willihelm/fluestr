@@ -3,7 +3,7 @@
 // an engineer would otherwise do on a napkin — the calibration offset and the
 // curve.
 
-import type { StoredShoutbox } from "./bridge";
+import { DEFAULT_OUTPUTS, type StoredShoutbox } from "./bridge";
 
 export interface ChannelChoice {
   /// What the route stores, zero-based.
@@ -26,6 +26,31 @@ export const outputChoices = (count: number): ChannelChoice[] => {
   return [...pairs, ...singles];
 };
 
+/// The shoutbox's tuning back to the defaults — the curve, the speeds, the
+/// gate, the ceiling, the averaging and the trim.
+///
+/// What is kept is what belongs to the room rather than to taste: the patch,
+/// whether it is on, the calibration (measured, not chosen) and the mute (a
+/// reset must never be what un-mutes talkback in the house).
+export const shoutboxDefaults = (current: StoredShoutbox): StoredShoutbox => ({
+  ...structuredClone(DEFAULT_OUTPUTS.shoutbox),
+  enabled: current.enabled,
+  program: current.program,
+  reference: current.reference,
+  output: current.output,
+  calibrationDb: current.calibrationDb,
+  muted: current.muted,
+});
+
+/// Whether the tuning is already at the defaults, so the reset is offered
+/// only when it would change something.
+export const isShoutboxDefault = (current: StoredShoutbox): boolean => {
+  const defaults = shoutboxDefaults(current);
+  return (Object.keys(defaults) as (keyof StoredShoutbox)[]).every(
+    (key) => defaults[key] === current[key],
+  );
+};
+
 /// A route's channels as one `<select>` value, and back.
 export const encodeChannels = (channels: number[]): string => channels.join(",");
 export const decodeChannels = (value: string): number[] =>
@@ -36,7 +61,8 @@ export const decodeChannels = (value: string): number[] =>
 ///
 /// `shownDb` is the level the page shows now, which already includes the
 /// offset in force; `meterDb` is what the meter says. `null` while there is
-/// no reading to calibrate against.
+/// no reading to calibrate against. To a tenth, as a calibrator gives it, and
+/// negative for an input that runs hotter than the room.
 export const calibrationFor = (
   meterDb: number,
   shownDb: number | null,
@@ -44,8 +70,11 @@ export const calibrationFor = (
 ): number | null => {
   if (shownDb === null || !Number.isFinite(meterDb)) return null;
   const uncalibrated = shownDb - (currentOffset ?? 0);
-  return Math.round(meterDb - uncalibrated);
+  return roundTenth(meterDb - uncalibrated);
 };
+
+/// A level to one decimal, the resolution the calibration is stored at.
+export const roundTenth = (db: number): number => Math.round(db * 10) / 10;
 
 /// The gain the curve asks for at a room level — the same line with two
 /// corners as `audio_core::shoutbox::Curve::target`, for drawing it.

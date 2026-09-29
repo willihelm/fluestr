@@ -281,11 +281,6 @@ export type StoredListen = {
  */
 output: StoredOutputRoute, 
 /**
- * Into the shoutbox instead, for the position to hear it. Mixed in
- * before the shoutbox's gain, so it arrives at the level the room needs.
- */
-toShoutbox: boolean, 
-/**
  * How many minutes of *speech* are kept for replaying, across every
  * channel. 0 keeps nothing. Behind it stands a hard byte ceiling —
  * see `replay::MAX_BYTES`.
@@ -517,7 +512,8 @@ minIntervalMs: number, };
  * **Whole numbers throughout**, for [`Tuning`]'s reasons: the file is read
  * and repaired by hand, and `==` is how a save that changes nothing is told
  * from one that does. Levels are whole dB, the slope is percent, speeds are
- * the milliseconds ten decibels take.
+ * the milliseconds ten decibels take. The one exception is the calibration,
+ * which a calibrator gives to a tenth — kept as [`Tenths`], still an integer.
  *
  * Levels are in dB SPL when [`Shoutbox::calibration_db`] is set, and in
  * weighted dBFS when it is not. The curve is written in whichever the page
@@ -537,14 +533,14 @@ reference: StoredInputRoute,
  * The speaker. Has to be on the program's interface — one clock, or the
  * pass-through drifts.
  */
-output: StoredOutputRoute, weighting: StoredWeighting, 
+output: StoredOutputRoute, 
 /**
  * The averaging time of the room measurement.
  */
 windowMs: number, 
 /**
  * Added to weighted dBFS to read dB SPL, read off an SPL meter or set
- * with a calibrator. `None` is uncalibrated.
+ * with a calibrator. Negative for a hot input. `None` is uncalibrated.
  */
 calibrationDb?: number | null, 
 /**
@@ -606,12 +602,6 @@ trimDb: number, muted: boolean, };
  * caller is asking the same question about the same thing.
  */
 export type StoredSortDirection = "newest-bottom" | "newest-top";
-
-/**
- * How the room is weighted before it is measured (P26). See
- * [`audio_core::shoutbox::Weighting`].
- */
-export type StoredWeighting = "a" | "c" | "z";
 
 /**
  * The three numbers that decide how the pipeline cuts and what it listens

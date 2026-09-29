@@ -215,9 +215,9 @@ impl Engine {
         // The listen output is opened lazily, at the first replay, and
         // closed here when its route changes — see `ensure_listen`.
         if let Ok(mut listen) = self.listen.lock() {
-            let stale = listen.as_ref().is_some_and(|open| {
-                open.route != outputs.listen.output || outputs.listen.to_shoutbox
-            });
+            let stale = listen
+                .as_ref()
+                .is_some_and(|open| open.route != outputs.listen.output);
             if stale {
                 if let Some(open) = listen.take() {
                     let _ = open.session.stop();
@@ -225,11 +225,10 @@ impl Engine {
             }
         }
 
-        let with_replay = outputs.listen.to_shoutbox;
         if let Ok(mut runner) = self.shoutbox.lock() {
-            let keep = runner.as_ref().is_some_and(|r| {
-                r.with_replay == with_replay && r.config.same_streams(&outputs.shoutbox)
-            });
+            let keep = runner
+                .as_ref()
+                .is_some_and(|r| r.config.same_streams(&outputs.shoutbox));
             if keep {
                 if let Some(r) = runner.as_mut() {
                     r.update(outputs.shoutbox.clone());
@@ -241,7 +240,6 @@ impl Engine {
                 if outputs.shoutbox.enabled {
                     *runner = Some(Runner::start(
                         outputs.shoutbox.clone(),
-                        with_replay,
                         self.status.clone(),
                         emit.clone(),
                     ));
@@ -284,45 +282,14 @@ impl Engine {
         self.status.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
-    /// Plays a bubble on the listen output, or into the shoutbox if that is
-    /// where replays go.
+    /// Plays a bubble on the listen output. To have the whole position hear
+    /// it, the listen output is patched to the shoutbox's speaker.
     pub fn play(&self, replay: &ReplayStore, keys: &[ClipKey]) -> Result<ReplayStarted, String> {
         let audio = replay
             .assemble(keys)
             .ok_or_else(|| "This audio is no longer held.".to_string())?;
         let duration_ms = (audio.len() as u64 * 1000) / SAMPLE_RATE as u64;
         let cue = self.cues.fetch_add(1, Ordering::Relaxed) + 1;
-
-        let to_shoutbox = self
-            .applied
-            .lock()
-            .ok()
-            .and_then(|a| a.as_ref().map(|o| o.listen.to_shoutbox))
-            .unwrap_or(false);
-
-        if to_shoutbox {
-            let runner = self
-                .shoutbox
-                .lock()
-                .map_err(|_| "the shoutbox is poisoned")?;
-            let runner = runner
-                .as_ref()
-                .ok_or("Replays go to the shoutbox, and the shoutbox is off.")?;
-            let mut slot = runner
-                .player
-                .lock()
-                .map_err(|_| "the shoutbox is poisoned")?;
-            let (player, rate) = slot
-                .as_mut()
-                .ok_or("Replays go to the shoutbox, and it is not running.")?;
-            let samples = audio_core::resample::convert(&audio, SAMPLE_RATE, *rate)
-                .map_err(|e| e.to_string())?;
-            player.play(cue, samples).map_err(|e| e.to_string())?;
-            return Ok(ReplayStarted {
-                duration_ms,
-                target: "Shoutbox".into(),
-            });
-        }
 
         let route = self
             .applied
@@ -349,15 +316,6 @@ impl Engine {
         if let Ok(mut listen) = self.listen.lock() {
             if let Some(open) = listen.as_mut() {
                 open.player.stop();
-            }
-        }
-        if let Ok(runner) = self.shoutbox.lock() {
-            if let Some(r) = runner.as_ref() {
-                if let Ok(mut slot) = r.player.lock() {
-                    if let Some((player, _)) = slot.as_mut() {
-                        player.stop();
-                    }
-                }
             }
         }
     }
@@ -466,26 +424,17 @@ fn channel_names(channels: &[u16]) -> String {
 struct Runner {
     /// What it was started with, updated as numbers change.
     config: Shoutbox,
-    with_replay: bool,
     updates: mpsc::Sender<Shoutbox>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    /// Where replays go while the streams are open, and at which rate.
-    player: Arc<Mutex<Option<(PlayerHandle, u32)>>>,
 }
 
 impl Runner {
-    fn start(
-        config: Shoutbox,
-        with_replay: bool,
-        last: Arc<Mutex<ShoutboxStatus>>,
-        emit: Emit,
-    ) -> Self {
+    fn start(config: Shoutbox, last: Arc<Mutex<ShoutboxStatus>>, emit: Emit) -> Self {
         let (updates, updates_rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
-        let player = Arc::new(Mutex::new(None));
         let thread = {
-            let (config, stop, player) = (config.clone(), stop.clone(), player.clone());
+            let (config, stop) = (config.clone(), stop.clone());
             let report: Emit = Arc::new(move |status: ShoutboxStatus| {
                 if let Ok(mut l) = last.lock() {
                     *l = status.clone();
@@ -494,16 +443,14 @@ impl Runner {
             });
             std::thread::Builder::new()
                 .name("shoutbox".into())
-                .spawn(move || supervise(config, with_replay, updates_rx, stop, player, report))
+                .spawn(move || supervise(config, updates_rx, stop, report))
                 .ok()
         };
         Self {
             config,
-            with_replay,
             updates,
             stop,
             thread,
-            player,
         }
     }
 
@@ -524,21 +471,16 @@ impl Runner {
 /// to stop.
 fn supervise(
     mut config: Shoutbox,
-    with_replay: bool,
     updates: mpsc::Receiver<Shoutbox>,
     stop: Arc<AtomicBool>,
-    player: Arc<Mutex<Option<(PlayerHandle, u32)>>>,
     emit: Emit,
 ) {
     let mut controller = Controller::new(config.control());
     while !stop.load(Ordering::Relaxed) {
         emit(ShoutboxStatus::with(ShoutboxState::Starting, None));
-        let failure = match open(&config, with_replay) {
+        let failure = match open(&config) {
             Ok(mut streams) => {
                 tracing::info!(rate = streams.rate, "shoutbox running");
-                if let Ok(mut slot) = player.lock() {
-                    *slot = streams.replay.take().map(|p| (p, streams.rate));
-                }
                 let failure = run(
                     &mut config,
                     &mut controller,
@@ -547,9 +489,6 @@ fn supervise(
                     &stop,
                     &emit,
                 );
-                if let Ok(mut slot) = player.lock() {
-                    *slot = None;
-                }
                 streams.close();
                 failure
             }
@@ -581,7 +520,6 @@ struct Streams {
     reference_rate: u32,
     shared: Arc<shoutbox::Shared>,
     events: mpsc::Receiver<CaptureEvent>,
-    replay: Option<PlayerHandle>,
     rate: u32,
 }
 
@@ -608,7 +546,7 @@ fn patched(route: &InputRoute, what: &str) -> Result<DeviceId, String> {
 }
 
 /// Opens the program and reference captures and the shoutbox output.
-fn open(config: &Shoutbox, with_replay: bool) -> Result<Streams, String> {
+fn open(config: &Shoutbox) -> Result<Streams, String> {
     let backend = CpalBackend::new();
     let named = |route: &InputRoute| {
         if route.device.is_empty() {
@@ -756,15 +694,8 @@ fn open(config: &Shoutbox, with_replay: bool) -> Result<Streams, String> {
     };
 
     let shared = Arc::new(shoutbox::Shared::default());
-    let (player, handle) = if with_replay {
-        let (p, h) = playback::player();
-        (Some(p), Some(h))
-    } else {
-        (None, None)
-    };
     let source = ShoutboxSource::new(
         program_source,
-        player,
         shared.clone(),
         rate,
         config.ceiling_dbfs as f32,
@@ -796,7 +727,6 @@ fn open(config: &Shoutbox, with_replay: bool) -> Result<Streams, String> {
         reference_rate,
         shared,
         events: events_rx,
-        replay: handle,
         rate,
     })
 }
@@ -810,7 +740,8 @@ fn run(
     stop: &AtomicBool,
     emit: &Emit,
 ) -> Option<String> {
-    let mut filter = WeightingFilter::new(config.weighting.into(), streams.reference_rate);
+    // Always A, like the SPL meter the calibration is read off.
+    let mut filter = WeightingFilter::new(streams.reference_rate);
     let mut scratch = vec![0.0f32; streams.reference_rate as usize / 10];
     let mut last = Instant::now();
     let mut last_status = Instant::now() - STATUS_EVERY;
@@ -912,7 +843,7 @@ mod tests {
             enabled: true,
             ..Shoutbox::default()
         };
-        let Err(message) = open(&config, false) else {
+        let Err(message) = open(&config) else {
             panic!("opened with nothing patched");
         };
         assert!(message.contains("program"), "{message}");
@@ -964,12 +895,7 @@ mod tests {
             let seen = seen.clone();
             Arc::new(move |s| seen.lock().unwrap().push(s))
         };
-        let runner = Runner::start(
-            config,
-            true,
-            Arc::new(Mutex::new(ShoutboxStatus::off())),
-            emit,
-        );
+        let runner = Runner::start(config, Arc::new(Mutex::new(ShoutboxStatus::off())), emit);
         // Opening enumerates the devices a few times, which CoreAudio takes
         // its time over.
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -983,7 +909,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         std::thread::sleep(Duration::from_millis(500));
-        let had_player = runner.player.lock().unwrap().is_some();
         runner.stop();
 
         let seen = seen.lock().unwrap();
@@ -996,6 +921,5 @@ mod tests {
             seen.iter().find(|s| s.message.is_some())
         );
         assert_eq!(seen.last().map(|s| s.state), Some(ShoutboxState::Off));
-        assert!(had_player, "no replay player while running");
     }
 }
