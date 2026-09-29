@@ -66,6 +66,7 @@
   import type { SortDirection } from "./sort";
   import {
     isRemote,
+    listDevices,
     listLanguages,
     type DeviceOption,
     type Language,
@@ -77,6 +78,9 @@
   import { watchNarrow } from "./layout";
 
   interface Props {
+    /// The input devices. Bindable because Refresh devices, here and in the
+    /// Output section, lists them again for the whole app — a device plugged
+    /// in after startup is then one Start can open, not only one to pick.
     devices: DeviceOption[];
     profiles: Profile[];
     activeKey: number | null;
@@ -158,7 +162,7 @@
   }
 
   let {
-    devices,
+    devices = $bindable(),
     profiles = $bindable(),
     activeKey = $bindable(),
     vocabulary = $bindable(),
@@ -219,6 +223,16 @@
   let missing = $derived(
     active !== null && active.device !== "" && connectedDevice(devices, active) === undefined,
   );
+
+  let listError = $state<string | null>(null);
+  const refreshDevices = async () => {
+    try {
+      devices = await listDevices();
+      listError = null;
+    } catch (e) {
+      listError = String(e);
+    }
+  };
 
   // Picking a device sets both halves at once. The id is what the profile is
   // keyed on and what starting a session sends; the name is stored with it so
@@ -462,6 +476,9 @@
           <section class="panel">
             <header>
               <h2>Input</h2>
+              <button type="button" class="link" onclick={refreshDevices} title="Look for input devices again">
+                Refresh devices
+              </button>
             </header>
             <label>
               <span>Device</span>
@@ -502,13 +519,16 @@
             carry={tuning.carryContext}
           />
 
+          {#if listError}
+            <p class="failed">The audio devices could not be listed: {listError}</p>
+          {/if}
           {#if meterError}
             <p class="failed">The input could not be metered: {meterError}</p>
           {/if}
         </div>
 
         <div class="sheet" hidden={section !== "output"}>
-          <OutputSettings bind:outputs={active.outputs} inputDevices={devices} />
+          <OutputSettings bind:outputs={active.outputs} bind:inputDevices={devices} />
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>
@@ -619,6 +639,18 @@
 
   .close:hover {
     color: var(--text);
+  }
+
+  .link {
+    margin-left: auto;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   .body {

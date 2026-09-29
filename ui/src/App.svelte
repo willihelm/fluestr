@@ -1346,7 +1346,7 @@
        component. -->
   {#if settings}
     <SettingsPage
-      {devices}
+      bind:devices
       bind:profiles
       bind:activeKey
       bind:vocabulary

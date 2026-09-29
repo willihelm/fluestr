@@ -47,20 +47,18 @@
 
   interface Props {
     outputs: StoredOutputs;
-    /// The input devices as the app listed them at startup — what the
-    /// pickers show until this section has asked again.
+    /// The input devices, the app's own list: asking again here refreshes
+    /// the Audio section's picker as well.
     inputDevices: DeviceOption[];
   }
 
-  let { outputs = $bindable(), inputDevices: initialInputs }: Props = $props();
+  let { outputs = $bindable(), inputDevices = $bindable() }: Props = $props();
 
   // Both lists are asked for again whenever the section opens, and on
   // Refresh. The app lists its inputs once, at startup, and a Bluetooth
   // headset or a USB mic connected after that would otherwise be offered as
   // an output and not as an input — the one place it is needed here being the
   // measurement mic.
-  // svelte-ignore state_referenced_locally
-  let inputDevices = $state<DeviceOption[]>(initialInputs);
   let outputDevices = $state<OutputDeviceOption[]>([]);
   let listError = $state<string | null>(null);
   let status = $state<ShoutboxStatus | null>(null);
@@ -174,6 +172,9 @@
 <section class="panel">
   <header>
     <h2>Listen</h2>
+    <button type="button" class="link" onclick={refresh} title="Look for input and output devices again">
+      Refresh devices
+    </button>
   </header>
   <p class="hint">
     Where a message is heard again when its ▶ is pressed. Headphones, typically, so a
