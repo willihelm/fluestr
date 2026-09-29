@@ -2422,10 +2422,13 @@ it may be on any device.
   positive loop that ends at the ceiling. Installation ANC answers this by
   measuring in the gaps, and intercom makes that natural: **the level is only
   measured while the program input is quiet**, behind a gate with a hold
-  (the energy detector of P3 is enough), and **the gain is frozen while the
+  (the energy detector of P3 is enough), and **the level is held while the
   program is active.** Intercom talk lasts seconds, a room changes over tens
-  of seconds, so a frozen gain is the right one — and it has a second virtue:
-  the level never moves in the middle of a sentence, only between them.
+  of seconds, so a held level is the right one. The gain goes on towards what
+  the held level asks for, at the slew limits, so a rise begun just before
+  somebody spoke finishes rather than waiting for them to stop. (Until
+  2026-09-29 the gain was frozen with the level; with the default 10 dB in
+  5 s a rise could then stall for a whole conversation.)
 - **A mic that fails reads as a quiet room.** A pulled cable or digital
   silence would drive the gain to its minimum, and the shoutbox would be
   inaudible exactly in the finale. Implausible readings — exact zero, below the

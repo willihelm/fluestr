@@ -156,6 +156,18 @@ export const SHOUTBOX_TRIM_DB_MIN = -20;
 export const SHOUTBOX_TRIM_DB_MAX = 12;
 
 /**
+ * The shoutbox's safety ranges: the gate in dBFS, its hold in milliseconds,
+ * the limiter's ceiling in dBFS. Mirror `config::Shoutbox::GATE_DBFS`,
+ * `HOLD_MS` and `CEILING_DBFS`.
+ */
+export const SHOUTBOX_GATE_DBFS_MIN = -80;
+export const SHOUTBOX_GATE_DBFS_MAX = -10;
+export const SHOUTBOX_HOLD_MS_MIN = 200;
+export const SHOUTBOX_HOLD_MS_MAX = 10000;
+export const SHOUTBOX_CEILING_DBFS_MIN = -20;
+export const SHOUTBOX_CEILING_DBFS_MAX = 0;
+
+/**
  * What an uncalibrated measurement mic is read through, weighted dBFS to an
  * estimated dB SPL. Mirrors `config::Shoutbox::ESTIMATED_CALIBRATION_DB`.
  */

@@ -426,25 +426,11 @@
 
   <ShoutboxControls bind:shoutbox={outputs.shoutbox} {status} />
 
-  <h3>Safety</h3>
-  <div class="row">
-    <label class="narrow">
-      <span>Counts as playing above (dBFS)</span>
-      <input type="number" min="-80" max="-10" bind:value={shoutbox.gateDbfs} />
-    </label>
-    <label class="narrow">
-      <span>… and for (ms) after</span>
-      <input type="number" min="200" max="10000" step="100" bind:value={shoutbox.gateHoldMs} />
-    </label>
-    <label class="narrow">
-      <span>Never above (dBFS)</span>
-      <input type="number" min="-20" max="0" bind:value={shoutbox.ceilingDbfs} />
-    </label>
-  </div>
   <p class="note">
-    While the program is above the first number — and for the hold after it — the room is
-    not measured and the gain does not move. The last is a limiter behind everything:
-    nothing leaves above it, whatever the curve asked for.
+    While the program is louder than Room Hold Above — and for the Room Hold Time after it
+    — the room level is held rather than measured, and the gain goes on towards what the
+    held level asks for. The Limit Ceiling is a limiter behind everything: nothing leaves
+    above it, whatever the curve asked for.
   </p>
 </section>
 

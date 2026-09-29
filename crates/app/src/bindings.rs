@@ -138,6 +138,18 @@ export const SHOUTBOX_TRIM_DB_MIN = {shout_trim_min};
 export const SHOUTBOX_TRIM_DB_MAX = {shout_trim_max};
 
 /**
+ * The shoutbox's safety ranges: the gate in dBFS, its hold in milliseconds,
+ * the limiter's ceiling in dBFS. Mirror `config::Shoutbox::GATE_DBFS`,
+ * `HOLD_MS` and `CEILING_DBFS`.
+ */
+export const SHOUTBOX_GATE_DBFS_MIN = {shout_gate_min};
+export const SHOUTBOX_GATE_DBFS_MAX = {shout_gate_max};
+export const SHOUTBOX_HOLD_MS_MIN = {shout_hold_min};
+export const SHOUTBOX_HOLD_MS_MAX = {shout_hold_max};
+export const SHOUTBOX_CEILING_DBFS_MIN = {shout_ceiling_min};
+export const SHOUTBOX_CEILING_DBFS_MAX = {shout_ceiling_max};
+
+/**
  * What an uncalibrated measurement mic is read through, weighted dBFS to an
  * estimated dB SPL. Mirrors `config::Shoutbox::ESTIMATED_CALIBRATION_DB`.
  */
@@ -164,6 +176,12 @@ export const SHOUTBOX_ESTIMATED_CALIBRATION_DB = {shout_estimated};
         shout_gain_max = crate::config::Shoutbox::GAIN_DB.end(),
         shout_trim_min = crate::config::Shoutbox::TRIM_DB.start(),
         shout_trim_max = crate::config::Shoutbox::TRIM_DB.end(),
+        shout_gate_min = crate::config::Shoutbox::GATE_DBFS.start(),
+        shout_gate_max = crate::config::Shoutbox::GATE_DBFS.end(),
+        shout_hold_min = crate::config::Shoutbox::HOLD_MS.start(),
+        shout_hold_max = crate::config::Shoutbox::HOLD_MS.end(),
+        shout_ceiling_min = crate::config::Shoutbox::CEILING_DBFS.start(),
+        shout_ceiling_max = crate::config::Shoutbox::CEILING_DBFS.end(),
         shout_estimated = crate::config::Shoutbox::ESTIMATED_CALIBRATION_DB,
     )
 }

@@ -694,12 +694,8 @@ fn open(config: &Shoutbox) -> Result<Streams, String> {
     };
 
     let shared = Arc::new(shoutbox::Shared::default());
-    let source = ShoutboxSource::new(
-        program_source,
-        shared.clone(),
-        rate,
-        config.ceiling_dbfs as f32,
-    );
+    shared.set_ceiling_dbfs(config.ceiling_dbfs as f32);
+    let source = ShoutboxSource::new(program_source, shared.clone(), rate);
     let channels = channels_or_default(&config.output.channels, output.channels);
     let playback = backend
         .open_output(
@@ -751,6 +747,7 @@ fn run(
     while !stop.load(Ordering::Relaxed) {
         for next in updates.try_iter() {
             controller.set_settings(next.control());
+            streams.shared.set_ceiling_dbfs(next.ceiling_dbfs as f32);
             *config = next;
         }
         for event in streams.events.try_iter() {
@@ -795,7 +792,7 @@ fn run(
             emit(ShoutboxStatus {
                 state: ShoutboxState::Running,
                 message: (!reading.reference_ok).then(|| {
-                    "The measurement mic reads as disconnected — the gain is held.".into()
+                    "The measurement mic reads as disconnected — the room level is held.".into()
                 }),
                 program_dbfs: (program_peak > 0.0).then(|| 20.0 * program_peak.log10()),
                 level_db: reading.level_db.filter(|l| l.is_finite()),

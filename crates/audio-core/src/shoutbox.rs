@@ -20,10 +20,11 @@
 //! a louder shoutbox reads as a louder room and asks for more gain — a
 //! positive loop that ends at the ceiling. The answer installation ANC uses,
 //! and the one intercom makes natural, is to measure *in the gaps*: the room is
-//! only measured while the shoutbox is silent, and the gain is frozen while it
+//! only measured while the shoutbox is silent, and the level is held while it
 //! plays. Intercom talk lasts seconds and a room changes over tens of them, so
-//! the frozen gain is the right one — and the level never moves in the middle
-//! of a sentence, only between them.
+//! the held level is the right one. The gain goes on travelling towards what
+//! that level asks for at the slew limits: a rise that had begun when somebody
+//! started talking finishes, rather than waiting for them to stop.
 
 use crate::playback::SampleSource;
 use crate::ring::RingSource;
@@ -236,13 +237,15 @@ pub struct Reading {
     pub live_db: Option<f32>,
     /// What the curve asks for at that level.
     pub target_db: f32,
-    /// The gain in force, which follows the target at the slew limits.
+    /// The gain in force, which follows the target at the slew limits —
+    /// also while the level is held, towards the target the held level asks
+    /// for.
     pub gain_db: f32,
     /// Whether the room was measured in this step: false while the shoutbox
     /// plays (the gap gate) or the reference is unusable.
     pub measuring: bool,
-    /// False when the reference reads as a missing mic. The gain is then held
-    /// rather than followed down.
+    /// False when the reference reads as a missing mic. The level is then
+    /// held rather than followed down.
     pub reference_ok: bool,
 }
 
@@ -347,23 +350,24 @@ impl Controller {
             None => s.curve.base_gain_db,
         };
 
-        // Followed only while measuring: in a gap, and with a mic that is
-        // there. While the shoutbox plays the gain is frozen, and with the
-        // mic gone it is held where it was — towards audible, not down.
-        if measuring {
-            if !self.settled && self.filled >= s.window {
-                self.gain_db = target_db;
-                self.settled = true;
-            } else if self.settled {
-                let dt = dt.as_secs_f32();
-                let delta = target_db - self.gain_db;
-                let step = if delta > 0.0 {
-                    delta.min(s.rise_db_per_s.max(0.0) * dt)
-                } else {
-                    delta.max(-s.fall_db_per_s.max(0.0) * dt)
-                };
-                self.gain_db += step;
-            }
+        // The level is only measured in a gap and with a mic that is there;
+        // while the shoutbox plays, or with the mic gone, it is held where it
+        // was — towards audible, not down. The gain follows the target all
+        // the same, so a slew under way when the level was held finishes at
+        // the target that level asks for. Only the first setting waits for a
+        // full window of measurement.
+        if measuring && !self.settled && self.filled >= s.window {
+            self.gain_db = target_db;
+            self.settled = true;
+        } else if self.settled {
+            let dt = dt.as_secs_f32();
+            let delta = target_db - self.gain_db;
+            let step = if delta > 0.0 {
+                delta.min(s.rise_db_per_s.max(0.0) * dt)
+            } else {
+                delta.max(-s.fall_db_per_s.max(0.0) * dt)
+            };
+            self.gain_db += step;
         }
 
         // A curve moved under the gain still bounds it: a lowered maximum is
@@ -390,6 +394,10 @@ impl Controller {
 pub struct Shared {
     /// The linear gain the output ramps towards. 0 is mute.
     gain: AtomicU32,
+    /// The most any sample may leave at, linear. Set while playing, so a
+    /// ceiling turned during a show applies from the next callback without
+    /// reopening anything.
+    ceiling: AtomicU32,
     /// The largest pre-gain sample since the controller last read it.
     peak: AtomicU32,
     /// The deepest limiter gain since last read, linear.
@@ -404,6 +412,7 @@ impl Default for Shared {
     fn default() -> Self {
         Self {
             gain: AtomicU32::new(0f32.to_bits()),
+            ceiling: AtomicU32::new(1f32.to_bits()),
             peak: AtomicU32::new(0f32.to_bits()),
             limiter: AtomicU32::new(1f32.to_bits()),
             underruns: AtomicU64::new(0),
@@ -416,6 +425,12 @@ impl Shared {
     pub fn set_gain(&self, linear: f32) {
         self.gain
             .store(linear.max(0.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// The most any sample may leave at, in dBFS. Above 0 is 0.
+    pub fn set_ceiling_dbfs(&self, dbfs: f32) {
+        self.ceiling
+            .store(linear(dbfs.min(0.0)).to_bits(), Ordering::Relaxed);
     }
 
     /// The pre-gain peak since the last call, and resets it.
@@ -473,12 +488,11 @@ pub struct ShoutboxSource {
     ramp: f32,
     limiter: f32,
     release: f32,
-    ceiling: f32,
 }
 
 impl ShoutboxSource {
-    /// `ceiling_dbfs` is the most any sample may leave at.
-    pub fn new(program: RingSource, shared: Arc<Shared>, rate: u32, ceiling_dbfs: f32) -> Self {
+    /// The ceiling is the one in `shared`: see [`Shared::set_ceiling_dbfs`].
+    pub fn new(program: RingSource, shared: Arc<Shared>, rate: u32) -> Self {
         let rate = rate.max(1) as f32;
         Self {
             program,
@@ -494,7 +508,6 @@ impl ShoutboxSource {
             ramp: 1.0 - (-1.0 / (RAMP_SECONDS * rate)).exp(),
             limiter: 1.0,
             release: 1.0 - (-1.0 / (LIMITER_RELEASE_SECONDS * rate)).exp(),
-            ceiling: linear(ceiling_dbfs.min(0.0)),
         }
     }
 }
@@ -530,6 +543,7 @@ impl SampleSource for ShoutboxSource {
         }
 
         let target = f32::from_bits(self.shared.gain.load(Ordering::Relaxed));
+        let ceiling = f32::from_bits(self.shared.ceiling.load(Ordering::Relaxed));
         let mut peak = 0.0f32;
         let mut deepest = 1.0f32;
         for sample in out.iter_mut() {
@@ -537,15 +551,15 @@ impl SampleSource for ShoutboxSource {
             self.gain += (target - self.gain) * self.ramp;
             let y = *sample * self.gain;
             let level = y.abs();
-            if level * self.limiter > self.ceiling {
-                self.limiter = self.ceiling / level;
+            if level * self.limiter > ceiling {
+                self.limiter = ceiling / level;
             } else {
                 self.limiter += (1.0 - self.limiter) * self.release;
             }
             deepest = deepest.min(self.limiter);
             // The limiter is instant, so this clamp only ever catches
             // rounding — and it is what makes the ceiling a promise.
-            *sample = (y * self.limiter).clamp(-self.ceiling, self.ceiling);
+            *sample = (y * self.limiter).clamp(-ceiling, ceiling);
         }
         self.shared.note_peak(peak);
         self.shared.note_limiter(deepest);
@@ -687,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gain_is_frozen_while_the_shoutbox_plays() {
+    fn the_level_is_held_while_the_shoutbox_plays() {
         let mut c = Controller::new(settings());
         run(&mut c, -55.0, 0.0, 3.0);
         let before = c.gain_db();
@@ -701,6 +715,24 @@ mod tests {
         // The level the gain follows stands still; the meter does not.
         assert_eq!(during.level_db, held);
         assert!((during.live_db.unwrap() + 20.0).abs() < 0.1, "{during:?}");
+    }
+
+    #[test]
+    fn the_gain_goes_on_towards_the_held_target_while_the_shoutbox_plays() {
+        let mut c = Controller::new(settings());
+        run(&mut c, -55.0, 0.0, 3.0);
+        // The room gets loud, and the gain is still rising when somebody
+        // starts talking.
+        let rising = run(&mut c, -30.0, 0.0, 3.0);
+        let target = rising.target_db;
+        assert!(rising.gain_db < target - 1.0, "{rising:?}");
+        // The shoutbox plays loud enough to read as a louder room still. The
+        // level stands still, and the gain goes on rising — towards what the
+        // held level asks for, not what the mic hears now.
+        let during = run(&mut c, -20.0, 0.5, 30.0);
+        assert!(!during.measuring);
+        assert_eq!(during.target_db, target);
+        assert!((during.gain_db - target).abs() < 0.01, "{during:?}");
     }
 
     #[test]
@@ -751,7 +783,8 @@ mod tests {
         let shared = Arc::new(Shared::default());
         // A gain far beyond anything sane, on a full-scale program.
         shared.set_gain(linear(24.0));
-        let mut out = ShoutboxSource::new(source, shared.clone(), rate, -1.0);
+        shared.set_ceiling_dbfs(-1.0);
+        let mut out = ShoutboxSource::new(source, shared.clone(), rate);
         let ceiling = linear(-1.0);
 
         let program = sine(440.0, rate, 0.5);
@@ -772,7 +805,7 @@ mod tests {
         let (mut sink, source) = ring::channel(rate, 1.0);
         let shared = Arc::new(Shared::default());
         shared.set_gain(1.0);
-        let mut out = ShoutboxSource::new(source, shared.clone(), rate, 0.0);
+        let mut out = ShoutboxSource::new(source, shared.clone(), rate);
 
         // Not enough yet: silence, and nothing consumed.
         sink.push(&[0.1; 100]);

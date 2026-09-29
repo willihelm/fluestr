@@ -21,13 +21,16 @@
     reset: number;
     /// The visible name, and what a screen reader calls it.
     label: string;
+    /// What the knob does, for the tooltip: the label has room for a name
+    /// and not for what the number means.
+    hint?: string;
     unit: string;
     /// Called with every value the drag passes through, so the change is
     /// heard while the knob is turned.
     onchange: (value: number) => void;
   }
 
-  let { value, min, max, step = 1, origin, reset, label, unit, onchange }: Props = $props();
+  let { value, min, max, step = 1, origin, reset, label, hint, unit, onchange }: Props = $props();
 
   const SWEEP = 135;
   /// The whole range in about this many pixels of drag, whatever its size:
@@ -152,7 +155,7 @@
   aria-valuemax={max}
   aria-valuenow={value}
   aria-valuetext="{text} {unit}"
-  title="{label} — drag up or down. Double-tap or Alt-click for {reset} {unit}."
+  title={`${label}${hint ? `: ${hint}` : ""}\n\nDrag up or down. Double-tap or Alt-click for ${reset} ${unit}.`}
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}

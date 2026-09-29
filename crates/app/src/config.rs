@@ -573,7 +573,6 @@ impl Shoutbox {
             && self.program == other.program
             && self.reference == other.reference
             && self.output == other.output
-            && self.ceiling_dbfs == other.ceiling_dbfs
     }
 }
 
