@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALL_CHANNELS_VIEW, groupIndexOf, groupParamOf } from "./windows";
+import { ALL_CHANNELS_VIEW, groupIndexOf, groupParamOf, tickerIndexOf } from "./windows";
 
 describe("groupIndexOf", () => {
   it("reads the group out of a group window's label", () => {
@@ -54,5 +54,29 @@ describe("groupParamOf", () => {
     expect(groupParamOf("?group=1.5")).toBeNull();
     expect(groupParamOf("?group=-1")).toBeNull();
     expect(groupParamOf("?group=alle")).toBeNull();
+  });
+});
+
+// A ticker (P24) names its view the way a group window does, under a prefix
+// of its own — and the two must never be read as each other, or a ticker
+// would come up as a full group window and the other way round.
+describe("tickerIndexOf", () => {
+  it("reads the view out of a ticker's label", () => {
+    expect(tickerIndexOf("ticker-0")).toBe(0);
+    expect(tickerIndexOf("ticker-7")).toBe(7);
+    expect(tickerIndexOf("ticker-all")).toBe(ALL_CHANNELS_VIEW);
+  });
+
+  it("does not take another window for a ticker", () => {
+    expect(tickerIndexOf("main")).toBeNull();
+    expect(tickerIndexOf("group-2")).toBeNull();
+    expect(groupIndexOf("ticker-2")).toBeNull();
+  });
+
+  it("is as strict as a group window's label", () => {
+    expect(tickerIndexOf("ticker-")).toBeNull();
+    expect(tickerIndexOf("ticker-two")).toBeNull();
+    expect(tickerIndexOf("ticker-alle")).toBeNull();
+    expect(tickerIndexOf("ticker--1")).toBeNull();
   });
 });

@@ -104,6 +104,13 @@ cpal = "0.16"
 # Pulled in by cpal already; audio-core uses them directly for the CoreAudio
 # device UID (P12), which cpal keeps to itself.
 objc2-core-audio = "0.3"
+# The ticker window's place above a fullscreen DAW (P24): a Space it may join
+# and a window level, neither of which Tauri's `always_on_top` reaches.
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSResponder",
+    "NSWindow",
+] }
 objc2-core-foundation = "0.3"
 # The WASAPI endpoint id behind `DeviceId` on Windows (P18), which cpal keeps
 # to itself just as it does the CoreAudio UID. Pinned to the version cpal

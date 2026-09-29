@@ -62,6 +62,34 @@ export const groupIndexOf = (label: string): GroupView | null => {
   return viewOf(label.slice(GROUP_WINDOW_PREFIX.length));
 };
 
+/// Kept in step with `TICKER_WINDOW_PREFIX` on the Rust side (P24). A ticker
+/// is a view like a group window is, under a prefix of its own so the page can
+/// tell which of the two layouts to mount — and followed by the same suffix,
+/// because it names the same view.
+export const TICKER_WINDOW_PREFIX = "ticker-";
+
+/// The view a ticker window's label names, or `null` when it is not a ticker.
+/// As strict as `groupIndexOf`, for its reason.
+export const tickerIndexOf = (label: string): GroupView | null => {
+  if (!label.startsWith(TICKER_WINDOW_PREFIX)) return null;
+
+  return viewOf(label.slice(TICKER_WINDOW_PREFIX.length));
+};
+
+/// The view this window is a ticker of, or `null` when it is none.
+///
+/// Only ever in the app: a browser tab cannot stay in front of anything, which
+/// is the whole of what a ticker is for, so there is no URL that asks for one.
+export const currentTicker = (): GroupView | null => {
+  if (isRemote) return null;
+
+  try {
+    return tickerIndexOf(getCurrentWindow().label);
+  } catch {
+    return null;
+  }
+};
+
 /// The view a URL asks for, or `null` for the main view.
 ///
 /// As strict as `groupIndexOf`, and for the same reason: a view of group `NaN`

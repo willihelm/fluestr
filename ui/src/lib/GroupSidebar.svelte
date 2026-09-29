@@ -35,13 +35,13 @@
   // from the chat or covers it for a moment.
 
   import { untrack } from "svelte";
-  import { openGroupWindow } from "./bridge";
+  import { openGroupWindow, openTickerWindow } from "./bridge";
   import { shortcut } from "./shortcut";
   import type { Group } from "./groups";
   import { watchNarrow } from "./layout";
   import { clampWidth, DEFAULT_WIDTH, loadWidth, maxWidth, MIN_WIDTH, saveWidth } from "./sidebar";
   import type { Channel } from "./streams";
-  import { ALL_CHANNELS_VIEW, type GroupView } from "./windows";
+  import { ALL_CHANNELS_VIEW, canPin, type GroupView } from "./windows";
 
   interface Props {
     groups: Group[];
@@ -121,6 +121,16 @@
     openGroupWindow(view, name, onTop).catch((e) =>
       console.warn("the group window did not open:", e),
     );
+  };
+
+  /// Opens a view as a ticker (P24): its latest lines in a strip that stays
+  /// on top, for beside the DAW. Addressed like `detach`, and focused rather
+  /// than stacked when it is already open, for the same reason.
+  ///
+  /// Only offered where windows can be kept in front of each other, which is
+  /// the whole of what a ticker is — the pin's rule, and its reason.
+  const ticker = (view: GroupView, name: string) => {
+    openTickerWindow(view, name).catch((e) => console.warn("the ticker did not open:", e));
   };
 
   /// Brings the width inside what this window can show, and remembers it.
@@ -221,6 +231,24 @@
 >
   <h2>Views</h2>
 
+  <!-- The ticker's button, beside "detach" on every row. Drawn: a strip with
+       two lines of text in it, for the reason the detach glyph is drawn. -->
+  {#snippet tickerButton(view: GroupView, name: string)}
+    {#if canPin}
+      <button
+        class="detach"
+        onclick={() => ticker(view, name)}
+        title="Open {name} as a ticker that stays on top"
+        aria-label="Open {name} as a ticker that stays on top"
+      >
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+          <rect x="1" y="4" width="14" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
+          <path d="M4 7h8M4 9.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+        </svg>
+      </button>
+    {/if}
+  {/snippet}
+
   <!-- A row is a button and carries a second one, so it is a div rather than a
        nested pair: a button inside a button is invalid and only one of the two
        would ever be clicked. -->
@@ -237,6 +265,7 @@
     >
       ⧉
     </button>
+    {@render tickerButton(ALL_CHANNELS_VIEW, ALL_CHANNELS_NAME)}
   </div>
 
   {#each groups as group, index (group.key)}
@@ -265,6 +294,7 @@
       >
         ⧉
       </button>
+      {@render tickerButton(index, group.name)}
     </div>
   {/each}
 

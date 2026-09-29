@@ -81,6 +81,7 @@ dependencies = [
  "hex",
  "hound",
  "if-addrs",
+ "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-io-kit",
  "reqwest",

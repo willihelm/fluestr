@@ -46,6 +46,7 @@ ts-rs = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-io-kit = { workspace = true }
 objc2-core-foundation = { workspace = true }
+objc2-app-kit = { workspace = true }
 
 [dev-dependencies]
 hound = { workspace = true }

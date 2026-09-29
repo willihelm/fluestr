@@ -137,7 +137,7 @@ for now, with the reason recorded in the package.
 | P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that waits on a Developer ID, see P13 |
 | P22 | Replaying a bubble's audio | **Partial** | Built on 2026-09-29, listen output included; not yet used in the house |
 | P23 | "Speaking…" placeholder | **Partial** | Built on 2026-09-29; not yet run on a show, which is what its acceptance asks |
-| P24 | Ticker window | **Open** | Everything — an idea of 2026-09-28 |
+| P24 | Ticker window | **Partial** | Built on 2026-09-29; the check above a fullscreen DAW and a show are missing |
 | P25 | Channel context for the model | **Partial** | Built on 2026-09-28; the sidecar test with a description and an evening in the house are missing |
 | P26 | Shoutbox following the room's level | **Partial** | Built on 2026-09-29 and run on a loopback device; a real mic, a real speaker and a show are missing |
 
@@ -2177,9 +2177,38 @@ afternoon's work instead of a second engine.
 the operator can say from the chat which channel is talking before any text
 arrives.
 
-### P24 — Ticker window — **Open**
+### P24 — Ticker window — **Partial**
 
-*An idea of 2026-09-28, not yet a decision to build.*
+*An idea of 2026-09-28, built on 2026-09-29.*
+
+**Built:** a ticker button beside "detach" on every sidebar row, desktop only
+(`canPin`'s rule). `ticker::open_ticker_window` opens a frameless window
+labelled `ticker-<view>`, which `main.ts` mounts as `TickerWindow.svelte`: the
+newest bubbles of that view, laid out from the edge the app's reading direction
+puts them at and clipped at the other, a long bubble showing its last three
+lines. A grip down the left edge moves it, and a close button shows on hover.
+The window is not natively resizable, because on a borderless window the
+native resize zone also covers the left edge and would take over the grip.
+The page draws its own handles on the top, right and bottom edges and the
+two right-hand corners (`resized` in `ticker.ts`). macOS has no native resize that
+a page can start.
+It floods for a flash addressed to its view and never asks for attention. A
+click sends `reveal-message` to the main window and focuses it. The main window
+closes Settings, switches to the ticker's view if its own view lacks that
+channel, clears a search that hides the line, and rings the line in its
+channel's colour. Position and size are kept per view in `localStorage`
+(`ticker.ts`), in physical pixels. The backend puts them back only when at
+least 48 px of the window lands on a monitor that is still there
+(`ticker::on_screen`). Otherwise a frameless window on an unplugged screen
+could not be found. Profile switches close tickers along with group windows.
+On macOS the window joins all Spaces, is marked fullscreen-auxiliary and sits
+at the status level (`above_fullscreen`), not at `always_on_top`'s floating
+level. Correction to the text below: detached group windows never did
+remember their position and size. The ticker is the first window that does.
+
+**Missing:** the hour with the target DAW in fullscreen. If the ticker still
+does not show in the DAW's Space, what is left is an `NSPanel`, which Tauri
+does not build. After that, a whole show.
 
 **What it is.** A small window, always on top, one to three lines high: the
 latest messages of one view, with the channel's colour and label, the newest at

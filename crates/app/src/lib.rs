@@ -35,6 +35,7 @@ pub mod replay;
 pub mod resources;
 pub mod rules;
 pub mod session;
+pub mod ticker;
 pub mod webhook;
 pub mod worker;
 
@@ -524,7 +525,7 @@ fn open_group_window<R: Runtime>(
         })
 }
 
-/// Closes every detached group window.
+/// Closes every detached group window, and every ticker (P24).
 ///
 /// Called when the active profile changes. A group window is a view onto a
 /// group of the profile that is running, and the stream ids its transcripts
@@ -536,7 +537,10 @@ fn open_group_window<R: Runtime>(
 #[tauri::command]
 fn close_group_windows<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     for (label, window) in app.webview_windows() {
-        if label.starts_with(GROUP_WINDOW_PREFIX) {
+        // A ticker is the same view in a smaller window, filtering by the
+        // same stream ids, so it goes for the same reason.
+        if label.starts_with(GROUP_WINDOW_PREFIX) || label.starts_with(ticker::TICKER_WINDOW_PREFIX)
+        {
             let _ = window.close();
         }
     }
@@ -762,7 +766,9 @@ pub fn run() {
             pick_model_file,
             request_attention,
             open_group_window,
-            close_group_windows
+            close_group_windows,
+            ticker::open_ticker_window,
+            ticker::focus_main_window
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Tauri application");

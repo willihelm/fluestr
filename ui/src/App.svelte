@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import ChatList from "./lib/ChatList.svelte";
   import StreamMeters from "./lib/StreamMeters.svelte";
   import SettingsPage from "./lib/SettingsPage.svelte";
@@ -47,6 +47,7 @@
     onConfigChanged,
     onConnection,
     onGroupOnTop,
+    onRevealMessage,
     onReconnected,
     onLevels,
     onOverload,
@@ -66,6 +67,7 @@
     stopMonitor,
     setMonitorGain,
     webhookStatus,
+    type ClipKey,
     type DeviceOption,
     type ResourceUsage,
     type SessionState,
@@ -481,6 +483,8 @@
   // with no members shows nothing, and saying so is more useful than silently
   // falling back to showing everything.
   let visible = $derived(visibleStreams(group, channels));
+  /// The line a ticker last asked this window to show (P24), for the chat.
+  let revealing = $state<{ segment: ClipKey; nonce: number } | null>(null);
   let shown = $derived(
     visible === null ? messages : messages.filter((m) => visible.has(m.streamId)),
   );
@@ -927,6 +931,21 @@
         if (!target || target.onTop === onTop) return;
         target.onTop = onTop;
       }),
+      // A ticker's line clicked (P24). The chat is shown — Settings is a
+      // dialog over it, and every field there saves as it is typed — and put
+      // on a view that has the line's channel: the one it is on if it does,
+      // the ticker's own if not. The chat then finds the line itself.
+      onRevealMessage(({ view, segment }) => {
+        settings = false;
+        if (visible !== null && !visible.has(segment.streamId)) {
+          selectedGroup =
+            view === ALL_CHANNELS_VIEW ? null : (groups[view]?.key ?? null);
+        }
+        revealing = { segment, nonce: (revealing?.nonce ?? 0) + 1 };
+        // Handed over once, not held: a chat mounted later — back from a
+        // group with no members — would otherwise jump to this line again.
+        void tick().then(() => (revealing = null));
+      }),
       // A save made somewhere else: the LAN remote (P16), and in principle any
       // other view that writes the configuration. The group windows have
       // followed this all along; the main window has to as well now that it is
@@ -1302,6 +1321,7 @@
           starts={sessionStarts}
           direction={chatSort}
           {running}
+          reveal={revealing}
           startHint={isRemote
             ? "Press Start above to begin transcribing."
             : `Press ${keyLabel("T")}, or Start above, to begin transcribing.`}

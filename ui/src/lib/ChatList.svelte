@@ -2,7 +2,7 @@
   import { tick, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { TranscriptEvent } from "./bridge";
-  import type { SpeechActivity } from "./bridge";
+  import type { ClipKey, SpeechActivity } from "./bridge";
   import { audible, placeholders, toBubbles, type Bubble } from "./bubbles";
   import { replay, toggle, watchReplay } from "./replay.svelte";
   import { speech, watchSpeech } from "./speech.svelte";
@@ -70,6 +70,10 @@
     /// already says this for the lines; the "speaking…" placeholders (P23)
     /// come before any line and need to be told.
     streams?: Set<number> | null;
+    /// A line to bring on screen, asked for from a ticker (P24): any one
+    /// segment of it, and a count that changes with every request, so that
+    /// asking for the same line twice moves the chat twice.
+    reveal?: { segment: ClipKey; nonce: number } | null;
   }
 
   let {
@@ -80,6 +84,7 @@
     running,
     startHint = null,
     streams = null,
+    reveal: revealing = null,
   }: Props = $props();
 
   // Hearing a bubble again (P22). Every view follows the same horizon, and
@@ -293,6 +298,53 @@
     // of the viewport is found and then has to be found again.
     container
       ?.querySelector('[data-focused="true"]')
+      ?.scrollIntoView({ block: "center" });
+  };
+
+  /// The bubble a ticker sent this view to (P24), marked for as long as its
+  /// animation runs — how the operator's eye finds it in a chat that just
+  /// moved under it.
+  let revealed = $state<string | null>(null);
+
+  // Brings a ticker's line on screen: the window grown far enough to hold it,
+  // as `reveal` does for a hit, and the view stopped from chasing the newest
+  // edge, because this is reading back.
+  //
+  // A search that hides the line is cleared first. The ticker was clicked to
+  // see *that* line, and a chat that answers "nothing here" to it would be a
+  // filter the operator set an hour ago deciding for them now.
+  $effect(() => {
+    const request = revealing;
+    if (request === null) return;
+    untrack(() => void bringOn(request.segment));
+  });
+
+  const bringOn = async (segment: ClipKey) => {
+    const holds = (b: Bubble) =>
+      b.segments.some(
+        (s) =>
+          s.sessionId === segment.sessionId &&
+          s.streamId === segment.streamId &&
+          s.seq === segment.seq,
+      );
+    let index = listed.findIndex(holds);
+    if (index === -1 && bubbles.some(holds)) {
+      query = "";
+      onlyMatches = false;
+      await tick();
+      index = listed.findIndex(holds);
+    }
+    if (index === -1 || !container) return;
+
+    following = false;
+    const needed = listed.length - index;
+    if (needed > limit) limit = Math.ceil(needed / PAGE) * PAGE;
+    const key = listed[index].key;
+    revealed = null;
+    await tick();
+    revealed = key;
+    container
+      ?.querySelector(`[data-key="${CSS.escape(key)}"]`)
       ?.scrollIntoView({ block: "center" });
   };
 
@@ -655,8 +707,12 @@
     <article
       class:arriving={arriving.has(bubble.key)}
       class:focused={bubble.key === focused}
+      class:revealed={bubble.key === revealed}
       data-focused={bubble.key === focused}
-      onanimationend={() => arriving.delete(bubble.key)}
+      onanimationend={() => {
+        arriving.delete(bubble.key);
+        if (revealed === bubble.key) revealed = null;
+      }}
       data-key={bubble.key}
       style="--channel: {colorOf(bubble.streamId)}"
     >
@@ -864,6 +920,25 @@
   article.focused {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+
+  /* The line a ticker sent this view to (P24): ringed in its channel's colour
+     until the eye has had time to land on it, then gone — it is an answer to
+     "where", not a state. */
+  article.revealed {
+    animation: revealed 1.8s ease-out;
+  }
+
+  @keyframes revealed {
+    0%,
+    40% {
+      outline: 2px solid var(--channel);
+      outline-offset: 2px;
+    }
+    100% {
+      outline: 2px solid transparent;
+      outline-offset: 2px;
+    }
   }
 
   /* --- The search bar (P9) ---------------------------------------------- */

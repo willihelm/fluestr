@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "ticker-windows",
+  "description": "What a ticker (P24) needs beyond the default capability. It has no title bar, so the page does what one would: a grip to move the window by (start-dragging) and a button to close it. It reads where it is and how big (outer-position, inner-size), so the page that opens it next time can put it back there. And it resizes itself (scale-factor, set-size, set-position): the native resize is off, because its zone runs down the left edge where the grip is, so the page draws handles on the other three edges and moves the window by them. And it renames itself when its group is renamed on the Settings page, for the reason a group window does — the title is what tells it apart in the Window menu and Mission Control. Its own file, so that what a ticker may do never widens what the main window or a group window may.",
+  "windows": ["ticker-*"],
+  "permissions": [
+    "core:window:allow-set-title",
+    "core:window:allow-start-dragging",
+    "core:window:allow-close",
+    "core:window:allow-outer-position",
+    "core:window:allow-inner-size",
+    "core:window:allow-scale-factor",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position"
+  ]
+}

@@ -25,6 +25,7 @@ import { call, emit, isRemote, on } from "./transport";
 import { flashPage, floodWindow } from "./flash";
 import type { Ask } from "./attention";
 import { ALL_CHANNELS_VIEW, closeGroupTabs, openGroupTab, type GroupView } from "./windows";
+import { loadGeometry } from "./ticker";
 import type {
   DeviceOption,
   RunningStream,
@@ -298,6 +299,40 @@ export const requestGroupOnTop = (group: number, onTop: boolean) =>
 
 export const onGroupOnTop = (fn: (e: GroupOnTop) => void): Promise<UnlistenFn> =>
   on<GroupOnTop>("group-on-top", (payload) => fn(payload));
+
+/// Opens a view as a ticker (P24), or brings the one already open forward.
+///
+/// Addressed like `openGroupWindow`, and carrying where this view's ticker was
+/// last left on this screen, which the backend uses if that place is still on
+/// a monitor. Desktop only: a browser tab cannot stay in front of anything,
+/// and the sidebar does not offer it there.
+export const openTickerWindow = (group: GroupView, name: string): Promise<void> =>
+  invoke<void>("open_ticker_window", {
+    group: group === ALL_CHANNELS_VIEW ? null : group,
+    name,
+    geometry: loadGeometry(group),
+  });
+
+/// A ticker asking the main window to show one of its lines (P24).
+///
+/// `view` is the view the ticker shows, so the main window can switch to it
+/// when what it is showing does not have that channel; the segment is any one
+/// of the bubble's, since the main window's bubbles are its own and may be cut
+/// differently.
+export interface RevealMessage {
+  view: GroupView;
+  segment: ClipKey;
+}
+
+/// Sends the main window to a line and brings it forward: the message first,
+/// so the chat is already moving when the window comes up.
+export const revealInMain = async (view: GroupView, segment: ClipKey): Promise<void> => {
+  await emit("reveal-message", { view, segment } satisfies RevealMessage);
+  await invoke<void>("focus_main_window");
+};
+
+export const onRevealMessage = (fn: (e: RevealMessage) => void): Promise<UnlistenFn> =>
+  on<RevealMessage>("reveal-message", (payload) => fn(payload));
 
 /// Closes every detached group window. Called when the active profile changes:
 /// a group window filters by stream id, and those are positions in the active
