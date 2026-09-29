@@ -31,6 +31,7 @@
   import { fromStoredConfig } from "./profiles";
   import { DEFAULT_DIRECTION, type SortDirection } from "./sort";
   import { mergeHistory, toBubbles } from "./bubbles";
+  import { adoptSpeech } from "./speech.svelte";
   import { attentionFor } from "./attention";
   import { ALL_CHANNELS_VIEW, canPin, setWindowOnTop, setWindowTitle, type GroupView } from "./windows";
   import type { Channel } from "./streams";
@@ -236,8 +237,11 @@
     const first = async () => {
       apply(await loadConfig());
 
+      const askedAt = Date.now();
       const snapshot = await sessionSnapshot();
       messages = mergeHistory(snapshot.transcripts, messages);
+      // Who is talking right now (P23) — `?? []` for a backend that predates it.
+      adoptSpeech(snapshot.activity ?? [], askedAt);
       // Merged rather than replaced: a `session-state` event may already have
       // arrived, and it is the newer of the two.
       sessionStarts = new Map([
@@ -375,6 +379,7 @@
          where the session is started and not which key would do it. -->
     <ChatList
       messages={shown}
+      streams={visible}
       {colors}
       starts={sessionStarts}
       direction={chatSort}

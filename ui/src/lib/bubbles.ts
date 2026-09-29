@@ -13,7 +13,7 @@
 // which is honest — someone else did speak in between.
 
 import { shift } from "./alerts";
-import type { AlertMatch, ClipKey, Horizon, TranscriptEvent } from "./bridge";
+import type { AlertMatch, ClipKey, Horizon, SpeechActivity, TranscriptEvent } from "./bridge";
 import type { Action } from "./generated/rules";
 
 /// Silence that ends a bubble. Below this the speaker simply carried on;
@@ -212,4 +212,36 @@ export const audible = (bubble: Bubble, horizon: Horizon | null): boolean => {
   if (horizon === null) return true;
   if (bubble.sessionId !== horizon.sessionId) return bubble.sessionId > horizon.sessionId;
   return bubble.firstEndMs >= horizon.tEndMs;
+};
+
+/// Where the "speaking…" placeholders go (P23).
+///
+/// A channel whose words will join the last bubble — the same speaker carrying
+/// on, by the rule `continues` applies to a segment — shows the indicator on
+/// that bubble rather than in a box of its own. Every other active channel
+/// gets a placeholder at the newest end, oldest activity first, which is
+/// where and in which order their bubbles will land.
+///
+/// Judged by when the activity began rather than by the segment it will
+/// become, which does not exist yet. The segment starts a pre-roll earlier
+/// than the gate opened, so this errs towards a box of its own; the cost is a
+/// placeholder whose text then lands one bubble up.
+export const placeholders = (
+  bubbles: Bubble[],
+  active: SpeechActivity[],
+): { onLast: SpeechActivity | null; standalone: SpeechActivity[] } => {
+  const last = bubbles[bubbles.length - 1];
+  const joins = (a: SpeechActivity) =>
+    last !== undefined &&
+    last.sessionId === a.sessionId &&
+    last.streamId === a.streamId &&
+    a.sinceMs - last.tEndMs <= MAX_GAP_MS &&
+    last.tEndMs - last.tStartMs < MAX_SPAN_MS &&
+    last.text.length < MAX_CHARS;
+
+  const onLast = active.find(joins) ?? null;
+  const standalone = active
+    .filter((a) => a !== onLast)
+    .sort((a, b) => a.sinceMs - b.sinceMs || a.streamId - b.streamId);
+  return { onLast, standalone };
 };

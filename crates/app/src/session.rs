@@ -35,6 +35,7 @@
 //! the rings overflow while the app was busy transcribing the audio before it.
 //! That is why [`WorkerPool::submit`] never blocks.
 
+use crate::activity::{Activity, SpeechActivity};
 use crate::pool::{Completed, Outcome, PoolConfig, PoolEvent, Reorder, WorkerPool};
 use crate::prompt::Prompter;
 use crate::replay::{ClipKey, Horizon, ReplayStore};
@@ -461,6 +462,9 @@ pub trait EventSink: Send + Sync + 'static {
     /// Older audio was dropped to make room for newer (P22). A default, so
     /// a sink that has no chat to mark does not have to say so.
     fn horizon(&self, _horizon: Horizon) {}
+    /// A channel started or stopped having something on its way to the chat
+    /// (P23). A default for `horizon`'s reason.
+    fn activity(&self, _event: SpeechActivity) {}
 }
 
 /// Everything one channel needs between the ring and the queue.
@@ -482,6 +486,9 @@ struct Pipeline {
     /// or half a sentence sits in the segmenter until the channel is unmuted
     /// and then arrives in the chat minutes late.
     was_muted: bool,
+    /// Whether the segmenter's gate was open at the last pump, so that only
+    /// its edges are reported (P23).
+    speaking: bool,
     /// Audio since the last level event, *after* the trim — the meter beside
     /// the knob has to show what turning it did.
     window: Vec<f32>,
@@ -804,6 +811,7 @@ impl Session {
                 gain,
                 mute,
                 was_muted: muted,
+                speaking: false,
                 window: Vec::new(),
             });
         }
@@ -819,14 +827,6 @@ impl Session {
         let stop = Arc::new(AtomicBool::new(false));
         let (languages, language_rx) = mpsc::channel();
         let (tuning, tuning_rx) = mpsc::channel();
-        let aggregating = spawn_aggregator(
-            session_id,
-            results,
-            labels.clone(),
-            prompter.clone(),
-            events.clone(),
-            replay.clone(),
-        );
 
         // The session's zero point, read once in both clocks. `started_at_ms`
         // is what the UI adds a bubble's offset to; `started` is what the
@@ -835,6 +835,24 @@ impl Session {
         // taken here together rather than each where it is first needed.
         let started_at_ms = now_ms();
         let started = Instant::now();
+
+        // Written by both threads: the processing thread opens the gate and
+        // submits, the aggregator settles (P23).
+        let activity = Arc::new(Activity::new(
+            session_id,
+            started,
+            labels.clone(),
+            events.clone(),
+        ));
+        let aggregating = spawn_aggregator(
+            session_id,
+            results,
+            labels.clone(),
+            prompter.clone(),
+            events.clone(),
+            replay.clone(),
+            activity.clone(),
+        );
 
         let processing = spawn_processor(
             pipelines,
@@ -849,6 +867,7 @@ impl Session {
                 started,
                 session_id,
                 replay,
+                activity,
             },
         );
 
@@ -1124,6 +1143,8 @@ struct Wiring {
     session_id: u64,
     /// Where each segment's audio is kept for replaying (P22).
     replay: Arc<ReplayStore>,
+    /// Who is talking, for the placeholder (P23).
+    activity: Arc<Activity>,
 }
 
 fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<()> {
@@ -1138,11 +1159,16 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
         started,
         session_id,
         replay,
+        activity,
     } = wiring;
     // Every segment goes through here on its way to the pool, so this is
     // where its audio is kept (P22): a copy, before the pool takes it.
     let (submit_pool, submit_events) = (pool.clone(), events.clone());
+    let submit_activity = activity.clone();
     let submit = move |segment: Segment, now: Instant| {
+        // Before the pool has it, so the aggregator cannot settle a segment
+        // that was never counted — see [`Activity::submitted`].
+        submit_activity.submitted(segment.stream_id.0);
         let key = ClipKey {
             session_id,
             stream_id: segment.stream_id.0,
@@ -1280,6 +1306,15 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                             submit(segment, now);
                         }
                     }
+
+                    // After the segments it closed were submitted, so a pause
+                    // that ends a sentence reads as "decoding" and never as a
+                    // moment of nothing between the gate and the pool (P23).
+                    let speaking = pipeline.segmenter.is_speaking();
+                    if speaking != pipeline.speaking {
+                        pipeline.speaking = speaking;
+                        activity.gate(pipeline.segmenter.stream_id().0, speaking);
+                    }
                 }
                 if let Some(message) = failed {
                     events.state(SessionState::Failed { message });
@@ -1315,6 +1350,10 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                     let now = Instant::now();
                     anchor(&mut segment, now - started);
                     submit(segment, now);
+                }
+                if pipeline.speaking {
+                    pipeline.speaking = false;
+                    activity.gate(pipeline.segmenter.stream_id().0, false);
                 }
             }
         })
@@ -1390,6 +1429,7 @@ fn spawn_aggregator(
     prompter: Arc<Prompter>,
     events: Arc<dyn EventSink>,
     replay: Arc<ReplayStore>,
+    activity: Arc<Activity>,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("aggregate".into())
@@ -1402,6 +1442,7 @@ fn spawn_aggregator(
                 match event {
                     PoolEvent::Completed(completed) => {
                         for ready in reorder.accept(completed) {
+                            let stream_id = ready.stream_id.0;
                             emit(
                                 session_id,
                                 &events,
@@ -1411,6 +1452,9 @@ fn spawn_aggregator(
                                 ready,
                                 &mut dropped,
                             );
+                            // Whatever it became — a line, nothing, a loss —
+                            // it is no longer on its way (P23).
+                            activity.settled(stream_id);
                         }
                     }
                     // Not a session error: the pool healed itself, and the
@@ -1431,6 +1475,7 @@ fn spawn_aggregator(
             // to arrive. Holding its successors back now would lose the last
             // words spoken rather than the one segment that went astray.
             for ready in reorder.drain() {
+                let stream_id = ready.stream_id.0;
                 emit(
                     session_id,
                     &events,
@@ -1440,7 +1485,11 @@ fn spawn_aggregator(
                     ready,
                     &mut dropped,
                 );
+                activity.settled(stream_id);
             }
+            // Nothing more is coming on any channel, so nothing is on its way,
+            // whether or not every count came back to zero.
+            activity.end();
 
             match fatal {
                 Some(message) => events.state(SessionState::Failed { message }),
@@ -1629,6 +1678,7 @@ mod tests {
         transcripts: Mutex<Vec<TranscriptEvent>>,
         overloads: Mutex<Vec<OverloadEvent>>,
         states: Mutex<Vec<SessionState>>,
+        activity: Mutex<Vec<SpeechActivity>>,
     }
 
     impl EventSink for Recorder {
@@ -1642,6 +1692,20 @@ mod tests {
         fn state(&self, event: SessionState) {
             self.states.lock().unwrap().push(event);
         }
+        fn activity(&self, event: SpeechActivity) {
+            self.activity.lock().unwrap().push(event);
+        }
+    }
+
+    /// The activity tracker a test aggregator settles into, reporting to the
+    /// same sink.
+    fn activity_for(session_id: u64, labels: &Labels, sink: &Arc<dyn EventSink>) -> Arc<Activity> {
+        Arc::new(Activity::new(
+            session_id,
+            Instant::now(),
+            labels.clone(),
+            sink.clone(),
+        ))
     }
 
     fn completed(stream: u16, seq: u64, outcome: Outcome) -> PoolEvent {
@@ -1699,6 +1763,14 @@ mod tests {
                 .map(|(id, label)| (id, label.to_string()))
                 .collect(),
         ));
+        let activity = activity_for(session_id, &labels, &sink);
+        // Every segment the events answer was submitted first, as the
+        // processing thread would have.
+        for event in &events {
+            if let PoolEvent::Completed(completed) = event {
+                activity.submitted(completed.stream_id.0);
+            }
+        }
         let handle = spawn_aggregator(
             session_id,
             rx,
@@ -1706,6 +1778,7 @@ mod tests {
             Arc::new(Prompter::new(None, true)),
             sink,
             Arc::new(crate::replay::ReplayStore::default()),
+            activity,
         );
         for event in events {
             tx.send(event).unwrap();
@@ -1735,8 +1808,9 @@ mod tests {
             rx,
             labels.clone(),
             Arc::new(Prompter::new(None, true)),
-            sink,
+            sink.clone(),
             Arc::new(crate::replay::ReplayStore::default()),
+            activity_for(1, &labels, &sink),
         );
 
         tx.send(spoken(0, "vor der Umbenennung")).unwrap();
@@ -1895,17 +1969,81 @@ mod tests {
     /// An annotation carried forward would teach whisper to caption the next
     /// quiet stretch the same way — the one thing the filter above exists to
     /// stop.
+    /// Every placeholder ends (P23): a segment that became nothing — filtered,
+    /// shed under overload, lost with a sidecar — settles its channel exactly
+    /// as one that became a line does.
     #[test]
-    fn only_text_that_reached_the_chat_is_carried_into_the_next_prompt() {
-        let prompter = Arc::new(Prompter::new(None, true));
+    fn every_segment_settles_its_channel_whatever_became_of_it() {
+        let recorder = aggregate(vec![
+            spoken_on(0, 0, "Standby für Cue fünf"),
+            spoken_on(1, 0, "[BREAK]"),
+            completed(2, 0, Outcome::Overloaded),
+            completed(2, 1, Outcome::Failed("sidecar gone".into())),
+        ]);
+        let activity = recorder.activity.lock().unwrap();
+        for stream in [0, 1, 2] {
+            let last = activity.iter().rev().find(|e| e.stream_id == stream);
+            assert!(
+                last.is_some_and(|e| !e.active()),
+                "stream {stream} was left showing a placeholder"
+            );
+        }
+    }
+
+    /// The text lands before its placeholder goes, so a view never shows the
+    /// channel with neither.
+    #[test]
+    fn the_transcript_arrives_before_its_channel_goes_quiet() {
+        #[derive(Default)]
+        struct Order(Mutex<Vec<&'static str>>);
+        impl EventSink for Order {
+            fn transcript(&self, _: TranscriptEvent) {
+                self.0.lock().unwrap().push("transcript");
+            }
+            fn levels(&self, _: LevelsEvent) {}
+            fn overload(&self, _: OverloadEvent) {}
+            fn state(&self, _: SessionState) {}
+            fn activity(&self, event: SpeechActivity) {
+                if !event.active() {
+                    self.0.lock().unwrap().push("quiet");
+                }
+            }
+        }
+        let order = Arc::new(Order::default());
+        let sink: Arc<dyn EventSink> = order.clone();
+        let labels: Labels = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let activity = activity_for(1, &labels, &sink);
+        activity.submitted(0);
         let (tx, rx) = mpsc::channel();
         let handle = spawn_aggregator(
             1,
             rx,
-            Arc::new(std::sync::Mutex::new(HashMap::new())),
-            prompter.clone(),
-            Arc::new(Recorder::default()),
+            labels,
+            Arc::new(Prompter::new(None, true)),
+            sink,
             Arc::new(crate::replay::ReplayStore::default()),
+            activity,
+        );
+        tx.send(spoken(0, "Go")).unwrap();
+        drop(tx);
+        handle.join().unwrap();
+        assert_eq!(order.0.lock().unwrap().first(), Some(&"transcript"));
+    }
+
+    #[test]
+    fn only_text_that_reached_the_chat_is_carried_into_the_next_prompt() {
+        let prompter = Arc::new(Prompter::new(None, true));
+        let (tx, rx) = mpsc::channel();
+        let labels: Labels = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sink: Arc<dyn EventSink> = Arc::new(Recorder::default());
+        let handle = spawn_aggregator(
+            1,
+            rx,
+            labels.clone(),
+            prompter.clone(),
+            sink.clone(),
+            Arc::new(crate::replay::ReplayStore::default()),
+            activity_for(1, &labels, &sink),
         );
         tx.send(spoken_on(0, 0, "Standby für Cue fünf")).unwrap();
         tx.send(spoken_on(1, 0, "[BREAK]")).unwrap();

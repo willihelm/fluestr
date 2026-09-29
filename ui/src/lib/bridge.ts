@@ -39,6 +39,7 @@ import type {
   LevelsEvent,
   OverloadEvent,
   AlertMatch,
+  SpeechActivity,
 } from "./generated/session";
 import type { Language } from "./generated/language";
 import type {
@@ -84,6 +85,7 @@ import type { ResourceUsage } from "./generated/resources";
 export type {
   Action,
   AlertMatch,
+  SpeechActivity,
   CompiledRule,
   DeviceOption,
   DownloadStage,
@@ -374,6 +376,12 @@ export const onLevels = (fn: (e: LevelsEvent) => void): Promise<UnlistenFn> =>
 
 export const onOverload = (fn: (e: OverloadEvent) => void): Promise<UnlistenFn> =>
   on<OverloadEvent>("overload", (payload) => fn(payload));
+
+/// A channel started or stopped having something on its way to the chat —
+/// somebody talking, or what they said being decoded (P23). Edge-triggered:
+/// one event per change, never per frame.
+export const onSpeechActivity = (fn: (e: SpeechActivity) => void): Promise<UnlistenFn> =>
+  on<SpeechActivity>("speech-activity", (payload) => fn(payload));
 
 export const onSessionState = (fn: (e: SessionState) => void): Promise<UnlistenFn> =>
   on<SessionState>("session-state", (payload) => fn(payload));

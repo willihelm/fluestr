@@ -2,8 +2,10 @@
   import { tick, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { TranscriptEvent } from "./bridge";
-  import { audible, toBubbles, type Bubble } from "./bubbles";
+  import type { SpeechActivity } from "./bridge";
+  import { audible, placeholders, toBubbles, type Bubble } from "./bubbles";
   import { replay, toggle, watchReplay } from "./replay.svelte";
+  import { speech, watchSpeech } from "./speech.svelte";
   import { findAll, matches, split } from "./search";
   import {
     arrange,
@@ -64,13 +66,28 @@
     /// own, and naming a key that does nothing there is worse than saying
     /// where the button is.
     startHint?: string | null;
+    /// The stream ids this view shows, or `null` for every one. `messages`
+    /// already says this for the lines; the "speaking…" placeholders (P23)
+    /// come before any line and need to be told.
+    streams?: Set<number> | null;
   }
 
-  let { messages, colors, starts, direction, running, startHint = null }: Props = $props();
+  let {
+    messages,
+    colors,
+    starts,
+    direction,
+    running,
+    startHint = null,
+    streams = null,
+  }: Props = $props();
 
   // Hearing a bubble again (P22). Every view follows the same horizon, and
   // plays its own replays — see `replay.svelte.ts`.
   watchReplay();
+
+  // Who is talking before there is text (P23) — see `speech.svelte.ts`.
+  watchSpeech();
 
   // --- Search and filter (P9) ---------------------------------------------
   //
@@ -152,6 +169,38 @@
   let page = $derived(listed.slice(Math.max(0, listed.length - limit)));
   let shown = $derived(arrange(page, reading));
   let hidden = $derived(listed.length - page.length);
+
+  // --- "Speaking…" (P23) ---------------------------------------------------
+  //
+  // Placeholders are not bubbles and never pass through `toBubbles`: the rules
+  // never see them, the search never matches them, and nothing about them is
+  // kept. They sit at the newest edge, or as a line on the last bubble when
+  // the words on their way will join it — see `placeholders`.
+
+  let active = $derived(
+    Object.values(speech.active)
+      .map((entry) => entry.activity)
+      .filter((a) => streams === null || streams.has(a.streamId)),
+  );
+  let waiting = $derived(placeholders(bubbles, active));
+  /// The bubble carrying the indicator, when it is on the page. When it is
+  /// not — scrolled out of the window, or hidden by "Only matches" — the
+  /// channel gets a box of its own, since an indicator nobody can see is no
+  /// indicator.
+  let carrier = $derived(
+    waiting.onLast && page.at(-1)?.key === bubbles.at(-1)?.key ? waiting.onLast : null,
+  );
+  let boxes = $derived(
+    arrange(
+      carrier === null && waiting.onLast
+        ? [waiting.onLast, ...waiting.standalone]
+        : waiting.standalone,
+      reading,
+    ),
+  );
+  let carrierKey = $derived(carrier ? (bubbles.at(-1)?.key ?? null) : null);
+
+  const waitingText = (a: SpeechActivity) => (a.speaking ? "speaking" : "transcribing");
   /// The bubble the ↑/↓ buttons are sitting on, by key, or `null`.
   let focused = $derived(searching ? (listed[hits[focus]]?.key ?? null) : null);
 
@@ -304,6 +353,8 @@
     // the last bubble leaves the number of bubbles unchanged while the box
     // still grows, and the view has to follow that too.
     messages.length;
+    // And a placeholder appearing: it is the newest thing in the view.
+    boxes.length;
     if (following && container) {
       // Back at the newest edge, the pages that were opened to read backwards
       // are no longer being looked at. Dropping them keeps a session that ran
@@ -542,7 +593,7 @@
 </div>
 
 <div class="chat" bind:this={container} onscroll={onScroll}>
-  {#if messages.length === 0}
+  {#if messages.length === 0 && boxes.length === 0}
     <p class="empty">
       {#if running}
         Nothing transcribed yet. Speak into one of the channels.
@@ -572,6 +623,29 @@
   {/snippet}
 
   {#if !newestTop}{@render earlier()}{/if}
+
+  <!-- A channel that is talking before its text has arrived (P23). In the
+       channel's colour and under its label, where its bubble will land;
+       the transcript replaces it. No key, no time, no latency — there is
+       nothing yet to time, and nothing to replay or search. -->
+  {#snippet placeholder(a: SpeechActivity)}
+    <article class="placeholder" style="--channel: {colorOf(a.streamId)}">
+      <header>
+        <span class="label">{a.label || "Stream " + a.streamId}</span>
+      </header>
+      {@render indicator(a)}
+    </article>
+  {/snippet}
+
+  {#snippet indicator(a: SpeechActivity)}
+    <p class="indicator" aria-label="{a.label || 'Stream ' + a.streamId} is {waitingText(a)}">
+      {waitingText(a)}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+    </p>
+  {/snippet}
+
+  {#if newestTop}
+    {#each boxes as a (a.streamId)}{@render placeholder(a)}{/each}
+  {/if}
 
   <!-- Keyed on the identity of the segment that opened the bubble. On all
        three parts, not on `streamId + seq`: those repeat across sessions, and
@@ -624,8 +698,13 @@
       {#if replay.error?.key === bubble.key}
         <p class="replay-error">Could not play: {replay.error.message}</p>
       {/if}
+      {#if carrier && bubble.key === carrierKey}{@render indicator(carrier)}{/if}
     </article>
   {/each}
+
+  {#if !newestTop}
+    {#each boxes as a (a.streamId)}{@render placeholder(a)}{/each}
+  {/if}
 
   {#if newestTop}{@render earlier()}{/if}
 </div>
@@ -974,6 +1053,51 @@
     }
   }
 
+  /* --- "Speaking…" (P23) ------------------------------------------------ */
+
+  /* A bubble that has not arrived yet: the channel's edge and label like any
+     other, on a dashed border and no fill, so it never reads as a line of
+     text that is somehow empty. */
+  .placeholder {
+    background: transparent;
+    border-style: dashed;
+    border-left-style: solid;
+  }
+
+  .indicator {
+    color: var(--channel);
+    font-size: 0.85rem;
+    font-style: italic;
+  }
+
+  article:not(.placeholder) .indicator {
+    margin-top: 0.15rem;
+  }
+
+  .dots span {
+    animation: dot 1.2s infinite ease-in-out;
+    opacity: 0.2;
+  }
+
+  .dots span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .dots span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  @keyframes dot {
+    0%,
+    80%,
+    100% {
+      opacity: 0.2;
+    }
+    40% {
+      opacity: 1;
+    }
+  }
+
   /* Some operators cannot be shown a flashing box at all, and the system says
      so. The line is still marked as the newest one for the same moment, just
      without the fade.
@@ -982,6 +1106,12 @@
      never end, and the end is what takes the bubble out of the arriving set —
      the mark would stay on every line for the rest of the session. */
   @media (prefers-reduced-motion: reduce) {
+    /* The words say it; the dots only have to be there. */
+    .dots span {
+      animation: none;
+      opacity: 1;
+    }
+
     .arriving {
       animation: arriving-quiet 900ms step-end;
     }

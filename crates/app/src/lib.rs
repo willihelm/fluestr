@@ -12,6 +12,7 @@
 //! of a session that is *already running* — `update_stream_config`, which the
 //! file cannot express because the session is not the file.
 
+pub mod activity;
 pub mod alerts;
 // Generation only, so it exists only where generation runs: the frontend's
 // types are written by `cargo test` (P6).
@@ -85,6 +86,9 @@ pub const EVENT_WEBHOOK_STATUS: &str = "webhook-status";
 /// Older replay audio was dropped to make room (P22): the line through the
 /// chat before which bubbles have lost their play button.
 pub const EVENT_REPLAY_HORIZON: &str = "replay-horizon";
+/// A channel started or stopped having something on its way to the chat —
+/// somebody talking, or what they said being decoded (P23). Edge-triggered.
+pub const EVENT_SPEECH_ACTIVITY: &str = "speech-activity";
 /// What the shoutbox is doing, ten times a second while it runs (P26).
 pub const EVENT_SHOUTBOX: &str = "shoutbox-status";
 
@@ -222,6 +226,17 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
 
     fn horizon(&self, horizon: replay::Horizon) {
         broadcast(&self.app, EVENT_REPLAY_HORIZON, horizon);
+    }
+
+    fn activity(&self, event: activity::SpeechActivity) {
+        // Recorded for the view opened while somebody is talking, and for the
+        // remote that reconnects: a placeholder is only as good as its end,
+        // and a window that missed the end must not keep it.
+        match self.history.lock() {
+            Ok(mut history) => history.note_activity(&event),
+            Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
+        }
+        broadcast(&self.app, EVENT_SPEECH_ACTIVITY, event);
     }
 }
 

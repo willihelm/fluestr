@@ -136,7 +136,7 @@ for now, with the reason recorded in the package.
 | P20 | Streaming recognition as a second engine | **Open** | Everything — it is a measurement before it is a feature |
 | P21 | First-run setup guide | **Done** | Not yet walked on a machine that has never run the app — that waits on a Developer ID, see P13 |
 | P22 | Replaying a bubble's audio | **Partial** | Built on 2026-09-29, listen output included; not yet used in the house |
-| P23 | "Speaking…" placeholder | **Open** | Everything — an idea of 2026-09-28 |
+| P23 | "Speaking…" placeholder | **Partial** | Built on 2026-09-29; not yet run on a show, which is what its acceptance asks |
 | P24 | Ticker window | **Open** | Everything — an idea of 2026-09-28 |
 | P25 | Channel context for the model | **Partial** | Built on 2026-09-28; the sidecar test with a description and an evening in the house are missing |
 | P26 | Shoutbox following the room's level | **Partial** | Built on 2026-09-29 and run on a loopback device; a real mic, a real speaker and a show are missing |
@@ -2125,9 +2125,24 @@ listened to in one click, and the audio is the audio of that bubble — no
 neighbour's segment, no gap at a merge — coming out of the chosen listen
 output and no other.
 
-### P23 — "Speaking…" placeholder — **Open**
+### P23 — "Speaking…" placeholder — **Partial**
 
-*An idea of 2026-09-28, not yet a decision to build.*
+*An idea of 2026-09-28, built on 2026-09-29.*
+
+**Built:** `activity::Activity` keeps, per channel, whether the segmenter's
+gate is open and how many of its segments are still with the pool, and sends
+`speech-activity` — `speaking`, `decoding`, the label and when it began — on
+every change of either and on nothing else. The processing thread reports the
+gate's edges and counts each segment *before* submitting it; the aggregator
+settles each one after its transcript, if it had one, went out, so a view sees
+the text land before the placeholder goes. The pool answers every segment
+exactly once, and the end of a session ends whatever is left. The history
+keeps who is active, so a window opened mid-sentence or a remote that
+reconnects takes the snapshot's answer as the whole truth. In the chat, a
+dashed box in the channel's colour sits at the newest edge, or an indicator
+line on the last bubble when the activity began within `MAX_GAP_MS` of its
+end (`bubbles::placeholders`); a window drops one that has had no sign of life
+for 30 s. **Missing:** a show.
 
 **What it is.** The moment the speech gate opens on a channel, a placeholder
 bubble appears in that channel's colour, where its bubble will land, with an
@@ -2517,7 +2532,8 @@ worked from a second machine. What was third is now first.
 
 **Beside the list, not in it: P22 to P25**, added on 2026-09-28 as ideas. If
 they are taken up, the cheapest first: **P23** is an event and a placeholder,
-and it answers part of P20's question for free; **P25**'s channel description
+and it answers part of P20's question for free — built on 2026-09-29, so the
+next show can say whether it does; **P25**'s channel description
 is a field and a composed prompt, its previous-sentence half a switch behind
 it; **P24** is small unless the fullscreen check says otherwise; **P22** is the
 largest, a bounded audio store and a player, and the one that pays most on a

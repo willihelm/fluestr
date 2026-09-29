@@ -190,7 +190,46 @@ export type Snapshot = { transcripts: Array<TranscriptEvent>, sessions: Array<Se
  * The last session state that was reported, or `None` when nothing has
  * run yet in this process.
  */
-state: SessionState | null, };
+state: SessionState | null, 
+/**
+ * The channels that have something on its way to the chat right now
+ * (P23). A window takes this as the whole answer, dropping any
+ * placeholder it held that is not in it — which is how one that missed
+ * an end while it was disconnected loses it.
+ */
+activity: Array<SpeechActivity>, };
+
+/**
+ * A channel started or stopped having something on its way to the chat.
+ */
+export type SpeechActivity = { 
+/**
+ * See [`crate::session::TranscriptEvent::session_id`].
+ */
+sessionId: number, streamId: number, 
+/**
+ * The channel's label as it stands, so a placeholder for a channel that
+ * has not spoken yet this session can say whose it is.
+ */
+label: string, 
+/**
+ * The speech gate is open: somebody is talking.
+ */
+speaking: boolean, 
+/**
+ * Segments of this channel have been closed and have not come back yet:
+ * what was said is being transcribed. Separate from `speaking` because
+ * the two overlap — a long sentence is cut while it is still being
+ * spoken — and a view may want to say which it is.
+ */
+decoding: boolean, 
+/**
+ * When the current stretch of activity began, in milliseconds on the
+ * session clock — the one `t_start_ms` and `t_end_ms` are on. What a view
+ * compares with the last bubble's end to decide whether the words on
+ * their way will join it or start a new one.
+ */
+sinceMs: number, };
 
 /**
  * One intercom channel, as the UI configures it.

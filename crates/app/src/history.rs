@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde::Serialize;
 
+use crate::activity::SpeechActivity;
 use crate::session::{SessionState, TranscriptEvent};
 
 /// How many transcripts a window opened later can be caught up on.
@@ -58,6 +59,11 @@ pub struct Snapshot {
     /// The last session state that was reported, or `None` when nothing has
     /// run yet in this process.
     pub state: Option<SessionState>,
+    /// The channels that have something on its way to the chat right now
+    /// (P23). A window takes this as the whole answer, dropping any
+    /// placeholder it held that is not in it — which is how one that missed
+    /// an end while it was disconnected loses it.
+    pub activity: Vec<SpeechActivity>,
 }
 
 /// The transcripts the bridge has emitted, and the session state around them.
@@ -72,6 +78,8 @@ pub struct History {
     /// The session currently running, if any. What [`History::clear`] has to
     /// keep: the lines still arriving from it need their zero point.
     running: Option<u64>,
+    /// The latest activity of each channel that is active, keyed by stream.
+    activity: BTreeMap<u16, SpeechActivity>,
 }
 
 impl History {
@@ -99,9 +107,23 @@ impl History {
                 self.sessions.insert(*session_id, *started_at_ms);
                 self.running = Some(*session_id);
             }
-            SessionState::Stopped | SessionState::Failed { .. } => self.running = None,
+            SessionState::Stopped | SessionState::Failed { .. } => {
+                self.running = None;
+                self.activity.clear();
+            }
         }
         self.state = Some(state.clone());
+    }
+
+    /// Records a channel's activity: kept while it is active, dropped when it
+    /// ends. One session at a time, so a channel's entry is replaced rather
+    /// than keyed by session too.
+    pub fn note_activity(&mut self, event: &SpeechActivity) {
+        if event.active() {
+            self.activity.insert(event.stream_id, event.clone());
+        } else {
+            self.activity.remove(&event.stream_id);
+        }
     }
 
     /// Empties the chat: every transcript, from every session and every group.
@@ -127,6 +149,7 @@ impl History {
                 })
                 .collect(),
             state: self.state.clone(),
+            activity: self.activity.values().cloned().collect(),
         }
     }
 }
@@ -267,5 +290,38 @@ mod tests {
         history.clear();
 
         assert!(history.snapshot().sessions.is_empty());
+    }
+
+    fn activity(stream_id: u16, speaking: bool, decoding: bool) -> SpeechActivity {
+        SpeechActivity {
+            session_id: 1,
+            stream_id,
+            label: "Regie".into(),
+            speaking,
+            decoding,
+            since_ms: 0,
+        }
+    }
+
+    /// A window opened while somebody talks sees the placeholder; one opened
+    /// after it ended does not (P23).
+    #[test]
+    fn only_channels_still_active_are_in_the_snapshot() {
+        let mut history = History::default();
+        history.note_state(&running(1, 1_000));
+        history.note_activity(&activity(0, true, false));
+        history.note_activity(&activity(1, true, false));
+        history.note_activity(&activity(1, false, true));
+        history.note_activity(&activity(0, false, false));
+
+        let snapshot = history.snapshot();
+        assert_eq!(snapshot.activity, [activity(1, false, true)]);
+
+        // Clearing the chat is not the room going quiet.
+        history.clear();
+        assert_eq!(history.snapshot().activity.len(), 1);
+
+        history.note_state(&SessionState::Stopped);
+        assert!(history.snapshot().activity.is_empty());
     }
 }

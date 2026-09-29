@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CHARS, MAX_GAP_MS, MAX_SPAN_MS, audible, mergeHistory, toBubbles } from "./bubbles";
-import type { TranscriptEvent } from "./bridge";
+import {
+  MAX_CHARS,
+  MAX_GAP_MS,
+  MAX_SPAN_MS,
+  audible,
+  mergeHistory,
+  placeholders,
+  toBubbles,
+} from "./bubbles";
+import type { SpeechActivity, TranscriptEvent } from "./bridge";
 
 // A transcript event with only the fields that decide grouping spelled out.
 // Everything else is noise for these tests and would hide what each one is
@@ -244,5 +252,54 @@ describe("replaying a bubble (P22)", () => {
     // says everything.
     expect(audible(bubble, { sessionId: 0, tEndMs: 99_999 })).toBe(true);
     expect(audible(bubble, { sessionId: 2, tEndMs: 0 })).toBe(false);
+  });
+});
+
+describe("placeholders", () => {
+  const talking = (a: Partial<SpeechActivity> & { sinceMs: number }): SpeechActivity => ({
+    sessionId: 1,
+    streamId: 0,
+    label: "Regie",
+    speaking: true,
+    decoding: false,
+    ...a,
+  });
+
+  it("puts the indicator on the last bubble when the same speaker carries on", () => {
+    const bubbles = toBubbles([event({ tStartMs: 0, tEndMs: 1000 })]);
+    const a = talking({ sinceMs: 1000 + MAX_GAP_MS });
+    expect(placeholders(bubbles, [a])).toEqual({ onLast: a, standalone: [] });
+  });
+
+  it("gives a channel a box of its own after a real pause", () => {
+    const bubbles = toBubbles([event({ tStartMs: 0, tEndMs: 1000 })]);
+    const a = talking({ sinceMs: 1001 + MAX_GAP_MS });
+    expect(placeholders(bubbles, [a])).toEqual({ onLast: null, standalone: [a] });
+  });
+
+  it("never attaches to another channel's bubble, and orders boxes by who began first", () => {
+    const bubbles = toBubbles([event({ tStartMs: 0, tEndMs: 1000, streamId: 2 })]);
+    const later = talking({ streamId: 0, sinceMs: 1400 });
+    const earlier = talking({ streamId: 1, sinceMs: 1200 });
+    expect(placeholders(bubbles, [later, earlier])).toEqual({
+      onLast: null,
+      standalone: [earlier, later],
+    });
+  });
+
+  it("does not attach to a bubble that is already full", () => {
+    const bubbles = toBubbles([
+      event({ tStartMs: 0, tEndMs: 1000, text: "x".repeat(MAX_CHARS) }),
+    ]);
+    expect(placeholders(bubbles, [talking({ sinceMs: 1100 })]).onLast).toBeNull();
+  });
+
+  it("does not attach across sessions", () => {
+    const bubbles = toBubbles([event({ tStartMs: 0, tEndMs: 1000 })]);
+    expect(placeholders(bubbles, [talking({ sessionId: 2, sinceMs: 1100 })]).onLast).toBeNull();
+  });
+
+  it("shows nothing when nobody is talking", () => {
+    expect(placeholders([], [])).toEqual({ onLast: null, standalone: [] });
   });
 });

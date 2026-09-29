@@ -267,6 +267,14 @@ impl Segmenter {
         self.stream_id
     }
 
+    /// Whether the speech gate is open: a segment is being built. What the
+    /// "speaking…" placeholder follows (P23) — read after a push rather than
+    /// reported from inside it, because the edges the views need are a few
+    /// per sentence and the frames are thirty a second.
+    pub fn is_speaking(&self) -> bool {
+        self.speaking
+    }
+
     /// Puts this stream onto another language while it is running.
     ///
     /// The mode is read when a segment is *closed*, so a change lands on the
@@ -599,8 +607,14 @@ mod tests {
 
         // Speech ends at 1500 ms, the pause closes the segment 500 ms later.
         let end = segments[0].t_end.as_millis() as i64;
-        assert!(end >= 1_700, "segment ends at {end} ms, expected the post-roll");
-        assert!(end < 1_950, "segment ends at {end} ms, expected the pause trimmed");
+        assert!(
+            end >= 1_700,
+            "segment ends at {end} ms, expected the post-roll"
+        );
+        assert!(
+            end < 1_950,
+            "segment ends at {end} ms, expected the pause trimmed"
+        );
     }
 
     #[test]

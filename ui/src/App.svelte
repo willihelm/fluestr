@@ -29,6 +29,7 @@
   import { DEFAULT_DIRECTION, type SortDirection } from "./lib/sort";
   import { compile as compileRules, sameCompiled, type CompiledRule } from "./lib/rules";
   import { mergeHistory, toBubbles } from "./lib/bubbles";
+  import { adoptSpeech } from "./lib/speech.svelte";
   import { attentionFor } from "./lib/attention";
   import { ALL_CHANNELS_VIEW, type GroupView } from "./lib/windows";
   import { beforeLeaving, whenEditingEnds } from "./lib/editing";
@@ -620,8 +621,11 @@
   /// All three are the same catch-up, from the same place, merged into
   /// whatever is already held.
   const catchUp = async () => {
+    const askedAt = Date.now();
     const snapshot = await sessionSnapshot();
     messages = mergeHistory(snapshot.transcripts, messages);
+    // Who is talking right now (P23) — `?? []` for a backend that predates it.
+    adoptSpeech(snapshot.activity ?? [], askedAt);
     sessionStarts = new Map([
       ...snapshot.sessions.map((s): [number, number] => [s.sessionId, s.startedAtMs]),
       ...sessionStarts,
@@ -1293,6 +1297,7 @@
              chat's. -->
         <ChatList
           messages={shown}
+          streams={visible}
           {colors}
           starts={sessionStarts}
           direction={chatSort}
