@@ -2339,8 +2339,8 @@ program ring with a bounded fill, replay mixed in before the gain, gain ramp,
 instant peak limiter under a hard clamp. `outputs::Engine` follows the active
 profile's `outputs` at startup and on every save, reopens streams only when the
 patch changes, retries a missing device every three seconds and reports
-`shoutbox-status`. Trim and mute go live through `set_shoutbox_live` and are
-the only part a remote may write. The page is **Settings → Audio output**, with
+`shoutbox-status`. Trim and mute go live through `set_shoutbox_live`; a
+remote may write all of the shoutbox and none of the listen output. The page is **Settings → Audio output**, with
 a calibration helper against an SPL meter and the curve drawn with the current
 point; the status bar carries the shoutbox's gain and mute.
 **Missing:** a real measurement mic and speaker — so far it has run only on a
@@ -2435,9 +2435,12 @@ live the way P12's thresholds are, with the curve drawn and the current point
 on it. The operator can always beat the automation: a trim and a mute beside
 the meter.
 
-**LAN remote.** Sees the meters and the gain and may use trim and mute; the
-routing and the curve are host-only, like the webhook in P19 — the outputs are
-the host machine's.
+**LAN remote.** Sees the meters and the gain and may set up the shoutbox in
+full — patch, calibration, curve, speeds and gate as well as trim and mute —
+because whoever tunes it is standing by the speaker, not at the laptop.
+*Changed on 2026-09-29*: the first build kept the routing and the curve
+host-only, like the webhook in P19. The listen output stays host-only: those
+are the host's headphones, and a remote hears a replay in its own browser.
 
 **Build order.** The output layer first — output devices in `AudioBackend`
 beside the input devices, an output stream, resampling to the device rate —

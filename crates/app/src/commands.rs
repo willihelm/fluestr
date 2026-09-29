@@ -161,7 +161,6 @@ pub enum Command {
     ShoutboxStatus,
     /// The shoutbox's trim and mute, at once rather than after the save's
     /// debounce — a mute a second late is a second of talkback in the house.
-    /// The one part of the outputs the remote may touch.
     SetShoutboxLive {
         trim_db: i32,
         muted: bool,

@@ -12,9 +12,10 @@
   // that cannot wait for the save's debounce — the shoutbox's trim and mute —
   // also go straight to it.
   //
-  // In a browser on the LAN (P16) the routes and the curve are shown and not
-  // editable: the speakers and headphones are the host machine's. Trim and mute
-  // are, because somebody at the position is who needs them.
+  // In a browser on the LAN (P16) the listen output is shown and not editable:
+  // the headphones are the host machine's, and a replay there plays in the
+  // browser. The shoutbox is editable in full, because whoever tunes it is
+  // standing by the speaker rather than at the laptop.
 
   import { onMount } from "svelte";
   import {
@@ -307,7 +308,7 @@
     <button type="button" class="link" onclick={refresh} title="Look for input and output devices again">
       Refresh devices
     </button>
-    {#if !isRemote && !isShoutboxDefault(shoutbox)}
+    {#if !isShoutboxDefault(shoutbox)}
       <button
         type="button"
         class="link reset"
@@ -328,7 +329,7 @@
   </p>
 
   <label class="switch">
-    <input type="checkbox" disabled={isRemote} bind:checked={shoutbox.enabled} />
+    <input type="checkbox" bind:checked={shoutbox.enabled} />
     Shoutbox on
   </label>
 
@@ -342,7 +343,6 @@
       <span>Program input</span>
       <select
         value={routeKey(shoutbox.program)}
-        disabled={isRemote}
         onchange={(e) => pickInput(shoutbox.program, e.currentTarget.value)}
       >
         <option value="">Not patched</option>
@@ -356,7 +356,7 @@
     </label>
     <label class="narrow">
       <span>Channel</span>
-      <select bind:value={shoutbox.program.channel} disabled={isRemote}>
+      <select bind:value={shoutbox.program.channel}>
         {#each Array.from({ length: inputDevice(shoutbox.program)?.channels ?? shoutbox.program.channel + 1 }, (_, c) => c) as c (c)}
           <option value={c}>{c + 1}</option>
         {/each}
@@ -369,7 +369,6 @@
       <span>Measurement mic</span>
       <select
         value={routeKey(shoutbox.reference)}
-        disabled={isRemote}
         onchange={(e) => pickInput(shoutbox.reference, e.currentTarget.value)}
       >
         <option value="">Not patched</option>
@@ -383,7 +382,7 @@
     </label>
     <label class="narrow">
       <span>Channel</span>
-      <select bind:value={shoutbox.reference.channel} disabled={isRemote}>
+      <select bind:value={shoutbox.reference.channel}>
         {#each Array.from({ length: inputDevice(shoutbox.reference)?.channels ?? shoutbox.reference.channel + 1 }, (_, c) => c) as c (c)}
           <option value={c}>{c + 1}</option>
         {/each}
@@ -396,7 +395,6 @@
       <span>Shoutbox output</span>
       <select
         value={routeKey(shoutbox.output)}
-        disabled={isRemote}
         onchange={(e) => pickOutput(shoutbox.output, e.currentTarget.value)}
       >
         <option value="">Not patched</option>
@@ -412,7 +410,6 @@
       <span>Channels</span>
       <select
         value={encodeChannels(shoutbox.output.channels)}
-        disabled={isRemote}
         onchange={(e) => (shoutbox.output.channels = decodeChannels(e.currentTarget.value))}
       >
         <option value="">Default</option>
@@ -440,7 +437,6 @@
         min="0.5"
         max="30"
         step="0.5"
-        disabled={isRemote}
         value={shoutbox.windowMs / 1000}
         onchange={(e) => (shoutbox.windowMs = Math.round(Number(e.currentTarget.value) * 1000))}
       />
@@ -453,7 +449,6 @@
         max="200"
         step="0.1"
         placeholder="none"
-        disabled={isRemote}
         value={shoutbox.calibrationDb ?? ""}
         onchange={(e) =>
           (shoutbox.calibrationDb =
@@ -461,31 +456,29 @@
       />
     </label>
   </div>
-  {#if !isRemote}
-    <div class="row calibrate">
-      <label class="narrow">
-        <span>An SPL meter at the mic reads (dB)</span>
-        <input type="number" min="20" max="140" step="0.1" bind:value={meterReading} />
-      </label>
-      <button
-        type="button"
-        disabled={offset === null}
-        onclick={() => {
-          shoutbox.calibrationDb = offset;
-          meterReading = CALIBRATOR_DB;
-        }}
-      >
-        Calibrate{offset !== null ? ` (offset ${offset.toFixed(1)} dB)` : ""}
-      </button>
-    </div>
-    <p class="note">
-      With a calibration the levels below are in dB SPL, without it in weighted dBFS.
-      Calibrating moves what the curve's numbers mean, so set it before the curve. Read
-      the meter while nothing plays on the shoutbox.
-    </p>
-  {/if}
+  <div class="row calibrate">
+    <label class="narrow">
+      <span>An SPL meter at the mic reads (dB)</span>
+      <input type="number" min="20" max="140" step="0.1" bind:value={meterReading} />
+    </label>
+    <button
+      type="button"
+      disabled={offset === null}
+      onclick={() => {
+        shoutbox.calibrationDb = offset;
+        meterReading = CALIBRATOR_DB;
+      }}
+    >
+      Calibrate{offset !== null ? ` (offset ${offset.toFixed(1)} dB)` : ""}
+    </button>
+  </div>
+  <p class="note">
+    With a calibration the levels below are in dB SPL, without it in weighted dBFS.
+    Calibrating moves what the curve's numbers mean, so set it before the curve. Read
+    the meter while nothing plays on the shoutbox.
+  </p>
 
-  <!-- The hand on top of the automation, reachable from the remote too. -->
+  <!-- The hand on top of the automation. -->
   <h3>Live</h3>
   <div class="live">
     <button
@@ -596,7 +589,7 @@
     <div class="fields">
       <label>
         <span>Quiet below ({unit})</span>
-        <input type="number" disabled={isRemote} bind:value={shoutbox.quietDb} />
+        <input type="number" bind:value={shoutbox.quietDb} />
       </label>
       <label>
         <span>Gain when quiet (dB)</span>
@@ -604,13 +597,12 @@
           type="number"
           min={SHOUTBOX_GAIN_DB_MIN}
           max={SHOUTBOX_GAIN_DB_MAX}
-          disabled={isRemote}
           bind:value={shoutbox.baseGainDb}
         />
       </label>
       <label>
         <span>dB of gain per dB of room (%)</span>
-        <input type="number" min="0" max="200" step="5" disabled={isRemote} bind:value={shoutbox.slopePercent} />
+        <input type="number" min="0" max="200" step="5" bind:value={shoutbox.slopePercent} />
       </label>
       <label>
         <span>Most gain (dB)</span>
@@ -618,7 +610,6 @@
           type="number"
           min={SHOUTBOX_GAIN_DB_MIN}
           max={SHOUTBOX_GAIN_DB_MAX}
-          disabled={isRemote}
           bind:value={shoutbox.maxGainDb}
         />
       </label>
@@ -634,7 +625,6 @@
         min="500"
         max="30000"
         step="500"
-        disabled={isRemote}
         bind:value={shoutbox.riseMs}
       />
     </label>
@@ -645,7 +635,6 @@
         min="2000"
         max="120000"
         step="1000"
-        disabled={isRemote}
         bind:value={shoutbox.fallMs}
       />
     </label>
@@ -657,15 +646,15 @@
   <div class="row">
     <label class="narrow">
       <span>Counts as playing above (dBFS)</span>
-      <input type="number" min="-80" max="-10" disabled={isRemote} bind:value={shoutbox.gateDbfs} />
+      <input type="number" min="-80" max="-10" bind:value={shoutbox.gateDbfs} />
     </label>
     <label class="narrow">
       <span>… and for (ms) after</span>
-      <input type="number" min="200" max="10000" step="100" disabled={isRemote} bind:value={shoutbox.gateHoldMs} />
+      <input type="number" min="200" max="10000" step="100" bind:value={shoutbox.gateHoldMs} />
     </label>
     <label class="narrow">
       <span>Never above (dBFS)</span>
-      <input type="number" min="-20" max="0" disabled={isRemote} bind:value={shoutbox.ceilingDbfs} />
+      <input type="number" min="-20" max="0" bind:value={shoutbox.ceilingDbfs} />
     </label>
   </div>
   <p class="note">

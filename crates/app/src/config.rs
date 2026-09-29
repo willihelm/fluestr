@@ -1018,21 +1018,19 @@ impl Config {
         self.remote = stored.remote.clone();
         self.model_path = stored.model_path.clone();
 
-        // Where audio leaves this machine is the machine's (P22, P26): its
-        // speakers and its headphones. A remote may reach the shoutbox's trim
-        // and mute — a mute is always safe, and it is what somebody at the
-        // position needs — and nothing else of it. A profile the machine does
-        // not have yet gets no outputs at all rather than the remote's.
+        // The listen output is the host's headphones (P22): a remote hears a
+        // replay in its own browser, so it has no business routing the host's.
+        // The shoutbox (P26) is the remote's to set up in full — patch, curve
+        // and calibration — because the person tuning it is at the position,
+        // not at the laptop; `sanitise` clamps what it sends like anything
+        // else. A profile the machine does not have yet gets the default
+        // listen output rather than the remote's.
         for (p, profile) in self.profiles.iter_mut().enumerate() {
-            let sent = std::mem::take(&mut profile.outputs);
-            let mut kept = stored
+            profile.outputs.listen = stored
                 .profiles
                 .get(p)
-                .map(|same| same.outputs.clone())
+                .map(|same| same.outputs.listen.clone())
                 .unwrap_or_default();
-            kept.shoutbox.trim_db = sent.shoutbox.trim_db;
-            kept.shoutbox.muted = sent.shoutbox.muted;
-            profile.outputs = kept;
         }
 
         let known = stored.webhooks_by_fingerprint(secret);
@@ -1999,8 +1997,6 @@ mod tests {
         );
     }
 
-    /// Where audio leaves the machine is the machine's (P22, P26); the one
-    /// part a remote may reach is the shoutbox's trim and mute.
     #[test]
     fn a_calibration_keeps_a_tenth_goes_negative_and_reads_old_files() {
         let read = |json: &str| {
@@ -2023,8 +2019,10 @@ mod tests {
         assert_eq!(shoutbox.control().calibration_db, -2.3);
     }
 
+    /// The shoutbox is set up from wherever it is heard (P26); the listen
+    /// output stays the host's headphones (P22).
     #[test]
-    fn a_remote_may_mute_the_shoutbox_and_nothing_else_of_the_outputs() {
+    fn a_remote_may_set_up_the_shoutbox_and_not_the_listen_output() {
         let secret = [3u8; 32];
         let stored = a_config();
 
@@ -2038,14 +2036,8 @@ mod tests {
 
         let saved = sent.from_remote(&stored, &secret);
         let kept = &saved.profiles[1].outputs;
-        assert_eq!(
-            kept.shoutbox.output,
-            stored.profiles[1].outputs.shoutbox.output
-        );
-        assert_eq!(
-            kept.shoutbox.max_gain_db,
-            stored.profiles[1].outputs.shoutbox.max_gain_db
-        );
+        assert_eq!(kept.shoutbox.output.device_id, "Main PA");
+        assert_eq!(kept.shoutbox.max_gain_db, 12);
         assert_eq!(kept.listen, stored.profiles[1].outputs.listen);
         assert_eq!(kept.shoutbox.trim_db, -8);
         assert!(kept.shoutbox.muted);
