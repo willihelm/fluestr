@@ -103,6 +103,41 @@ pub trait SampleSink: Send {
     fn push(&mut self, samples: &[f32]) -> usize;
 }
 
+impl<S: SampleSink + ?Sized> SampleSink for Box<S> {
+    fn push(&mut self, samples: &[f32]) -> usize {
+        (**self).push(samples)
+    }
+}
+
+/// A sink that also hands its samples to a second one while a flag is set —
+/// the solo of an input, tapped in the callback.
+///
+/// The main sink is fed whatever the flag says, and its count is the one
+/// reported: a solo is somebody listening, and listening must never cost the
+/// transcription a sample. The copy is best effort — a full copy is a gap in
+/// the headphones, not a dropped segment.
+pub struct Tap<M: SampleSink, C: SampleSink> {
+    main: M,
+    copy: C,
+    on: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<M: SampleSink, C: SampleSink> Tap<M, C> {
+    pub fn new(main: M, copy: C, on: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self { main, copy, on }
+    }
+}
+
+impl<M: SampleSink, C: SampleSink> SampleSink for Tap<M, C> {
+    fn push(&mut self, samples: &[f32]) -> usize {
+        let accepted = self.main.push(samples);
+        if self.on.load(Ordering::Relaxed) {
+            let _ = self.copy.push(samples);
+        }
+        accepted
+    }
+}
+
 /// Counters written from the audio callback and read from anywhere.
 ///
 /// Atomics rather than a mutex: the callback must never block. `Relaxed` is
@@ -484,5 +519,22 @@ mod tests {
                 available: 4
             }
         ));
+    }
+
+    #[test]
+    fn a_tap_copies_only_while_it_is_on_and_reports_the_main_count() {
+        let on = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (main, main_rec) = VecSink::bounded(3);
+        let (copy, copy_rec) = VecSink::unlimited();
+        let mut tap = Tap::new(main, copy, on.clone());
+
+        assert_eq!(tap.push(&[1.0, 2.0]), 2);
+        assert!(copy_rec.samples().is_empty());
+
+        on.store(true, Ordering::Relaxed);
+        // The main sink is full after one more; the copy still gets all.
+        assert_eq!(tap.push(&[3.0, 4.0]), 1);
+        assert_eq!(main_rec.samples(), vec![1.0, 2.0, 3.0]);
+        assert_eq!(copy_rec.samples(), vec![3.0, 4.0]);
     }
 }

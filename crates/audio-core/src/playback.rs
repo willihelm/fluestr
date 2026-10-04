@@ -239,6 +239,78 @@ impl PlayerHandle {
     }
 }
 
+/// How much a [`Live`] source buffers before it plays, in seconds: more than
+/// one pass of the thread that feeds it, which delivers in bursts.
+const LIVE_PRIME_SECONDS: f32 = 0.04;
+
+/// More than this buffered is latency nobody asked for, and is skipped. Two
+/// devices are two clocks, and this is what keeps their drift from becoming
+/// a delay that grows over an evening.
+const LIVE_CEILING_SECONDS: f32 = 0.15;
+
+/// The realtime half of a live feed: plays what arrives in a ring, mixed onto
+/// whatever the output already holds — the soloed inputs on the headphones.
+///
+/// Fed from another clock (the input interface's), so it keeps a small
+/// buffer: it waits for [`LIVE_PRIME_SECONDS`] before it plays, skips what
+/// piles up past [`LIVE_CEILING_SECONDS`], and after running dry waits again
+/// rather than playing a trickle of short callbacks.
+pub struct Live {
+    source: crate::RingSource,
+    primed: bool,
+    prime: usize,
+    ceiling: usize,
+    scratch: [f32; SCRATCH_LEN],
+}
+
+impl Live {
+    pub fn new(source: crate::RingSource, rate: u32) -> Self {
+        let rate = rate.max(1) as f32;
+        Self {
+            source,
+            primed: false,
+            prime: (rate * LIVE_PRIME_SECONDS) as usize,
+            ceiling: (rate * LIVE_CEILING_SECONDS) as usize,
+            scratch: [0.0; SCRATCH_LEN],
+        }
+    }
+
+    /// Adds what has arrived onto `out`.
+    pub fn mix_into(&mut self, out: &mut [f32]) {
+        let need = out.len();
+        let available = self.source.available();
+        if !self.primed {
+            if available < self.prime + need {
+                return;
+            }
+            self.primed = true;
+        }
+        if available > self.ceiling.max(self.prime + 2 * need) {
+            self.source.skip(available - (self.prime + need));
+        }
+
+        let mut done = 0;
+        while done < need {
+            let take = SCRATCH_LEN.min(need - done);
+            let got = self.source.read(&mut self.scratch[..take]);
+            for (slot, sample) in out[done..done + got].iter_mut().zip(&self.scratch[..got]) {
+                *slot += sample;
+            }
+            done += got;
+            if got < take {
+                self.primed = false;
+                break;
+            }
+        }
+    }
+}
+
+impl SampleSource for Live {
+    fn fill(&mut self, out: &mut [f32]) {
+        self.mix_into(out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +397,56 @@ mod tests {
         let mut out = vec![0.5; 2];
         player.mix_into(&mut out);
         assert_eq!(out, vec![0.75; 2]);
+    }
+
+    #[test]
+    fn a_live_feed_waits_for_its_buffer_then_plays_in_order() {
+        use crate::SampleSink as _;
+        // 1 kHz, so the prime is 40 samples.
+        let (mut sink, source) = crate::ring::channel(1000, 1.0);
+        let mut live = Live::new(source, 1000);
+
+        sink.push(&[1.0; 30]);
+        let mut out = vec![0.0; 10];
+        live.fill(&mut out);
+        assert_eq!(out, vec![0.0; 10], "played before it had a buffer");
+
+        sink.push(&(0..30).map(|n| n as f32).collect::<Vec<_>>());
+        let mut out = vec![0.5; 10];
+        live.mix_into(&mut out);
+        assert_eq!(out, vec![1.5; 10], "mixed onto what was there");
+    }
+
+    #[test]
+    fn a_live_feed_skips_what_piles_up_past_its_ceiling() {
+        use crate::SampleSink as _;
+        let (mut sink, source) = crate::ring::channel(1000, 1.0);
+        let mut live = Live::new(source, 1000);
+        // 500 ms waiting: far past the 150 ms ceiling.
+        sink.push(&(0..500).map(|n| n as f32).collect::<Vec<_>>());
+        let mut out = vec![0.0; 10];
+        live.fill(&mut out);
+        // What is left is the prime and this callback: the newest audio.
+        assert_eq!(out[0], (500 - 40 - 10) as f32);
+    }
+
+    #[test]
+    fn a_live_feed_that_runs_dry_waits_for_its_buffer_again() {
+        use crate::SampleSink as _;
+        let (mut sink, source) = crate::ring::channel(1000, 1.0);
+        let mut live = Live::new(source, 1000);
+        sink.push(&[1.0; 50]);
+        let mut out = vec![0.0; 10];
+        live.fill(&mut out);
+        assert_eq!(out, vec![1.0; 10]);
+        let mut out = vec![0.0; 50];
+        live.fill(&mut out);
+        assert_eq!(&out[..40], &[1.0; 40][..]);
+        assert_eq!(&out[40..], &[0.0; 10][..]);
+
+        sink.push(&[1.0; 20]);
+        let mut out = vec![0.0; 10];
+        live.fill(&mut out);
+        assert_eq!(out, vec![0.0; 10], "played a trickle instead of priming");
     }
 }

@@ -50,6 +50,7 @@ fn window() -> WindowFunction {
 /// two streams through one instance would smear them into each other.
 pub struct Resampler {
     input_rate: u32,
+    output_rate: u32,
     /// `None` when the device already runs at 16 kHz and the samples only need
     /// range-clamping. Rare in practice, but a resampler at ratio 1.0 would add
     /// latency and CPU for nothing.
@@ -67,13 +68,21 @@ struct Inner {
 
 impl Resampler {
     pub fn new(input_rate: u32) -> Result<Self> {
-        if input_rate == 0 {
-            return Err(AudioError::Resample("input sample rate is zero".into()));
+        Self::between(input_rate, SAMPLE_RATE)
+    }
+
+    /// The same stream conversion to any rate — the soloed inputs, from the
+    /// interface's rate to the headphones' (which is mostly the same, and
+    /// then passes through).
+    pub fn between(input_rate: u32, output_rate: u32) -> Result<Self> {
+        if input_rate == 0 || output_rate == 0 {
+            return Err(AudioError::Resample("sample rate is zero".into()));
         }
 
-        if input_rate == SAMPLE_RATE {
+        if input_rate == output_rate {
             return Ok(Self {
                 input_rate,
+                output_rate,
                 inner: None,
             });
         }
@@ -91,7 +100,7 @@ impl Resampler {
             window: window(),
         };
 
-        let ratio = SAMPLE_RATE as f64 / input_rate as f64;
+        let ratio = output_rate as f64 / input_rate as f64;
         // `max_resample_ratio_relative` of 1.0: the hardware rate is fixed for
         // the life of a session, so no adjustment is ever asked for.
         let resampler = SincFixedIn::<f32>::new(ratio, 1.0, parameters, CHUNK_FRAMES, 1)
@@ -102,6 +111,7 @@ impl Resampler {
 
         Ok(Self {
             input_rate,
+            output_rate,
             inner: Some(Inner {
                 resampler,
                 pending: Vec::with_capacity(2 * CHUNK_FRAMES),
@@ -113,6 +123,10 @@ impl Resampler {
 
     pub fn input_rate(&self) -> u32 {
         self.input_rate
+    }
+
+    pub fn output_rate(&self) -> u32 {
+        self.output_rate
     }
 
     /// True when the device already delivers [`SAMPLE_RATE`] and samples pass

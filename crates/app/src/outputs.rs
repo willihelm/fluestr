@@ -3,7 +3,8 @@
 //! Two outputs, and deliberately two:
 //!
 //! - the **listen** output, where a bubble's audio is replayed — headphones,
-//!   typically, so a replay reaches the operator and nobody else;
+//!   typically, so a replay reaches the operator and nobody else — and where
+//!   the soloed inputs are heard (see [`crate::solo`]);
 //! - the **shoutbox**: one intercom channel passed through to a talkback
 //!   speaker, its level following the room (see [`audio_core::shoutbox`]).
 //!
@@ -25,11 +26,12 @@
 
 use crate::config::{InputRoute, OutputRoute, Outputs, Shoutbox};
 use crate::replay::{ClipKey, ReplayStore};
+use crate::solo::{self, SoloState};
 use audio_core::shoutbox::{self, Controller, ShoutboxSource, WeightingFilter};
 use audio_core::{
     playback, ring, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, ChannelAssignment,
-    ChannelMap, CpalBackend, DeviceId, OutputConfig, PlaybackSession, PlayerHandle, RingSource,
-    StreamId, SAMPLE_RATE,
+    ChannelMap, CpalBackend, DeviceId, Live, OutputConfig, PlaybackSession, Player, PlayerHandle,
+    RingSource, SampleSource, StreamId, SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,6 +48,10 @@ const STATUS_EVERY: Duration = Duration::from_millis(100);
 
 /// How long a shoutbox whose device is missing waits before trying again.
 const RETRY: Duration = Duration::from_secs(3);
+
+/// How much of the soloed inputs the listen output's ring holds. [`Live`]
+/// keeps its own fill far below this.
+const SOLO_RING_SECONDS: f32 = 0.5;
 
 /// How much program audio the pass-through ring holds. The source keeps its
 /// own fill far below this; the rest is headroom for a scheduling hiccup.
@@ -166,6 +172,19 @@ pub fn list_output_devices() -> anyhow::Result<Vec<OutputDeviceOption>> {
         .collect())
 }
 
+/// What the listen output plays: a replay, and the soloed inputs under it.
+struct ListenSource {
+    player: Player,
+    solo: Live,
+}
+
+impl SampleSource for ListenSource {
+    fn fill(&mut self, out: &mut [f32]) {
+        self.solo.mix_into(out);
+        self.player.mix_into(out);
+    }
+}
+
 /// The listen output while it is open.
 struct Listen {
     /// What it was opened for, so a changed route reopens it.
@@ -187,6 +206,9 @@ pub struct Engine {
     /// The last status, for a view that opens after it was sent.
     status: Arc<Mutex<ShoutboxStatus>>,
     cues: AtomicU64,
+    /// The soloed inputs, on their way to the listen output. Shared with the
+    /// session and the monitor, which tap their captures into it.
+    pub(crate) solo: Arc<solo::Bus>,
 }
 
 impl Engine {
@@ -221,6 +243,16 @@ impl Engine {
             if stale {
                 if let Some(open) = listen.take() {
                     let _ = open.session.stop();
+                }
+                self.solo.disconnect();
+                // Somebody is listening: they hear on the new route at once,
+                // rather than at the next press.
+                if self.solo.any() {
+                    if let Err(message) =
+                        ensure_listen(&mut listen, &outputs.listen.output, &self.solo)
+                    {
+                        tracing::warn!(message, "the soloed inputs lost their output");
+                    }
                 }
             }
         }
@@ -301,7 +333,7 @@ impl Engine {
             .listen
             .lock()
             .map_err(|_| "the listen output is poisoned")?;
-        ensure_listen(&mut listen, &route)?;
+        ensure_listen(&mut listen, &route, &self.solo)?;
         let open = listen.as_mut().ok_or("the listen output did not open")?;
         let samples = audio_core::resample::convert(&audio, SAMPLE_RATE, open.rate)
             .map_err(|e| e.to_string())?;
@@ -310,6 +342,28 @@ impl Engine {
             duration_ms,
             target: open.name.clone(),
         })
+    }
+
+    /// Solos or releases one input. A solo opens the listen output, and is
+    /// refused — left out — when that cannot be done: an S that is lit with
+    /// nothing in the headphones is a channel that sounds dead.
+    pub fn set_solo(&self, stream_id: u16, soloed: bool) -> Result<SoloState, String> {
+        if soloed {
+            let route = self
+                .applied
+                .lock()
+                .ok()
+                .and_then(|a| a.as_ref().map(|o| o.listen.output.clone()))
+                .unwrap_or_default();
+            let mut listen = self
+                .listen
+                .lock()
+                .map_err(|_| "the listen output is poisoned")?;
+            ensure_listen(&mut listen, &route, &self.solo)?;
+        }
+        self.solo.set(stream_id, soloed);
+        tracing::info!(stream_id, soloed, "solo changed");
+        Ok(self.solo.state())
     }
 
     pub fn stop_replay(&self) {
@@ -332,16 +386,22 @@ impl Engine {
                 let _ = open.session.stop();
             }
         }
+        self.solo.disconnect();
     }
 }
 
-/// Opens the listen output if it is not open, or was lost.
+/// Opens the listen output if it is not open, or was lost, and points the
+/// soloed inputs at it.
 ///
-/// Opened at the first replay rather than at startup: an output stream held
-/// open all evening on a device the operator never replays to is a stream
-/// that can only go wrong. A route that is missing is said so; the system
-/// output is used only when that is what the route *is*.
-fn ensure_listen(listen: &mut Option<Listen>, route: &OutputRoute) -> Result<(), String> {
+/// Opened at the first replay or solo rather than at startup: an output
+/// stream held open all evening on a device the operator never listens on is
+/// a stream that can only go wrong. A route that is missing is said so; the
+/// system output is used only when that is what the route *is*.
+fn ensure_listen(
+    listen: &mut Option<Listen>,
+    route: &OutputRoute,
+    solo: &solo::Bus,
+) -> Result<(), String> {
     let lost = listen.as_ref().is_some_and(|open| {
         open.route != *route
             || open
@@ -353,6 +413,7 @@ fn ensure_listen(listen: &mut Option<Listen>, route: &OutputRoute) -> Result<(),
         if let Some(open) = listen.take() {
             let _ = open.session.stop();
         }
+        solo.disconnect();
     }
     if listen.is_some() {
         return Ok(());
@@ -369,6 +430,12 @@ fn ensure_listen(listen: &mut Option<Listen>, route: &OutputRoute) -> Result<(),
     })?;
     let channels = channels_or_default(&route.channels, info.channels);
     let (player, handle) = playback::player();
+    // Sized for the fastest rate the device might be granted: the real one is
+    // only known once it is open, and the ring has to be in the source by then.
+    let (solo_sink, solo_source) = ring::channel(
+        info.default_sample_rate.max(SAMPLE_RATE * 12),
+        SOLO_RING_SECONDS,
+    );
     let (events, events_rx) = mpsc::channel();
     let session = backend
         .open_output(
@@ -377,12 +444,16 @@ fn ensure_listen(listen: &mut Option<Listen>, route: &OutputRoute) -> Result<(),
                 channels: channels.clone(),
                 sample_rate: None,
             },
-            Box::new(player),
+            Box::new(ListenSource {
+                player,
+                solo: Live::new(solo_source, info.default_sample_rate),
+            }),
             events,
         )
         .map_err(|e| format!("'{}' could not be opened: {e}", info.name))?;
     let name = format!("{} {}", info.name, channel_names(&channels));
     tracing::info!(output = %name, rate = session.sample_rate(), "listen output open");
+    solo.connect(solo_sink, session.sample_rate());
     *listen = Some(Listen {
         route: route.clone(),
         rate: session.sample_rate(),

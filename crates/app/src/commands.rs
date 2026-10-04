@@ -165,6 +165,14 @@ pub enum Command {
         trim_db: i32,
         muted: bool,
     },
+    /// Solos or releases one input onto the listen output — the host's
+    /// headphones. Latching: other soloed inputs stay in.
+    SetSolo {
+        stream_id: u16,
+        soloed: bool,
+    },
+    /// Which inputs are soloed, asked for once as a view opens.
+    SoloStatus,
 }
 
 /// Who is asking.
@@ -315,6 +323,24 @@ pub async fn dispatch<R: Runtime>(
             state(app)?.outputs.set_live(trim_db, muted);
             json(())
         }
+        Command::SetSolo { stream_id, soloed } => {
+            if remote {
+                // The host's headphones, like a replay: nothing a browser on
+                // the LAN would hear.
+                return Err("a remote cannot listen to the inputs".into());
+            }
+            // Blocking: a solo may open the listen output, which is a driver
+            // call.
+            let handle = app.clone();
+            let solo = tauri::async_runtime::spawn_blocking(move || {
+                state(&handle)?.outputs.set_solo(stream_id, soloed)
+            })
+            .await
+            .map_err(|err| err.to_string())??;
+            crate::broadcast(app, crate::EVENT_SOLO, solo.clone());
+            json(solo)
+        }
+        Command::SoloStatus => json(state(app)?.outputs.solo.state()),
     }
 }
 
@@ -710,7 +736,7 @@ fn start_monitor<R: Runtime>(app: &AppHandle<R>, config: SessionConfig) -> Resul
     }
 
     let events: Arc<dyn session::EventSink> = crate::events(app)?;
-    match crate::monitor::Monitor::start(&config, events) {
+    match crate::monitor::Monitor::start(&config, events, Arc::clone(&state.outputs.solo)) {
         Ok(monitor) => {
             *slot = Some(monitor);
             Ok(())

@@ -35,6 +35,7 @@ pub mod replay;
 pub mod resources;
 pub mod rules;
 pub mod session;
+pub mod solo;
 pub mod ticker;
 pub mod webhook;
 pub mod worker;
@@ -92,6 +93,9 @@ pub const EVENT_REPLAY_HORIZON: &str = "replay-horizon";
 pub const EVENT_SPEECH_ACTIVITY: &str = "speech-activity";
 /// What the shoutbox is doing, ten times a second while it runs (P26).
 pub const EVENT_SHOUTBOX: &str = "shoutbox-status";
+/// Which inputs are soloed onto the headphones. Sent on every change, so the
+/// S is lit in every window that shows it.
+pub const EVENT_SOLO: &str = "solo";
 
 /// What a detached group window's label starts with, followed by the group's
 /// position in the active profile.
@@ -673,6 +677,7 @@ pub(crate) fn start_session<R: Runtime>(
         models,
         state.workers(),
         Arc::clone(&state.replay),
+        Arc::clone(&state.outputs.solo),
     ) {
         Ok((session, running)) => {
             *slot = Some(session);

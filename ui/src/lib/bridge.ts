@@ -66,6 +66,7 @@ import type {
   ShoutboxStatus,
 } from "./generated/outputs";
 import type { ClipKey, Horizon } from "./generated/replay";
+import type { SoloState } from "./generated/solo";
 import type {
   DownloadStage,
   ModelKind,
@@ -535,6 +536,17 @@ export const onShoutboxStatus = (fn: (s: ShoutboxStatus) => void): Promise<Unlis
 /// through the save; this is only the half that cannot wait for it.
 export const setShoutboxLive = (trimDb: number, muted: boolean) =>
   call<void>("set_shoutbox_live", { trimDb, muted });
+
+/// Solos or releases one input onto this machine's listen output — the
+/// headphones replays go to. Latching: the others stay in. Refused for a
+/// remote, and when the listen output cannot be opened. Resolves with every
+/// soloed input, which is also announced to every window.
+export const setSolo = (streamId: number, soloed: boolean) =>
+  call<SoloState>("set_solo", { streamId, soloed });
+export const soloStatus = () => call<SoloState>("solo_status");
+export const onSolo = (fn: (s: SoloState) => void): Promise<UnlistenFn> =>
+  on<SoloState>("solo", (payload) => fn(payload));
+export type { SoloState };
 
 export { isRemote } from "./transport";
 export { onConnection, connectionState, onReconnected, type Connection } from "./transport";

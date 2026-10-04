@@ -591,6 +591,7 @@ impl Session {
         models: Option<crate::models::Resolved>,
         workers: Option<usize>,
         replay: Arc<ReplayStore>,
+        solo: Arc<crate::solo::Bus>,
     ) -> Result<(Self, SessionState)> {
         if config.streams.is_empty() {
             bail!("no channels configured");
@@ -719,6 +720,10 @@ impl Session {
         let mut assignments = Vec::with_capacity(live.len());
         let mut sinks: Vec<Box<dyn audio_core::SampleSink>> = Vec::with_capacity(live.len());
         let mut sources = Vec::with_capacity(live.len());
+        let mut taps = Vec::with_capacity(live.len());
+        // One per live stream, held on both sides: the pipeline scales with
+        // it, the solo tap too, and `update_stream` writes to it.
+        let mut gains: HashMap<u16, Arc<Gain>> = HashMap::with_capacity(live.len());
 
         for &(stream_id, stream) in &live {
             let (sink, source) = ring::channel(rate, RING_SECONDS);
@@ -726,8 +731,13 @@ impl Session {
                 stream_id: StreamId(stream_id),
                 channel: stream.channel,
             });
-            sinks.push(Box::new(sink));
+            let gain = Arc::new(Gain::new(stream.gain_db));
+            gains.insert(stream_id, gain.clone());
+            // Also heard on the headphones while it is soloed.
+            let (sink, tap) = solo.tap(stream_id, sink, rate, gain);
+            sinks.push(sink);
             sources.push(source);
+            taps.push(tap);
         }
 
         // Every configured stream, the absent ones included: this is the UI's
@@ -769,13 +779,9 @@ impl Session {
         // means a whisper.cpp VAD context per stream, and there is no point
         // paying for eight of them for a device that was going to refuse.
         let mut pipelines = Vec::with_capacity(live.len());
-        let mut gains: HashMap<u16, Arc<Gain>> = HashMap::with_capacity(live.len());
         let mut mutes: HashMap<u16, Arc<AtomicBool>> = HashMap::with_capacity(live.len());
         for (&(stream_id, stream), source) in live.iter().zip(sources) {
-            // One per live stream, held on both sides: the pipeline scales
-            // with it, `update_stream` writes to it.
-            let gain = Arc::new(Gain::new(stream.gain_db));
-            gains.insert(stream_id, gain.clone());
+            let gain = gains[&stream_id].clone();
             // Held on both sides like the trim: the pipeline reads it, the M
             // beside the meter writes it through `update_stream`.
             let muted = stream.muted;
@@ -868,6 +874,7 @@ impl Session {
                 session_id,
                 replay,
                 activity,
+                solo: crate::solo::Mixer::new(solo, granted, taps),
             },
         );
 
@@ -1145,6 +1152,8 @@ struct Wiring {
     replay: Arc<ReplayStore>,
     /// Who is talking, for the placeholder (P23).
     activity: Arc<Activity>,
+    /// The soloed inputs, mixed and sent to the headphones every pump.
+    solo: crate::solo::Mixer,
 }
 
 fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<()> {
@@ -1160,6 +1169,7 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
         session_id,
         replay,
         activity,
+        mut solo,
     } = wiring;
     // Every segment goes through here on its way to the pool, so this is
     // where its audio is kept (P22): a copy, before the pool takes it.
@@ -1320,6 +1330,8 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                     events.state(SessionState::Failed { message });
                     break;
                 }
+
+                solo.pump();
 
                 if last_level.elapsed() >= level_interval {
                     events.levels(LevelsEvent {

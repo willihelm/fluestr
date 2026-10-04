@@ -38,6 +38,8 @@
   import LanguagePicker from "./LanguagePicker.svelte";
   import GainKnob from "./GainKnob.svelte";
   import MuteButton from "./MuteButton.svelte";
+  import SoloButton from "./SoloButton.svelte";
+  import { canSolo, watchSolo } from "./solo.svelte";
   import LevelMeter from "./LevelMeter.svelte";
   import type { Language, StreamLevel } from "./bridge";
   import { channelPromptWarning } from "./vocabulary";
@@ -110,6 +112,8 @@
   // the device and is being listened to.
   let absent = $derived(new Set(absentChannels(channels, deviceChannels)));
 
+  $effect(() => watchSolo());
+
   // What the picker above the list still describes. One language and it speaks
   // for the whole setup; several and it only speaks for the next channel —
   // which is worth saying, because a picker reading "German" over three
@@ -169,7 +173,7 @@
         <span>Ch</span>
         <span>Label</span>
         <span>Lang</span>
-        <span>M</span>
+        <span>{canSolo ? "M S" : "M"}</span>
         <span>Gain</span>
         <span>Level</span>
         <span></span>
@@ -229,15 +233,27 @@
              session, not even for a channel this device does not have: a
              setup carried back to the desk should still remember which
              position was silenced. -->
-        <MuteButton
-          muted={channel.muted}
-          label={channel.label}
-          disabled={locked && live === null}
-          onchange={(next) => {
-            channel.muted = next;
-            live?.(index, { muted: next });
-          }}
-        />
+        <!-- One cell for the M and the S, the pair they are on a desk. The S
+             is never locked either: it writes nothing, and checking a channel
+             by ear is what this page is open for before a show. -->
+        <div class="keys">
+          <MuteButton
+            muted={channel.muted}
+            label={channel.label}
+            disabled={locked && live === null}
+            onchange={(next) => {
+              channel.muted = next;
+              live?.(index, { muted: next });
+            }}
+          />
+          {#if canSolo}
+            <SoloButton
+              streamId={index}
+              label={channel.label}
+              disabled={absent.has(index)}
+            />
+          {/if}
+        </div>
 
         <!-- Live like the label and the language, and for a stronger reason
              than either: a channel nobody spoke on during the sound check is
@@ -360,7 +376,7 @@
        holds a name, and "Portuguese (pt)" truncated to "Portug…" is no better
        than the code it replaced. */
     grid-template-columns:
-      2.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 1.5rem 2.4rem
+      2.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 3.3rem 2.4rem
       minmax(3rem, 0.7fr) 2rem;
     align-items: center;
     gap: 0.5rem;
@@ -484,6 +500,12 @@
     .row > .prompt-warn {
       grid-area: warn;
     }
+  }
+
+  .keys {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
   }
 
   /* The bar takes the channel's own colour, as it does on the meter strip:

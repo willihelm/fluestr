@@ -27,6 +27,8 @@
   import LevelMeter from "./LevelMeter.svelte";
   import GainKnob from "./GainKnob.svelte";
   import MuteButton from "./MuteButton.svelte";
+  import SoloButton from "./SoloButton.svelte";
+  import { canSolo, watchSolo } from "./solo.svelte";
   import { watchNarrow } from "./layout";
   import { loadCollapsed, saveCollapsed } from "./meters";
   import { currentGroup } from "./windows";
@@ -82,6 +84,11 @@
     /// pressed: during a show, on the channel that is filling the chat with
     /// the room it is standing in.
     mute?: ((streamId: number, muted: boolean) => void) | null;
+    /// Whether to show the S that puts a channel on this machine's
+    /// headphones. Unlike the M and the knob it writes no setup, so every app
+    /// window may have it — only a browser on the LAN may not, having no
+    /// business in the host's headphones.
+    listen?: boolean;
   }
 
   let {
@@ -93,7 +100,12 @@
     webhooks,
     gain = null,
     mute = null,
+    listen = canSolo,
   }: Props = $props();
+
+  $effect(() => {
+    if (listen) watchSolo();
+  });
 
   /// Matched here rather than in CSS alone, because the orientation is not
   /// only a matter of styling: `LevelMeter` has to be told which way round it
@@ -192,6 +204,13 @@
             label={channel.label}
             disabled={absent.has(streamId)}
             onchange={(next) => mute(streamId, next)}
+          />
+        {/if}
+        {#if listen}
+          <SoloButton
+            {streamId}
+            label={channel.label}
+            disabled={absent.has(streamId)}
           />
         {/if}
         {#if gain}
@@ -301,7 +320,7 @@
 
   .meters {
     display: grid;
-    /* Wide enough for a name, an M, a knob and a bar that is still worth
+    /* Wide enough for a name, an M, an S, a knob and a bar that is still worth
        reading. Below this the bar is what gives way, and a meter narrower
        than its own label is not a meter. */
     grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));

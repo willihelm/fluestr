@@ -74,7 +74,14 @@ impl Monitor {
     /// A channel the device does not have is skipped and keeps its stream id,
     /// exactly as a session mutes it: the ids are positions in the channel
     /// list, and the meters are keyed on them.
-    pub fn start(config: &SessionConfig, events: Arc<dyn EventSink>) -> Result<Self> {
+    ///
+    /// The soloed channels are heard here as in a session — before a show is
+    /// exactly when a channel is checked by ear.
+    pub fn start(
+        config: &SessionConfig,
+        events: Arc<dyn EventSink>,
+        solo: Arc<crate::solo::Bus>,
+    ) -> Result<Self> {
         if config.streams.is_empty() {
             bail!("no channels configured");
         }
@@ -104,6 +111,7 @@ impl Monitor {
         let mut sinks: Vec<Box<dyn audio_core::SampleSink>> = Vec::with_capacity(live.len());
         let mut readers = Vec::with_capacity(live.len());
         let mut gains = HashMap::with_capacity(live.len());
+        let mut taps = Vec::with_capacity(live.len());
 
         for &(stream_id, stream) in &live {
             let (sink, source) = ring::channel(rate, RING_SECONDS);
@@ -111,9 +119,11 @@ impl Monitor {
                 stream_id: StreamId(stream_id),
                 channel: stream.channel,
             });
-            sinks.push(Box::new(sink));
             let gain = Arc::new(Gain::new(stream.gain_db));
             gains.insert(stream_id, gain.clone());
+            let (sink, tap) = solo.tap(stream_id, sink, rate, gain.clone());
+            sinks.push(sink);
+            taps.push(tap);
             readers.push(Reader {
                 stream_id,
                 source,
@@ -136,7 +146,8 @@ impl Monitor {
             .context("opening the device for metering")?;
 
         let stop = Arc::new(AtomicBool::new(false));
-        let reading = spawn_reader(readers, capture_event_rx, stop.clone(), events);
+        let mixer = crate::solo::Mixer::new(solo, rate, taps);
+        let reading = spawn_reader(readers, mixer, capture_event_rx, stop.clone(), events);
 
         tracing::info!(
             device = %info.name,
@@ -218,6 +229,7 @@ struct Reader {
 
 fn spawn_reader(
     mut readers: Vec<Reader>,
+    mut solo: crate::solo::Mixer,
     capture_events: mpsc::Receiver<CaptureEvent>,
     stop: Arc<AtomicBool>,
     events: Arc<dyn EventSink>,
@@ -264,6 +276,8 @@ fn spawn_reader(
                         }
                     }
                 }
+
+                solo.pump();
 
                 if last_level.elapsed() >= level_interval {
                     events.levels(LevelsEvent {

@@ -23,14 +23,14 @@ pub mod silero;
 pub mod vad;
 
 pub use backend::CpalBackend;
-pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSink};
+pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSink, Tap};
 pub use device::{
     AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo, OutputConfig,
     PlaybackSession,
 };
 pub use gain::Gain;
 pub use lang::{LanguageCode, LanguageMode};
-pub use playback::{Player, PlayerHandle, SampleSource};
+pub use playback::{Live, Player, PlayerHandle, SampleSource};
 pub use repetition::collapse_repetitions;
 pub use resample::{Resampler, StreamProcessor};
 pub use ring::{RingSink, RingSource, RingStats};
