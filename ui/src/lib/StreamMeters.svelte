@@ -383,7 +383,7 @@
      is in the tooltip, and a count that has run over the channel beside it
      costs more than the word it lost. */
   .error {
-    color: #ff6b6b;
+    color: var(--danger);
     white-space: nowrap;
     min-width: 0;
     overflow: hidden;

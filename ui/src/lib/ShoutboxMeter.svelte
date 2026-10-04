@@ -73,8 +73,8 @@
   .bar {
     position: relative;
     height: 0.55rem;
-    border-radius: 0.25rem;
-    background: var(--border);
+    border-radius: 999px;
+    background: var(--muted);
   }
 
   /* Two numbers handed to CSS, as in `LevelMeter`: which edge the fill
@@ -95,7 +95,7 @@
   }
 
   .warn .fill {
-    background: #f2b544;
+    background: var(--warn);
   }
 
   .mark,
@@ -132,6 +132,6 @@
   }
 
   .warn .readout {
-    color: #f2b544;
+    color: var(--warn);
   }
 </style>

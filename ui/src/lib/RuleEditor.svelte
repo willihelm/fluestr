@@ -686,7 +686,7 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
 
   button {
     background: var(--accent);
-    color: #12141a;
+    color: var(--on-accent);
     border: none;
     border-radius: 0.3rem;
     padding: 0.3rem 0.8rem;
@@ -704,6 +704,6 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
   }
 
   .remove:hover {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 </style>

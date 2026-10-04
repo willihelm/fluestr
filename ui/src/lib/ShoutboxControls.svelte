@@ -381,9 +381,11 @@
 
   /* Lit when muted, in the colour a desk's mute is lit in. */
   .mute.on {
-    background: #c0392b;
-    border-color: #c0392b;
-    color: #fff;
+    background: var(--channel-mute);
+    border-color: var(--channel-mute);
+    color: color-mix(in oklch, var(--channel-mute), black 72%);
+    /* Lit like an LED key, with a little of its own light around it. */
+    box-shadow: 0 0 0.6rem color-mix(in oklch, var(--channel-mute) 45%, transparent);
   }
 
   /* Four meters beside the trim, in the knob's height. The ranges are the
@@ -398,7 +400,7 @@
   .dropouts {
     margin: 0;
     font-size: 0.75rem;
-    color: #f2b544;
+    color: var(--warn);
   }
 
   /* No headings over the two blocks: the meters and the plot say what they
@@ -468,7 +470,7 @@
   }
 
   .point {
-    fill: #f2b544;
+    fill: var(--warn);
   }
 
   /* The gate, its hold and the ceiling: what keeps the shoutbox from
@@ -539,7 +541,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #f2b544;
+    background: var(--warn);
   }
 
 </style>

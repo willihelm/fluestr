@@ -399,7 +399,7 @@
   }
 
   .error {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   /* The resize handles: thin strips along the top, right and bottom edges

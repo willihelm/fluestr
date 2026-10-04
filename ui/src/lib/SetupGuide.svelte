@@ -765,7 +765,7 @@
 
   .ready {
     font-size: 0.75rem;
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   .field {
@@ -811,7 +811,7 @@
   button.primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #0b0b0c;
+    color: var(--on-accent);
     font-weight: 600;
   }
 
@@ -847,13 +847,13 @@
   .warn {
     margin: 0.5rem 0 0;
     font-size: 0.82rem;
-    color: #e0b341;
+    color: var(--warn);
   }
 
   .error {
     margin: 0.35rem 0 0;
     font-size: 0.8rem;
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   /* The two steps that are not a form — the welcome and the result. Centred,
@@ -877,7 +877,7 @@
   }
 
   .mark {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   /* Room under it, because the heading is the next thing read and the two
@@ -891,7 +891,7 @@
   }
 
   .ok {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   footer {

@@ -490,10 +490,10 @@
   }
 
   .ok {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   .error {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 </style>

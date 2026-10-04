@@ -404,7 +404,7 @@
   }
 
   .prompt-warn {
-    color: #f2b544;
+    color: var(--warn);
     font-size: 0.75rem;
     margin: 0;
   }
@@ -580,7 +580,7 @@
   }
 
   .warn {
-    color: #f2b544;
+    color: var(--warn);
     font-size: 0.8rem;
     margin: 0.5rem 0 0;
   }
@@ -607,7 +607,7 @@
 
   button {
     background: var(--accent);
-    color: #12141a;
+    color: var(--on-accent);
     border: none;
     border-radius: 0.3rem;
     padding: 0.3rem 0.8rem;
@@ -630,6 +630,6 @@
   }
 
   .remove:hover:not(:disabled) {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 </style>

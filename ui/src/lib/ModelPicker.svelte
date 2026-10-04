@@ -499,7 +499,7 @@
   .problem {
     margin: 0;
     padding: 0.5rem 0.6rem;
-    border: 1px solid #ff6b6b;
+    border: 1px solid var(--danger);
     border-radius: 0.35rem;
     font-size: 0.85rem;
   }
@@ -507,7 +507,7 @@
   .warn {
     margin: 0.5rem 0 0;
     font-size: 0.82rem;
-    color: #e0b341;
+    color: var(--warn);
   }
 
   .inuse {
@@ -516,13 +516,13 @@
   }
 
   .ok {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   .error {
     margin: 0.35rem 0 0;
     font-size: 0.8rem;
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   code {

@@ -670,7 +670,7 @@
     padding: 0.4rem 1rem;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
-    color: #ff6b6b;
+    color: var(--danger);
     font-size: 0.8rem;
   }
 
@@ -738,11 +738,11 @@
   }
 
   .flag.warn {
-    color: #f2b544;
+    color: var(--warn);
   }
 
   .flag.error {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   /* --- The pane ---------------------------------------------------------

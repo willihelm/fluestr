@@ -105,11 +105,11 @@
   }
 
   .ok {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   .bad {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   .gain {
@@ -143,8 +143,10 @@
   }
 
   button.on {
-    background: #c0392b;
-    border-color: #c0392b;
-    color: #fff;
+    background: var(--channel-mute);
+    border-color: var(--channel-mute);
+    color: color-mix(in oklch, var(--channel-mute), black 72%);
+    /* Lit like an LED key, with a little of its own light around it. */
+    box-shadow: 0 0 0.6rem color-mix(in oklch, var(--channel-mute) 45%, transparent);
   }
 </style>

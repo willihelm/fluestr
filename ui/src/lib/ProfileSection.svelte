@@ -248,7 +248,7 @@
   }
 
   .remove:not(:disabled):hover {
-    border-color: #ff6b6b;
-    color: #ff6b6b;
+    border-color: var(--danger);
+    color: var(--danger);
   }
 </style>

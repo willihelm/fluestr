@@ -495,16 +495,16 @@
   .warn {
     margin: 0;
     font-size: 0.8rem;
-    color: #e0b341;
+    color: var(--warn);
   }
 
   .error {
     margin: 0;
     font-size: 0.8rem;
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   .ok {
-    color: #5fd38d;
+    color: var(--ok);
   }
 </style>

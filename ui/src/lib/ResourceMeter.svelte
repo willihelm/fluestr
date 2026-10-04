@@ -86,8 +86,8 @@
     position: relative;
     width: 3.5rem;
     height: 0.4rem;
-    border-radius: 0.2rem;
-    background: var(--border);
+    border-radius: 999px;
+    background: var(--muted);
     overflow: hidden;
   }
 
@@ -100,11 +100,11 @@
   }
 
   .busy .fill {
-    background: #e8c36a;
+    background: var(--warn);
   }
 
   .critical .fill {
-    background: #ff6b6b;
+    background: var(--danger);
   }
 
   /* --- A window the width of a hand --------------------------------------
@@ -135,11 +135,11 @@
        bar is still in the document and still carries the class, so the figure
        after it is reached the same way it always was. */
     .bar.busy + .value {
-      color: #e8c36a;
+      color: var(--warn);
     }
 
     .bar.critical + .value {
-      color: #ff6b6b;
+      color: var(--danger);
     }
   }
 </style>

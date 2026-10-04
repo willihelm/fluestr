@@ -61,41 +61,81 @@
 {/if}
 
 <style>
+  /* audiocn's LED ladder. The whole track is lit in the zone colours a desk
+     uses — green to -18 dB, yellow to -6, red above — and the level uncovers
+     as much of it as it reaches, so the colour of the top of the bar is the
+     colour of the zone it is in rather than one colour that changes all at
+     once. The unlit segments are drawn faintly, so the ladder and where its
+     zones begin are visible on a silent channel too.
+
+     On the 60 dB scale above, -18 dB is 0.7 of the way up and -6 is 0.9. RMS
+     rather than peak is what fills the bar, which is why the zones sit lower
+     than on a peak meter: speech that fills it into the yellow is loud. */
   .meter {
+    --zones: linear-gradient(
+      var(--toward, to right),
+      var(--ok) 0 70%,
+      var(--warn) 70% 90%,
+      var(--danger) 90% 100%
+    );
+    /* Segments 4 px long with a 1.5 px gap — fine enough that the bar still
+       moves smoothly, coarse enough to read as LEDs. */
+    --segments: repeating-linear-gradient(
+      var(--toward, to right),
+      #000 0 4px,
+      transparent 4px 5.5px
+    );
     position: relative;
     height: 0.5rem;
-    border-radius: 0.25rem;
-    background: var(--border);
+    border-radius: 999px;
+    background: var(--muted);
     overflow: hidden;
     flex: 1;
     min-width: 6rem;
   }
 
+  .meter::before,
   .fill {
-    height: 100%;
-    width: calc(var(--level) * 100%);
-    background: var(--accent);
-    transition: width 60ms linear;
+    position: absolute;
+    inset: 0;
+    background: var(--zones);
+    -webkit-mask: var(--segments);
+    mask: var(--segments);
+  }
+
+  .meter::before {
+    content: "";
+    opacity: 0.18;
+  }
+
+  /* Uncovered rather than stretched, so the gradient stays put under it. */
+  .fill {
+    clip-path: inset(0 calc((1 - var(--level)) * 100%) 0 0);
+    transition: clip-path 60ms linear;
   }
 
   .peak {
     position: absolute;
     top: 0;
-    left: calc(var(--peak) * 100%);
+    left: calc(var(--peak) * 100% - 1px);
     width: 2px;
     height: 100%;
     background: var(--text);
+    border-radius: 1px;
   }
 
-  .clipping .fill {
-    background: #ff6b6b;
+  /* Clipped: the hold mark turns red and glows, the light a desk's clip LED
+     gives. The ladder is already red at the top on its own. */
+  .clipping .peak {
+    background: var(--danger);
+    box-shadow: 0 0 6px var(--danger);
   }
 
   /* Truncated rather than allowed to overrun the row it is in — the sentence
      is in the tooltip. See `StreamMeters`, which does the same with its own
      count for the same reason. */
   .dropped {
-    color: #ff6b6b;
+    color: var(--danger);
     font-size: 0.8rem;
     white-space: nowrap;
     min-width: 0;
@@ -109,27 +149,23 @@
      is the direction every meter on every desk in the room grows in, and the
      peak mark rides across it. Both are the same two numbers as above. */
   .meter.vertical {
+    --toward: to top;
     height: auto;
     width: 0.55rem;
     min-width: 0;
     /* Tall enough to read a level off at a glance, short enough that the
        strip stays a strip above the chat. */
     min-height: 2.6rem;
-    border-radius: 0.3rem;
   }
 
   .vertical .fill {
-    width: 100%;
-    height: calc(var(--level) * 100%);
-    position: absolute;
-    bottom: 0;
-    transition: height 60ms linear;
+    clip-path: inset(calc((1 - var(--level)) * 100%) 0 0 0);
   }
 
   .vertical .peak {
     left: 0;
     top: auto;
-    bottom: calc(var(--peak) * 100%);
+    bottom: calc(var(--peak) * 100% - 1px);
     width: 100%;
     height: 2px;
   }

@@ -451,7 +451,7 @@
   .failed {
     margin: 0.4rem 0 0;
     font-size: 0.8rem;
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   h3 {
@@ -547,11 +547,11 @@
   }
 
   .state.running {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   .state.failed {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   .calibrate button {

@@ -59,28 +59,27 @@
     font-weight: 700;
     line-height: 1;
     border: 1px solid var(--border);
-    border-radius: 0.3rem;
-    background: transparent;
+    border-radius: 0.4rem;
+    /* A key's resting face, a step above the strip, as audiocn's channel
+       toggle: it reads as something to press without being lit. */
+    background: var(--muted);
     color: var(--text-dim);
     cursor: pointer;
   }
 
   .mute:hover:not(:disabled) {
     color: var(--text);
-    border-color: var(--text-dim);
-  }
-
-  .mute:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    border-color: var(--input);
   }
 
   /* Red and filled, not merely tinted: this is the state somebody has to be
      able to spot in a strip of eight while a show is running. */
   .mute.on {
-    background: #c0392b;
-    border-color: #c0392b;
-    color: #fff;
+    background: var(--channel-mute);
+    border-color: var(--channel-mute);
+    color: color-mix(in oklch, var(--channel-mute), black 72%);
+    /* Lit like an LED key, with a little of its own light around it. */
+    box-shadow: 0 0 0.5rem color-mix(in oklch, var(--channel-mute) 45%, transparent);
   }
 
   .mute:disabled {

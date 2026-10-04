@@ -15,6 +15,7 @@
 
   import { GAIN_DB_MIN, GAIN_DB_MAX } from "./generated/constants";
   import { clampGain } from "./streams";
+  import KnobCap from "./KnobCap.svelte";
 
   interface Props {
     /// The trim in whole decibels. Read, never written back: the owner of the
@@ -177,15 +178,9 @@
     {#if value !== 0}
       <path class="value" d={arc(unity, current, 40)} />
     {/if}
-    <!-- The pointer, stopping short of the ring: overlapping it would make
+    <!-- The cap's pointer stops short of the ring: overlapping it would make
          the two hardest to tell apart exactly where the value is read. -->
-    <line
-      class="pointer"
-      x1={point(current, 8)[0]}
-      y1={point(current, 8)[1]}
-      x2={point(current, 31)[0]}
-      y2={point(current, 31)[1]}
-    />
+    <KnobCap angle={current} />
   </svg>
   <span class="db">{value > 0 ? "+" : ""}{value}</span>
 </div>
@@ -227,7 +222,7 @@
      seen cannot be read at a glance either. */
   .track {
     fill: none;
-    stroke: color-mix(in srgb, var(--text) 18%, transparent);
+    stroke: var(--input);
     stroke-width: 7;
     stroke-linecap: round;
   }
@@ -239,11 +234,6 @@
     stroke-linecap: round;
   }
 
-  .pointer {
-    stroke: var(--text);
-    stroke-width: 6;
-    stroke-linecap: round;
-  }
 
   /* A knob doing nothing says so quietly. Eight channels at unity is the
      normal state of a setup, and eight bright numbers would make the one

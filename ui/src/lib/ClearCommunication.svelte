@@ -118,8 +118,8 @@
      second press does is read off the colour before the word. */
   .armed,
   .armed:hover:not(:disabled) {
-    background: #ff6b6b;
-    color: #12141a;
-    border-color: #ff6b6b;
+    background: var(--danger);
+    color: var(--on-accent);
+    border-color: var(--danger);
   }
 </style>

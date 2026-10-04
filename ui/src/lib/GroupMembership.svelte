@@ -160,7 +160,7 @@
 
   button {
     background: var(--accent);
-    color: #12141a;
+    color: var(--on-accent);
     border: none;
     border-radius: 0.3rem;
     padding: 0.3rem 0.8rem;
@@ -178,6 +178,6 @@
   }
 
   .remove:hover {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 </style>

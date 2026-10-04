@@ -168,12 +168,12 @@
   }
 
   .state.running {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   .state.failed,
   .failed {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   .failed,

@@ -138,7 +138,7 @@
     border-radius: 0.3rem;
     border: 1px solid var(--accent);
     background: var(--accent);
-    color: #0f1117;
+    color: var(--on-accent);
     cursor: pointer;
   }
 
@@ -148,6 +148,6 @@
   }
 
   .error {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 </style>

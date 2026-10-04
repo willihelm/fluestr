@@ -54,32 +54,30 @@
     font-weight: 700;
     line-height: 1;
     border: 1px solid var(--border);
-    border-radius: 0.3rem;
-    background: transparent;
+    border-radius: 0.4rem;
+    /* A key's resting face, a step above the strip, as audiocn's channel
+       toggle: it reads as something to press without being lit. */
+    background: var(--muted);
     color: var(--text-dim);
     cursor: pointer;
   }
 
   .solo:hover:not(:disabled) {
     color: var(--text);
-    border-color: var(--text-dim);
-  }
-
-  .solo:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    border-color: var(--input);
   }
 
   .solo.on {
-    background: #f1c40f;
-    border-color: #f1c40f;
-    color: #1a1a1a;
+    background: var(--channel-solo);
+    border-color: var(--channel-solo);
+    color: color-mix(in oklch, var(--channel-solo), black 72%);
+    box-shadow: 0 0 0.5rem color-mix(in oklch, var(--channel-solo) 45%, transparent);
   }
 
   /* The press that did not take: the reason is in the tooltip. */
   .solo.failed {
-    border-color: #c0392b;
-    color: #ff6b6b;
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   .solo:disabled {

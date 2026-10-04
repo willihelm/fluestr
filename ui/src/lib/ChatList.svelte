@@ -882,7 +882,7 @@
   .replay-error {
     margin-top: 0.2rem;
     font-size: 0.75rem;
-    color: #ff6b6b;
+    color: var(--danger);
   }
 
   article p {
@@ -895,8 +895,8 @@
      colour-coded by channel, and a ninth colour in the same row would compete
      with that. */
   mark {
-    background: #f2b544;
-    color: #12141a;
+    background: var(--warn);
+    color: var(--on-accent);
     border-radius: 0.15rem;
     padding: 0 0.1rem;
     font-weight: 600;
@@ -994,7 +994,7 @@
     left: 50%;
     transform: translateX(-50%);
     background: var(--accent);
-    color: #12141a;
+    color: var(--on-accent);
     border: none;
     border-radius: 1rem;
     padding: 0.35rem 0.9rem;

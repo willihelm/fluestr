@@ -10,6 +10,8 @@
   // Double-tap, double-click or Alt-click goes back to `reset`; the wheel
   // turns it one step a notch; the arrow keys as on any slider.
 
+  import KnobCap from "./KnobCap.svelte";
+
   interface Props {
     value: number;
     min: number;
@@ -165,18 +167,11 @@
 >
   <span class="label">{label}</span>
   <svg viewBox="0 0 100 100" aria-hidden="true">
-    <circle class="face" cx="50" cy="50" r="30" />
     <path class="track" d={arc(-SWEEP, SWEEP, 42)} />
     {#if current !== start}
       <path class="value" d={arc(start, current, 42)} />
     {/if}
-    <line
-      class="pointer"
-      x1={point(current, 10)[0]}
-      y1={point(current, 10)[1]}
-      x2={point(current, 26)[0]}
-      y2={point(current, 26)[1]}
-    />
+    <KnobCap angle={current} />
   </svg>
   <span class="readout">{text} <span class="unit">{unit}</span></span>
 </div>
@@ -215,16 +210,10 @@
     overflow: visible;
   }
 
-  .face {
-    fill: var(--surface);
-    stroke: var(--border);
-    stroke-width: 1.5;
-  }
-
   /* Lighter than `--border`, for `GainKnob`'s reason. */
   .track {
     fill: none;
-    stroke: color-mix(in srgb, var(--text) 18%, transparent);
+    stroke: var(--input);
     stroke-width: 6;
     stroke-linecap: round;
   }
@@ -236,11 +225,6 @@
     stroke-linecap: round;
   }
 
-  .pointer {
-    stroke: var(--text);
-    stroke-width: 5;
-    stroke-linecap: round;
-  }
 
   .readout {
     font-size: 0.9rem;

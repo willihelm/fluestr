@@ -1504,7 +1504,7 @@
   .offline {
     font-size: 0.85rem;
     gap: 0.5rem;
-    background: #3a1f1f;
+    background: color-mix(in oklch, var(--danger) 16%, var(--bg));
   }
 
   .empty {
@@ -1517,7 +1517,7 @@
 
   .primary {
     background: var(--accent);
-    color: #12141a;
+    color: var(--on-accent);
     border: none;
     border-radius: 0.3rem;
     padding: 0.4rem 1.1rem;
@@ -1568,7 +1568,7 @@
      app uses, so the button that ends the session is found by colour during a
      show rather than read. */
   .primary.danger {
-    background: #ff6b6b;
+    background: var(--danger);
   }
 
   .dim {
@@ -1631,10 +1631,10 @@
   }
 
   .ok {
-    color: #5fd38d;
+    color: var(--ok);
   }
 
   .error {
-    color: #ff6b6b;
+    color: var(--danger);
   }
 </style>
