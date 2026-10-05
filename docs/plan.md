@@ -140,6 +140,7 @@ for now, with the reason recorded in the package.
 | P24 | Ticker window | **Partial** | Built on 2026-09-29; the check above a fullscreen DAW and a show are missing |
 | P25 | Channel context for the model | **Partial** | Built on 2026-09-28; the sidecar test with a description and an evening in the house are missing |
 | P26 | Shoutbox following the room's level | **Partial** | Built on 2026-09-29 and run on a loopback device; a real mic, a real speaker and a show are missing |
+| P27 | The shoutbox as a VST3 plug-in | **Open** | An idea of 2026-10-05 — everything, beginning with whether each host passes a sidechain |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -2470,6 +2471,175 @@ gate, and one proving the limiter's ceiling.
 
 ---
 
+### P27 — The shoutbox as a VST3 plug-in — **Open**
+
+*An idea of 2026-10-05. Not built — written down so it is built the right way
+round when it is.*
+
+**What it is.** P26's shoutbox as a plug-in for the hosts a live position
+already runs, so the room-following talkback can sit in the rack where the
+rest of the processing is, without this app on the machine. The program is
+the plug-in's main input, the measurement mic its **sidechain**. That is the
+whole patch: there is no routing to set, because the host does the routing.
+
+**The hosts, and what they decide.** Named by the user: Waves SuperRack
+Performer, Fourier transform.engine, LiveProfessor, and maybe Reaper.
+
+| Host | Formats | Platform | What it means here |
+|---|---|---|---|
+| SuperRack Performer (V14+) | VST3 for third-party plug-ins; mono and stereo components only; ARM builds on Apple Silicon | macOS, Windows | Mono and stereo layouts, an arm64 slice |
+| Fourier transform.engine | VST3 only, in an isolated Windows 10 environment, installed and licensed offline | Windows (client on either) | A Windows build, so this waits on or pulls forward part of P18; nothing may need the network |
+| LiveProfessor 2 | VST2/VST3 on Windows, VST2/VST3/AU on macOS | both | VST3 covers it |
+| Reaper | everything, CLAP included | both | The easy one, and the bench to develop against |
+
+So **VST3 is the format**, on macOS (universal or arm64 plus x86_64) and on
+Windows x64. AU is not needed by any of them. CLAP comes free from the
+framework and is shipped too, for Reaper.
+
+**The risk to settle first.** A sidechain is a second input bus, and a host
+has to offer a way to feed it. Reaper and LiveProfessor route a sidechain to a
+VST3; whether SuperRack Performer feeds one to a *third-party* VST3, and how
+transform.engine patches one from its Dante channels, is not known. It decides
+the design, so it is the first afternoon: a do-nothing plug-in with a sidechain
+bus and a meter on each, loaded in all four hosts. If one cannot feed it, the
+fallback is a second plug-in layout — stereo in, left the program and right
+the mic, mono out — which is still not a setting: the layout says which is which.
+
+**The decision: one DSP crate, the app does not host the plug-in.** Asked on
+2026-10-05 whether the app should *use* the plug-in, so that both run the same
+binary. No, because:
+
+- the app would need a plug-in host, and VST3 hosting from Rust has no
+  mature library;
+- P26 puts the app in the signal path, and a dynamically loaded binary that
+  crashes takes the whole app — the shoutbox and the transcription — with it,
+  and can be a different version from the app it is loaded into;
+- under the hardened runtime, loading a library the app was not signed with
+  takes `disable-library-validation`, an entitlement worth not having (P13);
+- and it shares nothing a crate does not. "The same code" is a question of
+  source, answered at compile time.
+
+What is shared, therefore, is the source:
+
+```
+crates/shoutbox-dsp      new: pure DSP — no cpal, no allocation in the
+                         audio path, no dependencies
+    WeightingFilter, Curve, ControlSettings, Controller   (moved, unchanged)
+    GainStage    the gain ramp, the limiter and the hard clamp, out of
+                 ShoutboxSource
+    Processor    block-based: main + sidechain in, main out; adds up the
+                 weighted mean square and the program peak and steps the
+                 Controller every 10 ms of *samples*
+    Shared       the atomics the meters read
+crates/audio-core        uses it; keeps ShoutboxSource for what is the
+                         device's — the ring, priming, the bounded fill,
+                         underruns and skips
+crates/shoutbox-plugin   nih-plug: parameters, buses, editor; bundles VST3 + CLAP
+```
+
+The app keeps its own arrangement of the same pieces — the controller on a
+thread, the gain stage in the output callback — because its program and its
+reference may be on two devices with two clocks, which a single
+`process(main, sidechain)` cannot take. Moving the app onto `Processor` too,
+with the reference handed to the output callback through a ring, is possible
+and not part of this package.
+
+Stepping the controller on a count of samples rather than the wall clock is
+what lets the plug-in render offline (a bounce, a freeze) to the same result
+as live, and what makes it testable sample-exact.
+
+**Parameters.** All of the shoutbox window's, as host parameters — automatable,
+stored with the host's session, recalled by its cues (transform.engine's
+cuelists are made of exactly this):
+
+| Parameter | Range, as in `config::Shoutbox` |
+|---|---|
+| Mute | on / off |
+| Trim | −20 … +12 dB |
+| Quiet below | dB SPL |
+| Gain when quiet | −40 … +12 dB |
+| Gain per dB of room | 0 … 200 % |
+| Most gain | −40 … +12 dB |
+| Rise | 0.5 … 120 s per 10 dB |
+| Fall | 0 (no limit) … 120 s per 10 dB |
+| Averaging window | 0.5 … 30 s |
+| Room hold above | −80 … −10 dBFS |
+| Room hold time | 0.2 … 10 s |
+| Limit ceiling | −20 … 0 dBFS |
+| **Calibration** | dB, and a *calibrated* switch: off reads through the +100 dB estimate, as the app does, and the editor says *estimated* |
+
+The ranges and defaults come from one place — `shoutbox-dsp` takes over the
+constants `config::Shoutbox` and the generated `constants.ts` carry today — so
+the plug-in and the app cannot drift apart on what a knob reaches. The
+calibration helper of the Settings page comes along: type what the SPL meter
+reads, and the offset is set from the room the sidechain hears now.
+
+**Channels.** Mono and stereo both: mono in → mono out, stereo in → stereo
+out, the sidechain mono or stereo. One gain for all channels (a shoutbox image
+does not wander); the gate on the louder channel's peak; a stereo sidechain
+summed by power. The limiter is instant, so the reported latency is 0.
+
+**Behaviour inside a host.** What P26 made of a pulled mic carries over and
+covers the host's habits: a stopped transport or an unpatched sidechain
+delivers silence, which reads as a lost mic, holds the gain and shows it — it
+fails towards audible. `reset()` (a sample-rate change, a reactivation) starts
+the controller afresh, and the first full window sets the gain outright, as
+when the app starts. State the host saves is the parameters alone; the room
+is measured anew.
+
+**The editor: the shoutbox window, as it looks now.** The curve with the
+current point and the meters — room, gain, program, limiter — are required,
+in the look of `ShoutboxControls.svelte`, which already reads as a plug-in.
+Two ways to get there, decided after the first afternoon above:
+
+- **A webview editor running the Svelte component itself.** `ShoutboxControls`
+  edits the shoutbox it is given and hands its effects to the caller, so the
+  same component can run against a plug-in bridge — parameters and meter
+  values over the webview's IPC — instead of Tauri's. One UI, one look, no
+  second drawing of the curve. Costs: WebView2 has to be on a Windows machine,
+  which transform.engine's offline, isolated Windows may not have; and a
+  webview inside a host's window is the less travelled road in nih-plug.
+- **A native editor (nih-plug's vizia or egui) drawn to match**, with the
+  colours and the knob taken over from the app's tokens. Works in every host,
+  but the curve, the knob and the meters are drawn twice and have to be kept
+  alike by hand.
+
+The leaning is the webview, if it opens in transform.engine; the native editor
+if not. The mute button, the knobs, the curve and the meters keep the app's
+names, so somebody who has used one has used the other.
+
+**Licensing.** nih-plug is ISC. Its VST3 export binds through `vst3-sys`,
+which is GPLv3; Steinberg moved the VST3 SDK itself to MIT with 3.8 in
+October 2025, but the Rust bindings are the question, not the SDK. Either the
+plug-in crate ships under GPLv3 — it is its own binary, the app stays MIT — or
+the export goes through MIT bindings, if nih-plug or a fork has moved to them
+by the time this is built. Decided before the first release, not the first
+line.
+
+**Build and packaging.** `just plugin` → `cargo xtask bundle shoutbox-plugin
+--release`, producing `.vst3` and `.clap` bundles; CI builds both platforms
+beside the app. On macOS the bundles are signed like the app (P13) — ad-hoc
+until there is a Developer ID, which SuperRack on Apple Silicon may already
+refuse to load. Installed by hand into the system plug-in folders at first; an
+installer is for later.
+
+**Build order.** The sidechain afternoon in the four hosts. Then
+`shoutbox-dsp` extracted with `GainStage` and `Processor` and their tests,
+with the app's behaviour unchanged — provable by P26's tests passing
+untouched. Then the plug-in with the host's generic editor, run in Reaper, then
+in the three live hosts. The editor last.
+
+**Accepted when:** the plug-in loads in SuperRack Performer, transform.engine
+and LiveProfessor, mono and stereo, with the measurement mic on the sidechain,
+and follows the room the way the app's shoutbox does at the same settings;
+a stopped transport or a removed sidechain holds the gain and shows it;
+nothing leaves above the ceiling; a cue recall in the host moves the curve
+without a click. Plus a test that the app's arrangement and `Processor`,
+fed the same program and room, arrive at the same gain within a step, and
+that an offline render equals a realtime one.
+
+---
+
 
 ## Dependencies
 
@@ -2518,7 +2688,8 @@ P23 off P3's gate state through P6 into P7; P24 off P7's detached windows and
 P19's view addressing; P25 off P15 and the channel map in P12. P26, added on
 2026-09-29, hangs off P1 — whose `AudioBackend` gains an output half — and off
 P3's energy detector, P8's meters and P12's profile; P22's listen output hangs
-off P26's output layer.
+off P26's output layer. P27, added on 2026-10-05, hangs off P26, whose DSP
+it takes into a crate of its own, and off P18 for its Windows build.
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached, and
 confirmed on real hardware in the live session of 2026-09-21.*
@@ -2586,6 +2757,12 @@ show.
 the app into the signal path. It was built the same day with P22; what both
 need now is an evening in the house — P26 with a measurement mic and the
 shoutbox it is meant to drive, heard from the position and from the house.
+
+**P27**, added on 2026-10-05, is P26 taken out of the app and into the hosts
+a position already runs. It is best after P26's evening in the house: the
+plug-in should copy a shoutbox that has been proved, not one that has only
+run on a loopback device. Its first step, the sidechain check in the four
+hosts, is an afternoon and can come earlier.
 
 ## Whole-system verification
 
