@@ -434,8 +434,12 @@
 
   /* The second button only appears under the cursor: it is reached for now and
      then, and eight of them down the side of a live chat is eight things
-     competing with the group names. It stays available to the keyboard, where
-     hover means nothing. */
+     competing with the group names. Out of the layout rather than merely
+     invisible, so a row the cursor is not on keeps the sidebar's full width for
+     its name and count. It stays available to the keyboard, where hover means
+     nothing: keyboard focus anywhere in the row brings the buttons in (a click
+     does not, or they would stay after the cursor left), so the next Tab
+     lands on them. */
   .row {
     display: flex;
     align-items: center;
@@ -443,7 +447,7 @@
 
   .detach {
     flex: none;
-    visibility: hidden;
+    display: none;
     background: transparent;
     color: var(--text-dim);
     border: none;
@@ -456,15 +460,15 @@
   }
 
   .row:hover .detach,
-  .detach:focus-visible {
-    visibility: visible;
+  .row:has(:focus-visible) .detach {
+    display: block;
   }
 
   /* A touch screen has no hover to reveal it with, and a control that is only
      ever reachable by hovering is no control at all there. */
   @media (hover: none) {
     .detach {
-      visibility: visible;
+      display: block;
     }
   }
 
