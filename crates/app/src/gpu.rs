@@ -204,7 +204,12 @@ mod tests {
             return;
         };
 
-        let percent = gpu.sample().expect("a reading from a GPU that just opened");
+        // A virtualised GPU — which is what a hosted macOS runner has —
+        // registers an accelerator but publishes no utilisation for it.
+        let Some(percent) = gpu.sample() else {
+            eprintln!("no GPU utilisation in the registry; skipping");
+            return;
+        };
         assert!((0.0..=100.0).contains(&percent), "{percent}");
 
         if let Some(cores) = gpu.cores {
@@ -250,7 +255,11 @@ mod tests {
         };
 
         // Both are unsmoothed: each is its owner's first sample.
-        let _ = first.sample();
+        // Without a figure at all — a virtualised GPU — there is no second
+        // opinion to check, as in `reads_the_machine_s_gpu`.
+        if first.sample().is_none() {
+            return;
+        }
         let immediately_after = second.sample().expect("a reading");
 
         // Not an assertion on the value — an idle machine reads near zero

@@ -25,3 +25,12 @@ TS_RS_LARGE_INT = "number"
 # file itself. whisper-rs-sys hands every `CMAKE_*` variable to CMake, and the
 # file is a no-op outside MSVC, so it is safe to set for every platform.
 CMAKE_PROJECT_INCLUDE = { value = ".cargo/msvc-release-flags.cmake", relative = true }
+
+# The C runtime linked statically on Windows, because sherpa-onnx forces it:
+# its prebuilt Windows archives exist only as /MT, and whisper.cpp built
+# against the DLL runtime (/MD) next to them fails to link the sidecar on
+# duplicate `std::` symbols (LNK2005). With `crt-static`, cc and the cmake
+# crate compile whisper.cpp with /MT too, so every object agrees. It also
+# means the installer no longer depends on the VC++ redistributable.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

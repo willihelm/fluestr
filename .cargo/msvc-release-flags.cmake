@@ -1,5 +1,6 @@
-# Put the optimisation back into MSVC Release builds of whisper.cpp (P18), and
-# keep ggml-vulkan's nested build under MAX_PATH (below).
+# Put the optimisation back into MSVC Release builds of whisper.cpp (P18), link
+# it against the static C runtime, and keep ggml-vulkan's nested build under
+# MAX_PATH (below).
 #
 # whisper-rs-sys builds whisper.cpp through the `cmake` crate, which with the
 # Visual Studio generator overwrites CMAKE_<LANG>_FLAGS_<BUILD_TYPE> with cc's
@@ -15,6 +16,12 @@ if(MSVC)
   foreach(lang C CXX)
     string(APPEND CMAKE_${lang}_FLAGS_RELEASE " /O2 /Ob2 /DNDEBUG")
   endforeach()
+
+  # The static runtime, to match `crt-static` (.cargo/config.toml) and the /MT
+  # archives of sherpa-onnx. The cmake crate already passes /MT in the flags
+  # above; this covers a project whose CMake policy (CMP0091) picks the
+  # runtime from this variable instead, which would otherwise add /MD.
+  set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 
   # ggml-vulkan builds its shader generator as an ExternalProject, by default
   # under `ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build`
