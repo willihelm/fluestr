@@ -18,9 +18,17 @@ if(MSVC)
   endforeach()
 
   # The static runtime, to match `crt-static` (.cargo/config.toml) and the /MT
-  # archives of sherpa-onnx. The cmake crate already passes /MT in the flags
-  # above; this covers a project whose CMake policy (CMP0091) picks the
-  # runtime from this variable instead, which would otherwise add /MD.
+  # archives of sherpa-onnx. The cmake crate passes /MT, but only in the flags
+  # for the build type it was given: in a debug build whisper-rs-sys asks for
+  # RelWithDebInfo while building `--config Release`, so CMake's default
+  # Release flags - /MD among them - come last and win. Rewriting every
+  # configuration's flags covers that; the variable covers a project whose
+  # CMake policy (CMP0091) picks the runtime from it instead.
+  foreach(lang C CXX)
+    foreach(config "" _DEBUG _RELEASE _RELWITHDEBINFO _MINSIZEREL)
+      string(REPLACE "/MD" "/MT" CMAKE_${lang}_FLAGS${config} "${CMAKE_${lang}_FLAGS${config}}")
+    endforeach()
+  endforeach()
   set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 
   # ggml-vulkan builds its shader generator as an ExternalProject, by default

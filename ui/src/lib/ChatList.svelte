@@ -887,6 +887,25 @@
     color: var(--text);
   }
 
+  /* A finger needs more than the 1.35 rem circle, but the circle must stay a
+     circle: the global touch rule's `min-height` stretched it into an oval and
+     made every bubble's header a fingertip tall. The hit area grows instead,
+     invisibly, around the circle — into the bubble's own padding. */
+  @media (pointer: coarse) {
+    .replay {
+      position: relative;
+      min-height: 0;
+      width: 1.6rem;
+      height: 1.6rem;
+    }
+
+    .replay::after {
+      content: "";
+      position: absolute;
+      inset: -0.6rem;
+    }
+  }
+
   .replay.playing {
     color: var(--channel);
     border-color: var(--channel);

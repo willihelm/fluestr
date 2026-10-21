@@ -220,8 +220,8 @@
   /// Whether the window is too narrow to show the sidebar beside the chat —
   /// the LAN remote on a phone (P16), or the app on half a laptop screen. The
   /// sidebar decides this for itself too; what it is needed for *here* is the
-  /// burger, which is a control in the bar above the chat and not in the
-  /// sidebar it opens.
+  /// burger and the view's name, which sit in the header and not in the
+  /// sidebar they open.
   let narrow = $state(false);
   $effect(() => watchNarrow((next) => (narrow = next)));
   /// Whether that sidebar is currently drawn over the chat. Bound rather than
@@ -1132,7 +1132,50 @@
 
 <main>
   <header class="bar">
-    <h1>Fluestr</h1>
+    <!-- On a narrow window the burger and the name of the view come up here,
+         beside the app's name, instead of taking a bar of their own: on a
+         phone in portrait every bar above the chat is a line of transcript
+         fewer, and the header has the room once the title is the mark plus
+         one word. The drawer still opens over the chat directly below. -->
+    {#if narrow}
+      <button
+        class="burger"
+        onclick={() => (sidebarOpen = !sidebarOpen)}
+        aria-expanded={sidebarOpen}
+        aria-label={sidebarOpen ? "Close the list of views" : "Views"}
+        title="Views"
+      >
+        <!-- Drawn rather than an emoji or a "≡", for the reason the group
+             window's pin is drawn: it has to take its weight and its colour
+             from the row it is in at every font size. -->
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path
+            d="M2 4h12M2 8h12M2 12h12"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+    {/if}
+
+    <div class="brand">
+      <!-- The app icon's three lines, drawn rather than loaded: it takes no
+           request, and on the remote page there is no bundle of icons to
+           load it from. -->
+      <svg class="mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <rect x="0.5" y="0.5" width="23" height="23" rx="5.5" fill="var(--bg)" stroke="var(--border)" />
+        <rect x="5" y="6" width="14" height="3" rx="1.5" fill="var(--accent)" />
+        <rect x="5" y="10.75" width="10" height="2.5" rx="1.25" fill="#5c6478" />
+        <rect x="5" y="15" width="3" height="3" rx="1.5" fill="var(--accent)" />
+      </svg>
+      <div class="titles">
+        <h1>Fluestr</h1>
+        {#if narrow}
+          <span class="where">{group ? group.name : "All channels"}</span>
+        {/if}
+      </div>
+    </div>
 
     <div class="right">
       <!-- Which setup Start would start, beside the button that starts it.
@@ -1233,42 +1276,6 @@
       <ResourceMeter {usage} />
     </div>
   </div>
-
-  <!-- On a narrow window the sidebar is not a column beside the chat but a
-       drawer over it, and this is the line it is reduced to: the burger that
-       opens it, and the name of the view that is showing.
-
-       Directly above the chat rather than up in the header, and the same
-       shape as the Settings page's rail bar: both are a way into a drawer
-       over the thing below them, and a burger that sits two bars away from
-       what it opens is a burger nobody connects to the drawer that appears.
-       The name is the half that matters — a burger alone would leave "which
-       of my groups am I reading?" to be answered by looking at the channel
-       colours in the bubbles. -->
-  {#if narrow}
-    <div class="bar viewbar">
-      <button
-        class="burger"
-        onclick={() => (sidebarOpen = !sidebarOpen)}
-        aria-expanded={sidebarOpen}
-        aria-label={sidebarOpen ? "Close the list of views" : "Views"}
-        title="Views"
-      >
-        <!-- Drawn rather than an emoji or a "≡", for the reason the group
-             window's pin is drawn: it has to take its weight and its colour
-             from the row it is in at every font size. -->
-        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-          <path
-            d="M2 4h12M2 8h12M2 12h12"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-          />
-        </svg>
-      </button>
-      <span class="where">{group ? group.name : "All channels"}</span>
-    </div>
-  {/if}
 
   <div class="chat">
     <GroupSidebar
@@ -1416,21 +1423,34 @@
     padding-top: max(0.6rem, var(--safe-top));
   }
 
-  /* A strip in the shape of the bars above it: it is part of the window's
-     furniture, not a control floating over the transcripts. A button over the
-     chat would cover the newest line, which on this page is the one thing
-     that must never be covered. */
-  .viewbar {
-    flex-wrap: nowrap;
+  /* The mark and the name, and on a narrow window the view beneath the name:
+     one block, so the two lines share the height of the controls beside them
+     instead of adding a line of their own. */
+  .brand {
+    display: flex;
+    align-items: center;
     gap: 0.5rem;
+    min-width: 0;
   }
 
-  /* Where the operator is. The brightest thing on the line, because it is the
-     whole reason the line is there. */
-  .viewbar .where {
-    font-size: 0.85rem;
+  .mark {
+    flex: none;
+  }
+
+  .titles {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.15;
+  }
+
+  /* Where the operator is: the answer to "which of my groups am I reading?",
+     which the channel colours alone leave open. Under the name and quieter
+     than it, so the two read as one label. */
+  .where {
+    font-size: 0.75rem;
     font-weight: 600;
-    color: var(--text);
+    color: var(--text-dim);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1465,7 +1485,7 @@
   }
 
   h1 {
-    margin: 0 0.5rem 0 0;
+    margin: 0;
     font-size: 1.1rem;
     font-weight: 600;
     letter-spacing: -0.01em;
@@ -1581,23 +1601,34 @@
      carries a title, the profile picker, Auto-start and Start, and on a phone in
      portrait that is two lines of furniture above a chat.
 
-     What goes is the title, and only the title. The app is named in the
-     window's own chrome, and what is left in the bar is the setup that would
-     start and the control the whole session turns on. */
+     The header stays one line: the mark, the name with the view under it,
+     the profile picker and Start. The burger moves up into it, so the view
+     bar the desk does not need is not a bar on the phone either. */
   @media (max-width: 45rem) {
-    h1 {
-      display: none;
-    }
-
     .bar {
       gap: 0.5rem;
-      padding: 0.45rem 0.7rem;
-      padding-left: max(0.7rem, var(--safe-left));
-      padding-right: max(0.7rem, var(--safe-right));
+      padding: 0.3rem 0.6rem;
+      padding-left: max(0.6rem, var(--safe-left));
+      padding-right: max(0.6rem, var(--safe-right));
+      flex-wrap: nowrap;
     }
 
     header.bar {
-      padding-top: max(0.45rem, var(--safe-top));
+      padding-top: max(0.3rem, var(--safe-top));
+      gap: 0.35rem;
+    }
+
+    header .right {
+      gap: 0.4rem;
+      flex: none;
+    }
+
+    h1 {
+      font-size: 1rem;
+    }
+
+    .primary {
+      padding: 0.3rem 0.9rem;
     }
 
     /* The status line is a sentence — the device, the channel count, the
@@ -1605,7 +1636,9 @@
        may take a second line rather than push the meters off the end of the
        first. */
     .status {
-      row-gap: 0.25rem;
+      flex-wrap: wrap;
+      row-gap: 0.15rem;
+      font-size: 0.8rem;
     }
 
     /* Beneath the sentence rather than at the end of it, and pushed to the
@@ -1617,7 +1650,7 @@
     }
 
     .profile {
-      max-width: 8rem;
+      max-width: 6.5rem;
     }
 
     /* Gone entirely, label and box. It is set once, between shows, and the
