@@ -229,7 +229,18 @@ decoding: boolean,
  * compares with the last bubble's end to decide whether the words on
  * their way will join it or start a new one.
  */
-sinceMs: number, };
+sinceMs: number, 
+/**
+ * What has been heard so far of the words on their way (P28): the last
+ * preview of every segment still being decoded, then the one still being
+ * spoken. Empty when there is none — the live preview is off, the first
+ * one has not come back yet, or it was not speech.
+ *
+ * Provisional by nature. Each preview replaces the one before it, and
+ * the transcript replaces all of them; nothing here is ever a line of the
+ * chat, and nothing here is seen by the rules.
+ */
+preview: string, };
 
 /**
  * One intercom channel, as the UI configures it.
@@ -277,15 +288,7 @@ gainDb: number,
  * `default` — unmuted — for a configuration written before mute existed,
  * which is exactly what every channel in it did.
  */
-muted: boolean, 
-/**
- * Text that looks like this channel, put into whisper's prompt for it
- * after the global vocabulary (P25) — see
- * [`crate::config::StoredChannel::description`].
- *
- * `default` — empty, nothing — for a caller written before it existed.
- */
-description: string, };
+muted: boolean, };
 
 /**
  * Level and health of one stream.
@@ -333,12 +336,7 @@ gainDb?: number | null,
  * Whether the channel is muted — the M beside the meter, pressed during
  * a show, which is the only time it is ever pressed.
  */
-muted?: boolean | null, 
-/**
- * The channel's description for the model (P25). Empty removes it.
- * Reaches the next segment a worker takes, not the ones already decoded.
- */
-description?: string | null, };
+muted?: boolean | null, };
 
 /**
  * A finished transcript on its way to the chat view.

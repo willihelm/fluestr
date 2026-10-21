@@ -113,6 +113,10 @@ export const clampTuning = (tuning: Tuning): Tuning => ({
   carryContext: typeof tuning.carryContext === "boolean"
     ? tuning.carryContext
     : GENERATED_TUNING.carryContext,
+  // The same for the live preview (P28), which is on by default.
+  livePreview: typeof tuning.livePreview === "boolean"
+    ? tuning.livePreview
+    : GENERATED_TUNING.livePreview,
 });
 
 const clampMs = (value: number, min: number, max: number, fallback: number): number =>
@@ -227,7 +231,6 @@ export const toStored = (profile: Profile): StoredProfile => {
       color: c.color,
       gainDb: clampGain(c.gainDb),
       muted: c.muted,
-      description: c.description,
     })),
     groups: profile.groups.map((g) => ({
       name: g.name,

@@ -41,11 +41,7 @@
     <h2>View</h2>
   </header>
 
-  <p class="hint">
-    Which end of the chat new lines arrive at. Every window opens this way — including
-    the browsers on the remote — and any one of them can be turned over on its own from
-    the control beside its search box.
-  </p>
+  <p class="hint">Which end of the chat new lines arrive at.</p>
 
   <!-- A radio group rather than a checkbox, because neither direction is the
        absence of the other: "newest at bottom" is a choice an operator makes,

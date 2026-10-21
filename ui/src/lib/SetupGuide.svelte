@@ -1,17 +1,25 @@
 <script module lang="ts">
   /// The steps, in the order they are walked.
   ///
-  /// Six, and they are in the order the machine needs them rather than the
+  /// Seven, and they are in the order the machine needs them rather than the
   /// order the Settings page lists them in: nothing can be transcribed without
   /// a model, no channel can be patched before an interface is chosen, and a
   /// group is a view onto channels that have to exist first. Where audio
-  /// leaves the app (P22, P26) comes last of the tasks: it is optional, and
-  /// the shoutbox's program is one of the channels just patched. The welcome
-  /// says what is about to be downloaded, and the last step says which button
-  /// to press.
-  export type Step = "welcome" | "models" | "audio" | "groups" | "outputs" | "ready";
+  /// leaves the app comes last of the tasks, one step per output as on the
+  /// Settings page: the listen output (P22) and then the shoutbox (P26), whose
+  /// program is one of the channels just patched. Both are optional. The
+  /// welcome says what is about to be downloaded, and the last step says which
+  /// button to press.
+  export type Step =
+    | "welcome"
+    | "models"
+    | "audio"
+    | "groups"
+    | "listen"
+    | "shoutbox"
+    | "ready";
 
-  const STEPS: Step[] = ["welcome", "models", "audio", "groups", "outputs", "ready"];
+  const STEPS: Step[] = ["welcome", "models", "audio", "groups", "listen", "shoutbox", "ready"];
 </script>
 
 <script lang="ts">
@@ -37,7 +45,7 @@
   //   Three sizes, the recommended one selected, one line each on when to pick
   //   the other two. Nobody has to know what a quantised tensor is to get past
   //   this page.
-  // - **The channel, group and output steps are the Settings page's own sections**,
+  // - **The channel, group, listen and shoutbox steps are the Settings page's own sections**,
   //   not simplified copies of them. `StreamSetup` and `GroupMembership` are
   //   mounted here as they are, editing the same profile through the same
   //   bindings and saved by the same debounce. A second, gentler channel
@@ -55,7 +63,8 @@
   import StreamSetup from "./StreamSetup.svelte";
   import { isMac, shortcut } from "./shortcut";
   import GroupMembership from "./GroupMembership.svelte";
-  import OutputSettings from "./OutputSettings.svelte";
+  import ListenSettings from "./ListenSettings.svelte";
+  import ShoutboxSettings from "./ShoutboxSettings.svelte";
   import {
     cancelDownload,
     downloadModel,
@@ -514,26 +523,39 @@
           <GroupMembership bind:groups={profile.groups} channels={profile.channels} />
         </div>
       {/if}
-    {:else if step === "outputs"}
-      <h2 id="setup-title">Replay and shoutbox</h2>
+    {:else if step === "listen"}
+      <h2 id="setup-title">Listen</h2>
 
       {#if profile === null}
         <p class="warn">No setup to configure yet.</p>
       {:else}
         <p>
-          <strong>Listen</strong> is where a message is played again when you press its
-          replay button — headphones, so only you hear it.
-          <strong>Shoutbox</strong> passes one intercom channel through to a talkback
-          speaker, louder when the room gets loud, measured by a mic in the room.
+          Where a message is played again when you press its replay button — headphones, so
+          only you hear it.
+        </p>
+        <p class="note">Optional. Without one replays use the system output.</p>
+
+        <div class="embedded">
+          <ListenSettings bind:outputs={profile.outputs} inputDevices={devices} />
+        </div>
+      {/if}
+    {:else if step === "shoutbox"}
+      <h2 id="setup-title">Shoutbox</h2>
+
+      {#if profile === null}
+        <p class="warn">No setup to configure yet.</p>
+      {:else}
+        <p>
+          Passes one intercom channel through to a talkback speaker, louder when the room gets
+          loud, measured by a mic in the room.
         </p>
         <p class="note">
-          Optional. Without a listen output replays use the system output; the shoutbox
-          stays off until you switch it on. The speaker has to be on the same interface as
-          the program channel.
+          Optional. It stays off until you switch it on. The speaker has to be on the same
+          interface as the program channel.
         </p>
 
         <div class="embedded">
-          <OutputSettings bind:outputs={profile.outputs} inputDevices={devices} />
+          <ShoutboxSettings bind:outputs={profile.outputs} inputDevices={devices} />
         </div>
       {/if}
     {:else}
@@ -788,11 +810,11 @@
   }
 
   select {
-    background: var(--bg);
+    background-color: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 0.3rem;
-    padding: 0.3rem 0.45rem;
+    padding: 0.3rem 1.5rem 0.3rem 0.45rem;
     font: inherit;
     font-size: 0.85rem;
   }

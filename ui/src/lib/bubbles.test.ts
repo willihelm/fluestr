@@ -262,6 +262,7 @@ describe("placeholders", () => {
     label: "Regie",
     speaking: true,
     decoding: false,
+    preview: "",
     ...a,
   });
 

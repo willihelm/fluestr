@@ -222,6 +222,47 @@ fn eight_streams_share_the_queue_without_starving_each_other() {
     }
 }
 
+/// The live preview (P28) runs on time nobody else wants: a flood of preview
+/// requests on every stream must not cost a single closed segment, and a
+/// preview never answers as a [`Completed`].
+#[test]
+#[ignore = "needs a model"]
+fn previews_never_cost_a_closed_segment() {
+    let Some(config) = config() else {
+        eprintln!("no model — skipping");
+        return;
+    };
+    let (pool, results) = WorkerPool::spawn(config).expect("pool");
+    const STREAMS: u16 = 8;
+    const PER_STREAM: u64 = 4;
+
+    for seq in 0..PER_STREAM {
+        for stream in 0..STREAMS {
+            // Several requests per stream: the slot replaces, it never queues.
+            for generation in 0..3 {
+                pool.preview(segment_on(stream, seq), generation);
+            }
+            pool.submit(segment_on(stream, seq), Instant::now());
+        }
+    }
+    pool.shutdown();
+
+    let mut completed = 0usize;
+    let mut previews = 0usize;
+    for event in results {
+        match event {
+            PoolEvent::Completed(_) => completed += 1,
+            PoolEvent::Preview(_) => previews += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(completed, (STREAMS as u64 * PER_STREAM) as usize);
+    assert!(
+        previews <= STREAMS as usize * PER_STREAM as usize,
+        "{previews} previews: a replaced request was decoded anyway"
+    );
+}
+
 fn collect(results: std::sync::mpsc::Receiver<PoolEvent>) -> HashSet<u64> {
     collect_with_restarts(results).0
 }
@@ -244,6 +285,7 @@ fn collect_with_restarts(
             }
             PoolEvent::WorkerRestarted { .. } => restarts += 1,
             PoolEvent::Exhausted { message } => eprintln!("pool exhausted: {message}"),
+            PoolEvent::Preview(_) => {}
         }
     }
     (seen, decoded, restarts)

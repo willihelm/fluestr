@@ -34,6 +34,7 @@
     type ModelProgress,
     type ModelsView,
     type ModelStatus,
+    type SpeechEngine,
   } from "./bridge";
   import { untrack } from "svelte";
   import type { ModelChoice } from "./profiles";
@@ -50,9 +51,12 @@
     /// is the one problem here that nothing outside this component can see:
     /// it is a question about files on disk, not about the setup.
     onstatus?: (flag: Flag) => void;
+    /// Told which recogniser the active model runs on, so the vocabulary
+    /// page can say when what is typed there is ignored.
+    onengine?: (engine: SpeechEngine | null) => void;
   }
 
-  let { models = $bindable(), locked, onstatus }: Props = $props();
+  let { models = $bindable(), locked, onstatus, onengine }: Props = $props();
 
   let view = $state<ModelsView | null>(null);
   let error = $state<string | null>(null);
@@ -106,6 +110,7 @@
   $effect(() => {
     if (view === null) return;
     onstatus?.(view.problem ? "error" : view.vad ? null : "warn");
+    onengine?.(view.engine);
   });
 
   const speech = $derived(view?.models.filter((m) => m.kind === "speech") ?? []);
@@ -223,9 +228,14 @@
         {/if}
       </p>
       {#if !view.vad}
+        <p class="warn">No speech detection installed — install the Silero model below.</p>
+      {/if}
+      <!-- Said here as well as on the vocabulary page: this is where the
+           choice is made, and the vocabulary is the price of it. -->
+      {#if view.engine === "parakeet"}
         <p class="warn">
-          No speech detection installed. Noise and silence are transcribed too, and
-          whisper invents sentences for both — install the Silero model below.
+          Parakeet does not read the vocabulary, and picks each segment's language itself — the
+          channel languages do not apply.
         </p>
       {/if}
     {/if}
@@ -313,8 +323,7 @@
             </div>
 
             <p class="note">
-              A <code>.bin</code> from outside this list, for a machine that will never reach
-              the internet: carry it in and say where it is.
+              A whisper <code>.bin</code> from outside this list, or a Parakeet model folder.
             </p>
 
             <div class="path">
@@ -369,19 +378,7 @@
         }
         disabled={locked}
       />
-      <p class="note">
-        How many whisper processes transcribe at once. The channel count is not
-        limited — this is what decides how many of them keep up, because a
-        segment that finds every worker busy waits, and a queue that stays full
-        drops the oldest. {DEFAULT_WORKERS} unless you change it.
-      </p>
-      <p class="note">
-        Raise it one step at a time and watch the channel meters for "not
-        transcribed", which is the queue giving up. Each worker is a separate
-        process holding its own copy of the model, and they share one GPU: past
-        a point another worker makes every decode slower rather than the
-        backlog shorter.
-      </p>
+      <p class="note">How many model processes transcribe at once. Default {DEFAULT_WORKERS}.</p>
     </div>
 
     {#if !error}

@@ -1,9 +1,60 @@
-// The logic behind the Audio output section (P22, P26) that is not a
-// component: which channel choices a device offers, and the two calculations
-// an engineer would otherwise do on a napkin — the calibration offset and the
-// curve.
+// The logic behind the Listen and Shoutbox sections (P22, P26) that is not a
+// component: how a route is matched to and pointed at a device, which channel
+// choices a device offers, and the two calculations an engineer would
+// otherwise do on a napkin — the calibration offset and the curve.
 
-import { DEFAULT_OUTPUTS, SHOUTBOX_ESTIMATED_CALIBRATION_DB, type StoredShoutbox } from "./bridge";
+import {
+  DEFAULT_OUTPUTS,
+  SHOUTBOX_ESTIMATED_CALIBRATION_DB,
+  type DeviceOption,
+  type OutputDeviceOption,
+  type StoredInputRoute,
+  type StoredOutputRoute,
+  type StoredShoutbox,
+} from "./bridge";
+
+/// What a route's picker is keyed on: the stable id, or the name for a route
+/// stored before ids existed.
+export const routeKey = (route: { deviceId: string; device: string }) =>
+  route.deviceId || route.device;
+
+/// The connected device a route points at, by id first and by name after.
+export const deviceFor = <D extends { id: string; name: string }>(
+  devices: D[],
+  route: { deviceId: string; device: string },
+): D | undefined =>
+  devices.find((d) => d.id === route.deviceId) ?? devices.find((d) => d.name === route.device);
+
+/// Picking an output sets both halves and forgets channels it may not have.
+/// An empty id is the "not patched" entry.
+export const pickOutput = (route: StoredOutputRoute, devices: OutputDeviceOption[], id: string) => {
+  if (id === "") {
+    route.device = "";
+    route.deviceId = "";
+    route.channels = [];
+    return;
+  }
+  const option = devices.find((d) => d.id === id);
+  if (!option) return;
+  route.device = option.name;
+  route.deviceId = option.id;
+  if (route.channels.some((c) => c >= option.channels)) route.channels = [];
+};
+
+/// The same for an input, which has one channel rather than a set.
+export const pickInput = (route: StoredInputRoute, devices: DeviceOption[], id: string) => {
+  if (id === "") {
+    route.device = "";
+    route.deviceId = "";
+    route.channel = 0;
+    return;
+  }
+  const option = devices.find((d) => d.id === id);
+  if (!option) return;
+  route.device = option.name;
+  route.deviceId = option.id;
+  if (route.channel >= option.channels) route.channel = 0;
+};
 
 export interface ChannelChoice {
   /// What the route stores, zero-based.

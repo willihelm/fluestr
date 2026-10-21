@@ -7,6 +7,9 @@
 //!
 //! The process is deliberately separate from the main one: if whisper.cpp
 //! crashes, the pool (P5) respawns the worker and the app keeps running.
+//!
+//! A `--model` that is a directory runs Parakeet instead of whisper — see
+//! [`parakeet`]. The protocol, the gate and the pool are the same for both.
 
 use anyhow::{Context, Result};
 use audio_core::{silero, LanguageMode};
@@ -19,8 +22,15 @@ use whisper_rs::{
     WhisperVadContext, WhisperVadContextParams,
 };
 
+mod parakeet;
 #[cfg(all(windows, target_env = "msvc"))]
 mod vulkan_guard;
+
+/// The speech model the worker keeps warm.
+enum Engine {
+    Whisper(WhisperState),
+    Parakeet(parakeet::Parakeet),
+}
 
 /// What the process was asked to do.
 ///
@@ -104,19 +114,34 @@ fn main() -> Result<()> {
     };
 
     let t0 = Instant::now();
-    let mut ctx_params = WhisperContextParameters::default();
-    ctx_params.use_gpu(args.gpu);
-    let ctx = WhisperContext::new_with_params(&args.model, ctx_params)
-        .with_context(|| format!("loading model: {}", args.model))?;
+    // Kept alive for the whole loop: whisper.cpp frees the weights with the
+    // context, and the state only works while they are there.
+    let mut _ctx = None;
+    let mut engine = if parakeet::is_model_dir(std::path::Path::new(&args.model)) {
+        Engine::Parakeet(parakeet::Parakeet::load(
+            std::path::Path::new(&args.model),
+            args.threads,
+        )?)
+    } else {
+        let mut ctx_params = WhisperContextParameters::default();
+        ctx_params.use_gpu(args.gpu);
+        let ctx = WhisperContext::new_with_params(&args.model, ctx_params)
+            .with_context(|| format!("loading model: {}", args.model))?;
+        let state = ctx.create_state().context("creating whisper state")?;
+        _ctx = Some(ctx);
+        Engine::Whisper(state)
+    };
     let load_ms = t0.elapsed().as_millis() as u32;
     #[cfg(all(windows, target_env = "msvc"))]
     vulkan_guard::report();
     // Whether the VAD is armed decides what reaches the chat on a quiet
     // channel, so it belongs in the log rather than being inferred.
+    // Parakeet runs on the CPU whatever was asked for.
+    let gpu = args.gpu && matches!(engine, Engine::Whisper(_));
     tracing::info!(
         model = %args.model,
         load_ms,
-        gpu = args.gpu,
+        gpu,
         vad = args.vad_model.as_deref().unwrap_or("none"),
         "model loaded"
     );
@@ -148,8 +173,6 @@ fn main() -> Result<()> {
         }
     };
 
-    let mut state = ctx.create_state().context("creating whisper state")?;
-
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut reader = BufReader::new(stdin.lock());
@@ -160,7 +183,7 @@ fn main() -> Result<()> {
         &Response::Ready {
             model: args.model.clone(),
             load_ms,
-            gpu: args.gpu,
+            gpu,
         },
     )?;
 
@@ -187,7 +210,7 @@ fn main() -> Result<()> {
                 initial_prompt,
             } => {
                 let response = match transcribe(
-                    &mut state,
+                    &mut engine,
                     &pcm,
                     &language_mode,
                     initial_prompt.as_deref(),
@@ -237,7 +260,7 @@ fn list_languages() -> Vec<Language> {
 }
 
 fn transcribe(
-    state: &mut WhisperState,
+    engine: &mut Engine,
     pcm: &[f32],
     language_mode: &LanguageMode,
     initial_prompt: Option<&str>,
@@ -274,6 +297,20 @@ fn transcribe(
             });
         }
     }
+
+    let state = match engine {
+        Engine::Whisper(state) => state,
+        // No prompt and no language to pass — see the module.
+        Engine::Parakeet(parakeet) => {
+            let (text, decode_ms) = parakeet.transcribe(pcm);
+            return Ok(Decoded {
+                text,
+                detected_language: None,
+                no_speech_probability: 0.0,
+                decode_ms,
+            });
+        }
+    };
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(threads as i32);

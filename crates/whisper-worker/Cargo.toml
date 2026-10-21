@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Sidecar process: keeps a whisper model warm and transcribes segments"
+description = "Sidecar process: keeps a speech model warm (whisper or Parakeet) and transcribes segments"
 
 [[bin]]
 name = "whisper-worker"
@@ -19,6 +19,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 whisper-rs = { workspace = true }
+sherpa-onnx = { workspace = true }
 
 # The GPU backend for the target (P18). Metal on macOS, Vulkan on Windows —
 # building the latter needs the Vulkan SDK (`VULKAN_SDK`, for its headers,

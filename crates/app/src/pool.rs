@@ -217,10 +217,29 @@ pub struct Completed {
     pub outcome: Outcome,
 }
 
+/// The text of a segment that is still being spoken (P28).
+///
+/// Not a [`Completed`]: nothing waits for it, nothing is ordered behind it,
+/// and the session is free to ignore it — which it does when the segment it
+/// was taken from has closed in the meantime.
+#[derive(Debug, Clone)]
+pub struct PreviewText {
+    pub stream_id: StreamId,
+    /// What the session tagged the request with, to tell a preview of the
+    /// segment still open from one of a segment that has since closed. See
+    /// [`crate::activity::Activity::generation`].
+    pub generation: u64,
+    pub text: String,
+    pub no_speech_probability: f32,
+    pub decode_ms: u32,
+}
+
 /// Everything the pool tells the session about.
 #[derive(Debug, Clone)]
 pub enum PoolEvent {
     Completed(Completed),
+    /// A live preview came back (P28).
+    Preview(PreviewText),
     /// A worker died and was replaced. The only thing that explains a gap in
     /// the transcript, so it is reported rather than only logged.
     WorkerRestarted {
@@ -256,6 +275,34 @@ impl Job {
     }
 }
 
+/// A decode of a segment that is still open (P28).
+///
+/// Everything about it is weaker than a [`Job`]: it is taken only when no
+/// closed segment is waiting, a newer one for the same stream replaces it
+/// rather than queueing behind it, it is never retried, and a queue that is
+/// closed forgets it without a word. It costs a closed segment at most the
+/// decode already running when that segment arrived.
+struct Preview {
+    segment: Segment,
+    generation: u64,
+}
+
+/// What a worker takes off the queue.
+enum Work {
+    Segment(Job),
+    Preview(Preview),
+}
+
+#[cfg(test)]
+impl Work {
+    fn segment(&self) -> &Segment {
+        match self {
+            Work::Segment(job) => &job.segment,
+            Work::Preview(preview) => &preview.segment,
+        }
+    }
+}
+
 /// A job the queue would not take, and why.
 enum Rejected {
     /// Evicted to stay within the bound.
@@ -283,6 +330,10 @@ struct Queue {
 
 struct QueueInner {
     jobs: VecDeque<Job>,
+    /// At most one per stream, oldest request first — a replaced preview keeps
+    /// its stream's place, so a channel that keeps talking cannot push the
+    /// others' previews back indefinitely.
+    previews: VecDeque<Preview>,
     closed: bool,
 }
 
@@ -291,6 +342,7 @@ impl Queue {
         Self {
             inner: Mutex::new(QueueInner {
                 jobs: VecDeque::new(),
+                previews: VecDeque::new(),
                 closed: false,
             }),
             ready: Condvar::new(),
@@ -326,25 +378,60 @@ impl Queue {
         rejected
     }
 
-    /// Blocks until a job is available. `None` once the queue is closed and
+    /// Puts a preview in its stream's slot, replacing whatever was waiting
+    /// there. Nothing is reported for the one replaced: it was never owed.
+    fn push_preview(&self, preview: Preview) {
+        let mut inner = self.inner.lock().expect("queue poisoned");
+        if inner.closed {
+            return;
+        }
+        let stream = preview.segment.stream_id;
+        match inner
+            .previews
+            .iter_mut()
+            .find(|waiting| waiting.segment.stream_id == stream)
+        {
+            Some(slot) => *slot = preview,
+            None => inner.previews.push_back(preview),
+        }
+        self.ready.notify_one();
+    }
+
+    /// Forgets the preview waiting for `stream`, if there is one.
+    fn cancel_preview(&self, stream: StreamId) {
+        let mut inner = self.inner.lock().expect("queue poisoned");
+        inner
+            .previews
+            .retain(|waiting| waiting.segment.stream_id != stream);
+    }
+
+    /// Blocks until there is work. `None` once the queue is closed and
     /// drained, which is how a worker thread learns that the session is over.
-    fn pop(&self) -> Option<Job> {
+    ///
+    /// A closed segment always goes first: a preview is only ever decoded on
+    /// time nobody else wanted.
+    fn pop(&self) -> Option<Work> {
         let mut inner = self.inner.lock().expect("queue poisoned");
         loop {
             if let Some(job) = inner.jobs.pop_front() {
-                return Some(job);
+                return Some(Work::Segment(job));
             }
             if inner.closed {
                 return None;
+            }
+            if let Some(preview) = inner.previews.pop_front() {
+                return Some(Work::Preview(preview));
             }
             inner = self.ready.wait(inner).expect("queue poisoned");
         }
     }
 
-    /// Closes the queue and hands back everything still waiting.
+    /// Closes the queue and hands back everything still waiting. Previews are
+    /// not handed back: nothing was owed for them.
     fn close(&self) -> Vec<Rejected> {
         let mut inner = self.inner.lock().expect("queue poisoned");
         inner.closed = true;
+        inner.previews.clear();
         let abandoned = inner.jobs.drain(..).map(Rejected::Closed).collect();
         self.ready.notify_all();
         abandoned
@@ -565,6 +652,21 @@ impl WorkerPool {
         self.report(rejected);
     }
 
+    /// Asks for the text of a segment that is still open (P28). Never blocks,
+    /// and replaces whatever preview of the same stream was still waiting.
+    pub fn preview(&self, segment: Segment, generation: u64) {
+        self.queue.push_preview(Preview {
+            segment,
+            generation,
+        });
+    }
+
+    /// Forgets a waiting preview of `stream` — its segment has just closed,
+    /// and the real decode is what the worker's time is for now.
+    pub fn cancel_preview(&self, stream: StreamId) {
+        self.queue.cancel_preview(stream);
+    }
+
     fn report(&self, rejected: Vec<Rejected>) {
         if rejected.is_empty() {
             return;
@@ -671,7 +773,20 @@ fn worker_loop(
     outcomes: Sender<PoolEvent>,
     live: Arc<AtomicUsize>,
 ) {
-    while let Some(mut job) = queue.pop() {
+    while let Some(work) = queue.pop() {
+        let mut job = match work {
+            Work::Segment(job) => job,
+            Work::Preview(preview) => {
+                let revived =
+                    decode_preview(index, &mut worker, &config, &slot, &outcomes, preview);
+                if let Err(spawn_err) = revived {
+                    exhausted(&live, &queue, &outcomes, spawn_err);
+                    return;
+                }
+                continue;
+            }
+        };
+
         // Now and not when the segment was cut: this is the latest moment the
         // predecessor's text can have arrived by. A retried segment is
         // composed again, and may find it this time.
@@ -704,14 +819,7 @@ fn worker_loop(
                 // the watchdog killed it for running past its deadline. Both
                 // are healed the same way, which is the whole reason the
                 // watchdog works by killing rather than by signalling.
-                let reason = if killed {
-                    format!(
-                        "decode ran past {} s and the worker was killed",
-                        config.decode_timeout.as_secs()
-                    )
-                } else {
-                    format!("sidecar lost: {err}")
-                };
+                let reason = loss_reason(&config, killed, &err);
                 tracing::warn!(
                     worker = index,
                     stream_id = job.segment.stream_id.0,
@@ -720,16 +828,8 @@ fn worker_loop(
                     "replacing a worker"
                 );
 
-                worker.shutdown();
-                match respawn(&config, index) {
-                    Ok(replacement) => {
-                        slot.replace_killer(replacement.killer());
-                        worker = replacement;
-                        let _ = outcomes.send(PoolEvent::WorkerRestarted {
-                            worker: index,
-                            reason: reason.clone(),
-                        });
-
+                match revive(index, &mut worker, &config, &slot, &outcomes, &reason) {
+                    Ok(()) => {
                         // Once. A segment that wedges a sidecar would
                         // otherwise take every worker in the pool down in
                         // turn, and a pool that kills itself on one bad
@@ -747,17 +847,7 @@ fn worker_loop(
                     Err(spawn_err) => {
                         let _ = outcomes
                             .send(PoolEvent::Completed(job.completed(Outcome::Failed(reason))));
-                        // Last one out reports it: with no worker left nothing
-                        // will ever be decoded again, and a session that
-                        // silently stops transcribing looks exactly like a
-                        // quiet room. Not while shutting down, though — there
-                        // an empty pool is the goal, and reporting it would
-                        // turn a clean Stop into a failed session.
-                        if live.fetch_sub(1, Ordering::AcqRel) == 1 && !queue.is_closed() {
-                            let _ = outcomes.send(PoolEvent::Exhausted {
-                                message: format!("no sidecar could be restarted: {spawn_err}"),
-                            });
-                        }
+                        exhausted(&live, &queue, &outcomes, spawn_err);
                         return;
                     }
                 }
@@ -769,6 +859,119 @@ fn worker_loop(
 
     worker.shutdown();
     live.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// Decodes one live preview (P28) and sends its text, if it has any.
+///
+/// Everything that goes wrong is dropped on the floor except a dead sidecar,
+/// which is replaced like under any other decode — but the preview is not
+/// retried and nothing is reported for it: the next one is a fraction of a
+/// second away, and the segment it was taken from is still owed its real
+/// decode. `Err` only when no replacement could be started.
+fn decode_preview(
+    index: usize,
+    worker: &mut Worker,
+    config: &PoolConfig,
+    slot: &WorkerSlot,
+    outcomes: &Sender<PoolEvent>,
+    mut preview: Preview,
+) -> Result<()> {
+    // The same prompt the real decode will be given, so that the preview
+    // spells the house's terms the way the line that replaces it will.
+    if let Some(prompter) = &config.prompter {
+        preview.segment.initial_prompt = prompter.compose(&preview.segment);
+    }
+    slot.begin(Instant::now() + config.decode_timeout);
+    let result = worker.transcribe(&preview.segment);
+    let killed = slot.end();
+
+    match result {
+        Ok(Response::Transcript {
+            text,
+            no_speech_probability,
+            decode_ms,
+            ..
+        }) => {
+            let _ = outcomes.send(PoolEvent::Preview(PreviewText {
+                stream_id: preview.segment.stream_id,
+                generation: preview.generation,
+                text,
+                no_speech_probability,
+                decode_ms,
+            }));
+            Ok(())
+        }
+        Ok(other) => {
+            tracing::debug!(
+                stream_id = preview.segment.stream_id.0,
+                response = ?other,
+                "a preview came back without text"
+            );
+            Ok(())
+        }
+        Err(err) => {
+            let reason = loss_reason(config, killed, &err);
+            tracing::warn!(
+                worker = index,
+                stream_id = preview.segment.stream_id.0,
+                reason,
+                "replacing a worker that died under a preview"
+            );
+            revive(index, worker, config, slot, outcomes, &reason)
+        }
+    }
+}
+
+/// Why a decode's pipe closed, for the log and the lost segment.
+fn loss_reason(config: &PoolConfig, killed: bool, err: &anyhow::Error) -> String {
+    if killed {
+        format!(
+            "decode ran past {} s and the worker was killed",
+            config.decode_timeout.as_secs()
+        )
+    } else {
+        format!("sidecar lost: {err}")
+    }
+}
+
+/// Replaces a worker whose sidecar died, and says so. `Err` when no
+/// replacement could be started, which ends the calling thread.
+fn revive(
+    index: usize,
+    worker: &mut Worker,
+    config: &PoolConfig,
+    slot: &WorkerSlot,
+    outcomes: &Sender<PoolEvent>,
+    reason: &str,
+) -> Result<()> {
+    worker.shutdown();
+    let replacement = respawn(config, index)?;
+    slot.replace_killer(replacement.killer());
+    *worker = replacement;
+    let _ = outcomes.send(PoolEvent::WorkerRestarted {
+        worker: index,
+        reason: reason.to_string(),
+    });
+    Ok(())
+}
+
+/// A worker thread is giving up because its sidecar could not be replaced.
+///
+/// Last one out reports it: with no worker left nothing will ever be decoded
+/// again, and a session that silently stops transcribing looks exactly like a
+/// quiet room. Not while shutting down, though — there an empty pool is the
+/// goal, and reporting it would turn a clean Stop into a failed session.
+fn exhausted(
+    live: &AtomicUsize,
+    queue: &Queue,
+    outcomes: &Sender<PoolEvent>,
+    spawn_err: anyhow::Error,
+) {
+    if live.fetch_sub(1, Ordering::AcqRel) == 1 && !queue.is_closed() {
+        let _ = outcomes.send(PoolEvent::Exhausted {
+            message: format!("no sidecar could be restarted: {spawn_err}"),
+        });
+    }
 }
 
 /// Kills workers whose decode has run past its deadline.
@@ -944,10 +1147,60 @@ mod tests {
         }
         assert!(queue.push(job(1, 0), false).is_empty());
 
-        assert_eq!(queue.pop().unwrap().segment.seq, 0);
-        assert_eq!(queue.pop().unwrap().segment.seq, 1);
-        assert_eq!(queue.pop().unwrap().segment.seq, 2);
-        assert_eq!(queue.pop().unwrap().segment.stream_id, StreamId(1));
+        assert_eq!(queue.pop().unwrap().segment().seq, 0);
+        assert_eq!(queue.pop().unwrap().segment().seq, 1);
+        assert_eq!(queue.pop().unwrap().segment().seq, 2);
+        assert_eq!(queue.pop().unwrap().segment().stream_id, StreamId(1));
+    }
+
+    fn preview(stream: u16, generation: u64) -> Preview {
+        Preview {
+            segment: job(stream, 0).segment,
+            generation,
+        }
+    }
+
+    fn is_preview(work: &Work) -> Option<(u16, u64)> {
+        match work {
+            Work::Preview(p) => Some((p.segment.stream_id.0, p.generation)),
+            Work::Segment(_) => None,
+        }
+    }
+
+    #[test]
+    fn a_closed_segment_always_goes_before_a_preview() {
+        // P28: a preview is decoded on time nobody else wants.
+        let queue = Queue::new(8);
+        queue.push_preview(preview(0, 0));
+        assert!(queue.push(job(1, 0), false).is_empty());
+        assert_eq!(is_preview(&queue.pop().unwrap()), None);
+        assert_eq!(is_preview(&queue.pop().unwrap()), Some((0, 0)));
+    }
+
+    #[test]
+    fn a_newer_preview_replaces_the_one_waiting_and_keeps_its_place() {
+        let queue = Queue::new(8);
+        queue.push_preview(preview(0, 1));
+        queue.push_preview(preview(1, 1));
+        queue.push_preview(preview(0, 2));
+        assert_eq!(is_preview(&queue.pop().unwrap()), Some((0, 2)));
+        assert_eq!(is_preview(&queue.pop().unwrap()), Some((1, 1)));
+        assert_eq!(queue.depth(), 0, "previews are not backlog");
+    }
+
+    #[test]
+    fn a_cancelled_or_closed_preview_is_forgotten_without_a_word() {
+        let queue = Queue::new(8);
+        queue.push_preview(preview(0, 0));
+        queue.push_preview(preview(1, 0));
+        queue.cancel_preview(StreamId(0));
+        assert_eq!(is_preview(&queue.pop().unwrap()), Some((1, 0)));
+
+        queue.push_preview(preview(2, 0));
+        assert!(queue.close().is_empty(), "nothing is owed for a preview");
+        assert!(queue.pop().is_none());
+        queue.push_preview(preview(3, 0));
+        assert!(queue.pop().is_none(), "a closed queue takes no previews");
     }
 
     #[test]
@@ -967,8 +1220,8 @@ mod tests {
         assert!(matches!(dropped.outcome, Outcome::Overloaded));
 
         // And the two newer ones survived, in order.
-        assert_eq!(queue.pop().unwrap().segment.seq, 1);
-        assert_eq!(queue.pop().unwrap().segment.seq, 2);
+        assert_eq!(queue.pop().unwrap().segment().seq, 1);
+        assert_eq!(queue.pop().unwrap().segment().seq, 2);
     }
 
     #[test]
@@ -979,8 +1232,8 @@ mod tests {
         let queue = Queue::new(8);
         assert!(queue.push(job(0, 5), false).is_empty());
         assert!(queue.push(job(0, 3), true).is_empty());
-        assert_eq!(queue.pop().unwrap().segment.seq, 3);
-        assert_eq!(queue.pop().unwrap().segment.seq, 5);
+        assert_eq!(queue.pop().unwrap().segment().seq, 3);
+        assert_eq!(queue.pop().unwrap().segment().seq, 5);
     }
 
     #[test]

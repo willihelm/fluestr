@@ -10,9 +10,13 @@
   interface Props {
     vocabulary: string;
     locked: boolean;
+    /// The active model has no prompt (Parakeet), so nothing typed here
+    /// reaches it. The box stays editable: the list is kept for the next
+    /// whisper session rather than thrown away.
+    ignored?: boolean;
   }
 
-  let { vocabulary = $bindable(), locked }: Props = $props();
+  let { vocabulary = $bindable(), locked, ignored = false }: Props = $props();
 
   let tokens = $derived(estimatedTokens(vocabulary));
   let warning = $derived(lengthWarning(vocabulary));
@@ -35,10 +39,14 @@
     </button>
   </header>
 
-  <p class="hint">
-    Terms whisper should expect, on every channel: cue names, departments, house jargon.
-    The same list applies to all streams — one production has one vocabulary.
-  </p>
+  <p class="hint">Terms whisper should expect on every channel.</p>
+
+  {#if ignored}
+    <p class="warn ignored">
+      The model in use, Parakeet, does not read a vocabulary — these terms only apply when a whisper
+      model is selected.
+    </p>
+  {/if}
 
   <textarea bind:value={vocabulary} rows="3" disabled={locked}></textarea>
 
@@ -70,6 +78,10 @@
     color: #f2b544;
     font-size: 0.8rem;
     margin: 0.5rem 0 0;
+  }
+
+  .warn.ignored {
+    margin: 0 0 0.4rem;
   }
 
   button {

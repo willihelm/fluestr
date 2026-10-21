@@ -90,6 +90,24 @@ const LEVEL_HZ: u32 = 20;
 /// the energy detector when the VAD model is missing.
 const NO_SPEECH_THRESHOLD: f32 = 0.6;
 
+/// How much of a segment has to be open before its first live preview is
+/// asked for (P28), pre-roll included.
+///
+/// Below about a second whisper has too little to go on and the preview is
+/// mostly invented — and the words it would show are the ones the speaker
+/// said a moment ago, which the "speaking…" placeholder already covers.
+const PREVIEW_FIRST: Duration = Duration::from_millis(1_000);
+
+/// How much more has to have been said before the next preview of the same
+/// segment is asked for (P28).
+///
+/// Growth rather than a clock, so that a pool with nothing else to do is not
+/// asked to decode the same audio twice, and a decode takes about half of
+/// this — two passes at most queue up behind each other on a busy stream, and
+/// the slot replaces rather than queues even then. A six-second segment costs
+/// about six previews.
+const PREVIEW_STEP: Duration = Duration::from_millis(800);
+
 /// One intercom channel, as the UI configures it.
 ///
 /// The stream id is *not* in here: it is the position in
@@ -130,13 +148,6 @@ pub struct StreamConfig {
     /// which is exactly what every channel in it did.
     #[serde(default)]
     pub muted: bool,
-    /// Text that looks like this channel, put into whisper's prompt for it
-    /// after the global vocabulary (P25) — see
-    /// [`crate::config::StoredChannel::description`].
-    ///
-    /// `default` — empty, nothing — for a caller written before it existed.
-    #[serde(default)]
-    pub description: String,
 }
 
 /// A change to one channel of a session that is already running (P6).
@@ -184,11 +195,6 @@ pub struct StreamUpdate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub muted: Option<bool>,
-    /// The channel's description for the model (P25). Empty removes it.
-    /// Reaches the next segment a worker takes, not the ones already decoded.
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    pub description: Option<String>,
 }
 
 /// What the UI sends to start a session.
@@ -489,6 +495,13 @@ struct Pipeline {
     /// Whether the segmenter's gate was open at the last pump, so that only
     /// its edges are reported (P23).
     speaking: bool,
+    /// How much of the open segment the last live preview was asked for
+    /// with, or 0 when none has been asked for yet (P28).
+    previewed: usize,
+    /// The segmenter's sequence number at that request — a forced cut moves
+    /// it without closing the gate, and what follows the cut is a new
+    /// segment to preview from the start.
+    previewed_seq: u64,
     /// Audio since the last level event, *after* the trim — the meter beside
     /// the knob has to show what turning it did.
     window: Vec<f32>,
@@ -545,8 +558,8 @@ pub struct Session {
     mutes: HashMap<u16, Arc<AtomicBool>>,
     /// What whisper is told before each segment (P25), shared with the pool
     /// that reads it and the aggregator that feeds it each channel's last
-    /// sentence. Here so that a description typed during a show, a language
-    /// change and the switch on the Detection page reach it.
+    /// sentence. Here so that a language change and the switch on the
+    /// Detection page reach it.
     prompter: Arc<Prompter>,
     /// The running state exactly as it was announced.
     ///
@@ -696,16 +709,10 @@ impl Session {
                 );
             }
         }
-        // Every stream's description, the absent ones included: a stream id
-        // with no pipeline never produces a segment to compose for, and one
-        // that is patched later in the session still finds its text here.
         let prompter = Arc::new(Prompter::new(
             config.vocabulary.clone(),
             config.tuning.carry_context,
         ));
-        for (index, stream) in config.streams.iter().enumerate() {
-            prompter.set_description(index as u16, &stream.description);
-        }
         pool_config.prompter = Some(prompter.clone());
         let (pool, results) = WorkerPool::spawn(pool_config).context("starting the sidecar")?;
         let pool = Arc::new(pool);
@@ -807,8 +814,8 @@ impl Session {
                             language: LanguageCode::new(&stream.language),
                         },
                         // None: the pool composes the prompt when a worker
-                        // takes the segment — vocabulary, description and the
-                        // previous sentence, which does not exist yet at this
+                        // takes the segment — the vocabulary and the previous
+                        // sentence, which does not exist yet at this
                         // point. See [`crate::prompt`].
                         initial_prompt: None,
                         ..Default::default()
@@ -818,6 +825,8 @@ impl Session {
                 mute,
                 was_muted: muted,
                 speaking: false,
+                previewed: 0,
+                previewed_seq: 0,
                 window: Vec::new(),
             });
         }
@@ -874,6 +883,7 @@ impl Session {
                 session_id,
                 replay,
                 activity,
+                live_preview: config.tuning.live_preview,
                 solo: crate::solo::Mixer::new(solo, granted, taps),
             },
         );
@@ -991,11 +1001,6 @@ impl Session {
                 mute.store(muted, Ordering::Relaxed);
             }
             tracing::info!(stream_id = update.stream_id, muted, "stream mute changed");
-        }
-
-        if let Some(description) = update.description {
-            self.prompter
-                .set_description(update.stream_id, &description);
         }
 
         if let Some(language) = update.language {
@@ -1152,6 +1157,9 @@ struct Wiring {
     replay: Arc<ReplayStore>,
     /// Who is talking, for the placeholder (P23).
     activity: Arc<Activity>,
+    /// Whether open segments are decoded while they are spoken (P28), as the
+    /// session started. Changes arrive with the rest of the tuning.
+    live_preview: bool,
     /// The soloed inputs, mixed and sent to the headphones every pump.
     solo: crate::solo::Mixer,
 }
@@ -1169,6 +1177,7 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
         session_id,
         replay,
         activity,
+        mut live_preview,
         mut solo,
     } = wiring;
     // Every segment goes through here on its way to the pool, so this is
@@ -1178,7 +1187,10 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
     let submit = move |segment: Segment, now: Instant| {
         // Before the pool has it, so the aggregator cannot settle a segment
         // that was never counted — see [`Activity::submitted`].
-        submit_activity.submitted(segment.stream_id.0);
+        submit_activity.submitted(segment.stream_id.0, segment.seq);
+        // A preview of this segment still waiting would only be stale by the
+        // time a worker took it, and would delay the decode that replaces it.
+        submit_pool.cancel_preview(segment.stream_id);
         let key = ClipKey {
             session_id,
             stream_id: segment.stream_id.0,
@@ -1250,8 +1262,10 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                         silence_ms = tuning.silence_timeout_ms,
                         max_segment_ms = tuning.max_segment_ms,
                         threshold = tuning.speech_threshold_percent,
+                        live_preview = tuning.live_preview,
                         "detection thresholds changed"
                     );
+                    live_preview = tuning.live_preview;
                     for pipeline in &mut pipelines {
                         pipeline
                             .segmenter
@@ -1325,6 +1339,12 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                         pipeline.speaking = speaking;
                         activity.gate(pipeline.segmenter.stream_id().0, speaking);
                     }
+
+                    // After the gate, so a preview is only ever asked for a
+                    // segment the views already show a placeholder for.
+                    if live_preview && !muted {
+                        request_preview(pipeline, &pool, &activity, started);
+                    }
                 }
                 if let Some(message) = failed {
                     events.state(SessionState::Failed { message });
@@ -1370,6 +1390,44 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
             }
         })
         .expect("spawning the processing thread")
+}
+
+/// Asks the pool for a live preview of `pipeline`'s open segment, if enough
+/// has been said since the last one (P28).
+///
+/// Never waits and never queues: the pool keeps one preview per stream and
+/// decodes it only on time no closed segment wants, so this can be called on
+/// every pump of every stream.
+fn request_preview(
+    pipeline: &mut Pipeline,
+    pool: &WorkerPool,
+    activity: &Activity,
+    started: Instant,
+) {
+    let open = pipeline.segmenter.open_samples();
+    let seq = pipeline.segmenter.emitted();
+    if open == 0 || seq != pipeline.previewed_seq {
+        pipeline.previewed = 0;
+        pipeline.previewed_seq = seq;
+    }
+    let samples = |d: Duration| (d.as_secs_f64() * SAMPLE_RATE as f64) as usize;
+    let due = if pipeline.previewed == 0 {
+        open >= samples(PREVIEW_FIRST)
+    } else {
+        open >= pipeline.previewed + samples(PREVIEW_STEP)
+    };
+    if !due {
+        return;
+    }
+    let Some(mut segment) = pipeline.segmenter.open_segment() else {
+        return;
+    };
+    // Dated like a closed segment, so that the prompt's carried sentence
+    // (P25) lapses for the preview exactly when it will for the real decode.
+    anchor(&mut segment, started.elapsed());
+    let generation = activity.generation(segment.stream_id.0);
+    pool.preview(segment, generation);
+    pipeline.previewed = open;
 }
 
 /// Dates a closed segment on the session clock, which is the wall clock.
@@ -1454,7 +1512,7 @@ fn spawn_aggregator(
                 match event {
                     PoolEvent::Completed(completed) => {
                         for ready in reorder.accept(completed) {
-                            let stream_id = ready.stream_id.0;
+                            let (stream_id, seq) = (ready.stream_id.0, ready.seq);
                             emit(
                                 session_id,
                                 &events,
@@ -1466,7 +1524,23 @@ fn spawn_aggregator(
                             );
                             // Whatever it became — a line, nothing, a loss —
                             // it is no longer on its way (P23).
-                            activity.settled(stream_id);
+                            activity.settled(stream_id, seq);
+                        }
+                    }
+                    // Filtered like a transcript, so the placeholder never
+                    // shows what the chat would not (P28). A preview that is
+                    // not speech leaves the last one standing rather than
+                    // blanking it: the words before were still said.
+                    PoolEvent::Preview(preview) => {
+                        let text = audio_core::collapse_repetitions(&preview.text);
+                        if discard_reason(&text, preview.no_speech_probability).is_none() {
+                            tracing::debug!(
+                                stream_id = preview.stream_id.0,
+                                decode_ms = preview.decode_ms,
+                                chars = text.chars().count(),
+                                "preview"
+                            );
+                            activity.preview(preview.stream_id.0, preview.generation, &text);
                         }
                     }
                     // Not a session error: the pool healed itself, and the
@@ -1487,7 +1561,7 @@ fn spawn_aggregator(
             // to arrive. Holding its successors back now would lose the last
             // words spoken rather than the one segment that went astray.
             for ready in reorder.drain() {
-                let stream_id = ready.stream_id.0;
+                let (stream_id, seq) = (ready.stream_id.0, ready.seq);
                 emit(
                     session_id,
                     &events,
@@ -1497,7 +1571,7 @@ fn spawn_aggregator(
                     ready,
                     &mut dropped,
                 );
-                activity.settled(stream_id);
+                activity.settled(stream_id, seq);
             }
             // Nothing more is coming on any channel, so nothing is on its way,
             // whether or not every count came back to zero.
@@ -1780,7 +1854,7 @@ mod tests {
         // processing thread would have.
         for event in &events {
             if let PoolEvent::Completed(completed) = event {
-                activity.submitted(completed.stream_id.0);
+                activity.submitted(completed.stream_id.0, completed.seq);
             }
         }
         let handle = spawn_aggregator(
@@ -2025,7 +2099,7 @@ mod tests {
         let sink: Arc<dyn EventSink> = order.clone();
         let labels: Labels = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let activity = activity_for(1, &labels, &sink);
-        activity.submitted(0);
+        activity.submitted(0, 0);
         let (tx, rx) = mpsc::channel();
         let handle = spawn_aggregator(
             1,

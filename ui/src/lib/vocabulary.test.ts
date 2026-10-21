@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  CARRY_RESERVE,
-  channelPromptWarning,
   estimatedTokens,
   lengthWarning,
   toConfig,
@@ -35,24 +33,5 @@ describe("vocabulary", () => {
   it("says which end of an over-long prompt is lost", () => {
     const tooLong = "x".repeat(TOKEN_LIMIT * 4 + 100);
     expect(lengthWarning(tooLong)).toContain("start");
-  });
-
-  it("says nothing about a channel without a description", () => {
-    // The vocabulary box already speaks for the vocabulary alone.
-    expect(channelPromptWarning("x".repeat(TOKEN_LIMIT * 4 * 2), "", true)).toBeNull();
-  });
-
-  it("counts a channel's description together with the vocabulary", () => {
-    // Each fits on its own; the two together do not.
-    const half = "x".repeat(TOKEN_LIMIT * 2);
-    expect(lengthWarning(half)).toBeNull();
-    expect(channelPromptWarning(half, half + "xxxxxxxx", false)).toContain("dropped");
-  });
-
-  it("keeps room for the previous sentence only while it is carried", () => {
-    const vocabulary = "x".repeat(TOKEN_LIMIT * 4 * 0.5);
-    const description = "x".repeat((TOKEN_LIMIT * 0.8 - TOKEN_LIMIT * 0.5 - CARRY_RESERVE / 2) * 4);
-    expect(channelPromptWarning(vocabulary, description, false)).toBeNull();
-    expect(channelPromptWarning(vocabulary, description, true)).toContain("previous sentence");
   });
 });

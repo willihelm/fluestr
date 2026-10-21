@@ -41,7 +41,11 @@ export type ModelSource = "managed" | "custom" | "environment" | "development";
 /**
  * One catalogue entry as the Settings page sees it.
  */
-export type ModelStatus = { id: string, kind: ModelKind, label: string, note: string, bytes: number, installed: boolean, 
+export type ModelStatus = { id: string, kind: ModelKind, label: string, note: string, 
+/**
+ * `None` for the VAD, which is not a recogniser.
+ */
+engine: SpeechEngine | null, bytes: number, installed: boolean, 
 /**
  * Bytes of an interrupted download waiting to be continued. Shown so that
  * "download" can honestly say "resume".
@@ -61,9 +65,24 @@ dir: string, models: Array<ModelStatus>,
  * The speech model a session would start with right now, and where it
  * comes from. `None` is the "no model" state, with `problem` saying so.
  */
-active: string | null, source: ModelSource | null, problem: string | null, 
+active: string | null, 
+/**
+ * The recogniser `active` runs on. The vocabulary editor says it is
+ * ignored when this is Parakeet.
+ */
+engine: SpeechEngine | null, source: ModelSource | null, problem: string | null, 
 /**
  * Whether speech detection would be running. A session without it works
  * and transcribes noise, which is worth a warning rather than silence.
  */
 vad: boolean, };
+
+/**
+ * Which recogniser a speech model is for.
+ *
+ * Decided by the files rather than by a setting: the sidecar runs Parakeet
+ * when `--model` is a directory and whisper when it is a file. Reported to
+ * the UI because the two do not take the same input — Parakeet has no prompt,
+ * so the vocabulary does nothing while it runs.
+ */
+export type SpeechEngine = "whisper" | "parakeet";

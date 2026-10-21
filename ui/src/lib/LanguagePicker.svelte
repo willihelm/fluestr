@@ -92,7 +92,7 @@
 <style>
   select,
   input {
-    background: var(--bg);
+    background-color: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 0.3rem;
@@ -104,6 +104,10 @@
        sized by its widest option would blow that column out to the width of
        "Serbo-croatian (sh)". */
     width: 100%;
+  }
+
+  select {
+    padding-right: 1.5rem;
   }
 
   select:disabled,

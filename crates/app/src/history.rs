@@ -300,6 +300,7 @@ mod tests {
             speaking,
             decoding,
             since_ms: 0,
+            preview: String::new(),
         }
     }
 

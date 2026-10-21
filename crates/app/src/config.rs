@@ -99,21 +99,6 @@ pub struct StoredChannel {
     /// existed describes channels that were all unmuted.
     #[serde(default)]
     pub muted: bool,
-    /// Text that looks like this channel — its terms and names, written the
-    /// way they should come out — put into whisper's prompt for this channel
-    /// only, after the global vocabulary (P25).
-    ///
-    /// Not an instruction: whisper reads its prompt as what was said before
-    /// the segment, and a sentence telling it what to do is at best ignored
-    /// and at worst continued on a quiet channel. On the channel rather than
-    /// beside the vocabulary because it describes a position in the patch,
-    /// and the patch is the profile's. Carried into the session as
-    /// [`crate::session::StreamConfig::description`].
-    ///
-    /// `#[serde(default)]`: a file written before it existed has channels
-    /// with nothing to describe them, which is an empty one.
-    #[serde(default)]
-    pub description: String,
 }
 
 /// A named view onto some of the channels.
@@ -721,6 +706,18 @@ pub struct Tuning {
     /// the default rather than `false`.
     #[serde(default = "enabled")]
     pub carry_context: bool,
+    /// Whether a segment is decoded while it is still being spoken, and what
+    /// has been heard so far shown in its placeholder (P28).
+    ///
+    /// A switch because the judgement it rests on — whether text that
+    /// rewrites itself is easier to work beside than text that arrives later
+    /// and stays put — is one for the house, made on a running show, and the
+    /// comparison needs both sides within reach. Off is exactly the app as it
+    /// was before.
+    ///
+    /// `default = "enabled"` for `carry_context`'s reason.
+    #[serde(default = "enabled")]
+    pub live_preview: bool,
 }
 
 impl Default for Tuning {
@@ -734,6 +731,7 @@ impl Default for Tuning {
             max_segment_ms: segmenter.max_segment.as_millis() as u64,
             speech_threshold_percent: (audio_core::silero::DEFAULT_ONSET * 100.0).round() as u8,
             carry_context: true,
+            live_preview: true,
         }
     }
 }
@@ -1351,6 +1349,7 @@ mod tests {
                 max_segment_ms: 4_000,
                 speech_threshold_percent: 60,
                 carry_context: false,
+                live_preview: false,
             },
             auto_start: true,
             setup_done: true,
@@ -1367,7 +1366,6 @@ mod tests {
                         color: "#6ea8fe".into(),
                         gain_db: 0,
                         muted: false,
-                        description: String::new(),
                     }],
                     groups: vec![],
                     all_channels_flash: false,
@@ -1387,7 +1385,6 @@ mod tests {
                             color: "#6ea8fe".into(),
                             gain_db: 0,
                             muted: false,
-                            description: String::new(),
                         },
                         StoredChannel {
                             channel: 3,
@@ -1402,7 +1399,6 @@ mod tests {
                             // patched but nobody sits on it, and it would
                             // otherwise fill the chat with the room it is in.
                             muted: true,
-                            description: "Licht. Verfolger 2, Preset 12, Blackout.".into(),
                         },
                     ],
                     groups: vec![StoredGroup {
@@ -1563,8 +1559,6 @@ mod tests {
         // And its chat reads the way it read then: a file with nothing to say
         // about the direction must not come back turned over.
         assert_eq!(config.chat_sort, SortDirection::NewestBottom);
-        // And its channels have nothing to describe them to the model.
-        assert_eq!(config.profiles[0].channels[0].description, "");
     }
 
     /// The acceptance criterion P19 is signed off against: a version 1 file
@@ -1858,6 +1852,7 @@ mod tests {
             keys(&json["tuning"]),
             [
                 "carryContext",
+                "livePreview",
                 "maxSegmentMs",
                 "silenceTimeoutMs",
                 "speechThresholdPercent"
@@ -1885,15 +1880,7 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
-            [
-                "channel",
-                "color",
-                "description",
-                "gainDb",
-                "label",
-                "language",
-                "muted"
-            ]
+            ["channel", "color", "gainDb", "label", "language", "muted"]
         );
         // The second profile, because it is the one with groups in it.
         assert_eq!(

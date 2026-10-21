@@ -325,6 +325,46 @@ impl Segmenter {
         self.seq
     }
 
+    /// Audio in the segment being built, pre-roll included, or 0 while the
+    /// gate is closed. What the live preview (P28) measures its growth by.
+    pub fn open_samples(&self) -> usize {
+        if self.speaking {
+            self.current.len()
+        } else {
+            0
+        }
+    }
+
+    /// The segment being spoken, as it would be cut if the speaker stopped
+    /// now — for the live preview (P28).
+    ///
+    /// A copy, and nothing about the segmenter changes: no sequence number is
+    /// spent, because the number it carries is the one the segment *will*
+    /// get if it is ever closed, which is what the prompt's carried sentence
+    /// (P25) is matched against. The end is mid-waveform and left so — a
+    /// fade would only make the last word harder to hear, and this text is
+    /// replaced by the real one anyway.
+    pub fn open_segment(&self) -> Option<Segment> {
+        if !self.speaking || self.current.is_empty() {
+            return None;
+        }
+        let mut pcm = self.current.clone();
+        if self.continuation {
+            self.fade_in(&mut pcm);
+        }
+        let end_sample = self.current_start + pcm.len() as u64;
+        Some(Segment {
+            stream_id: self.stream_id,
+            seq: self.seq,
+            t_start: at(self.current_start),
+            t_end: at(end_sample),
+            lag: at(self.consumed.saturating_sub(end_sample)),
+            pcm,
+            language_mode: self.config.language_mode.clone(),
+            initial_prompt: self.config.initial_prompt.clone(),
+        })
+    }
+
     fn process_frame(&mut self, frame: &[f32], finished: &mut Vec<Segment>) {
         let level = rms(frame);
         let speech = self.vad.is_speech(frame);
@@ -1040,5 +1080,32 @@ mod tests {
             assert_eq!(x.t_start, y.t_start);
             assert_eq!(x.pcm.len(), y.pcm.len());
         }
+    }
+
+    #[test]
+    fn the_open_segment_can_be_read_without_closing_it() {
+        // The live preview (P28) reads what is being said while it is still
+        // being said — and must not spend the sequence number or change what
+        // the segment becomes when it does close.
+        let mut seg = segmenter(SegmenterConfig::default());
+        let mut signal = silence(0.5);
+        signal.extend(tone(1.0, 0.3));
+        assert!(run(&mut seg, &signal).is_empty());
+
+        let open = seg.open_segment().expect("speech is open");
+        assert_eq!(open.seq, 0, "the number the segment will get");
+        assert_eq!(seg.emitted(), 0, "and not spent");
+        assert_eq!(open.pcm.len(), seg.open_samples());
+        assert!(
+            open.pcm_duration().as_millis() >= 1_000,
+            "pre-roll included"
+        );
+
+        let closed = run(&mut seg, &silence(1.0));
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].seq, 0);
+        assert_eq!(closed[0].t_start, open.t_start);
+        assert!(seg.open_segment().is_none(), "nothing open once it closed");
+        assert_eq!(seg.open_samples(), 0);
     }
 }

@@ -3,8 +3,8 @@
 //! Whisper does not follow instructions. Its `initial_prompt` is read as the
 //! transcript that came *before* the segment, and nothing else — so everything
 //! composed here is text that should look like the channel: the house's
-//! vocabulary, the channel's own description, and, when it is safe to, the
-//! sentence the same channel said last.
+//! vocabulary and, when it is safe to, the sentence the same channel said
+//! last.
 //!
 //! # Composed when a worker takes the segment, not when it is cut
 //!
@@ -47,14 +47,13 @@ pub const CARRY_WITHIN: Duration = Duration::from_secs(10);
 ///
 /// About fifty tokens — a quarter of whisper's 224-token window. The end of the
 /// sentence is what is kept: it is what the next segment continues, and an
-/// over-long prompt loses its *front*, which is where the vocabulary and the
-/// description are.
+/// over-long prompt loses its *front*, which is where the vocabulary is.
 pub const CARRY_CHARS: usize = 200;
 
 /// Composes the prompt for every segment of one session.
 ///
-/// Shared between the session, which edits it — a description typed during a
-/// show, the switch on the Detection page — the aggregator, which tells it
+/// Shared between the session, which edits it — the switch on the Detection
+/// page, a language change — the aggregator, which tells it
 /// what each channel last said, and the pool, which reads it once per decode.
 /// One lock around all of it: every access is a handful of string operations
 /// beside a decode that takes hundreds of milliseconds.
@@ -66,7 +65,6 @@ pub struct Prompter {
 #[derive(Debug)]
 struct Inner {
     vocabulary: Option<String>,
-    descriptions: HashMap<u16, String>,
     /// Whether the previous sentence is carried at all — the switch on the
     /// Detection page.
     carry: bool,
@@ -89,7 +87,6 @@ impl Prompter {
         Self {
             inner: Mutex::new(Inner {
                 vocabulary: non_empty(vocabulary.as_deref()),
-                descriptions: HashMap::new(),
                 carry,
                 previous: HashMap::new(),
             }),
@@ -98,15 +95,6 @@ impl Prompter {
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().expect("prompter poisoned")
-    }
-
-    /// Sets one channel's description. Empty removes it.
-    pub fn set_description(&self, stream: u16, description: &str) {
-        let mut inner = self.inner();
-        match non_empty(Some(description)) {
-            Some(text) => inner.descriptions.insert(stream, text),
-            None => inner.descriptions.remove(&stream),
-        };
     }
 
     /// Turns carrying the previous sentence on or off, for every channel.
@@ -171,8 +159,7 @@ impl Prompter {
 
     /// The prompt for one segment, or `None` for no prompt at all.
     ///
-    /// Vocabulary first, then the channel's description, then the previous
-    /// sentence. The order is not cosmetic: whisper drops an over-long prompt
+    /// Vocabulary first, then the previous sentence. The order is not cosmetic: whisper drops an over-long prompt
     /// from the front, so what is most specific to this segment goes last and
     /// survives.
     pub fn compose(&self, segment: &Segment) -> Option<String> {
@@ -196,11 +183,7 @@ impl Prompter {
             })
             .map(|held| tail(&held.text, CARRY_CHARS));
 
-        join([
-            inner.vocabulary.as_deref(),
-            inner.descriptions.get(&stream).map(String::as_str),
-            carried,
-        ])
+        join([inner.vocabulary.as_deref(), carried])
     }
 }
 
@@ -232,8 +215,8 @@ fn tail(text: &str, max: usize) -> &str {
 /// Joins the parts into one text that reads as a transcript.
 ///
 /// A part that does not end a sentence is closed with a full stop, so the
-/// vocabulary's last term does not run into the description's first word as
-/// if they were one phrase.
+/// vocabulary's last term does not run into the carried sentence's first word
+/// as if they were one phrase.
 fn join<'a>(parts: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
     let mut out = String::new();
     for part in parts.into_iter().flatten() {
@@ -283,34 +266,14 @@ mod tests {
     }
 
     #[test]
-    fn vocabulary_description_and_previous_sentence_in_that_order() {
+    fn vocabulary_and_previous_sentence_in_that_order() {
         let prompter = Prompter::new(Some("Standby, Cue, Go".into()), true);
-        prompter.set_description(3, "Licht. Stellwerk, Preset 12");
         prompter.remember(3, 4, at(10_000), Some("de"), "Preset 12 steht");
 
         assert_eq!(
             prompter.compose(&segment(3, 5, 11_000)).as_deref(),
-            Some("Standby, Cue, Go. Licht. Stellwerk, Preset 12. Preset 12 steht")
+            Some("Standby, Cue, Go. Preset 12 steht")
         );
-    }
-
-    #[test]
-    fn a_description_belongs_to_its_channel_only() {
-        let prompter = Prompter::new(None, true);
-        prompter.set_description(3, "Stellwerk");
-        assert_eq!(prompter.compose(&segment(1, 0, 0)), None);
-        assert_eq!(
-            prompter.compose(&segment(3, 0, 0)).as_deref(),
-            Some("Stellwerk")
-        );
-    }
-
-    #[test]
-    fn an_emptied_description_is_removed() {
-        let prompter = Prompter::new(None, true);
-        prompter.set_description(3, "Stellwerk");
-        prompter.set_description(3, "   ");
-        assert_eq!(prompter.compose(&segment(3, 0, 0)), None);
     }
 
     #[test]

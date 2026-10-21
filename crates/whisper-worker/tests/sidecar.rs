@@ -84,7 +84,10 @@ fn sidecar_reports_ready_and_serves_the_full_language_list() {
     match read_response(&mut stdout).unwrap().unwrap() {
         Response::Ready { load_ms, gpu, .. } => {
             println!("ready after {load_ms} ms, gpu={gpu}");
-            assert!(gpu, "Metal should be active");
+            // Parakeet (a model directory) runs on the CPU by design.
+            if !std::path::Path::new(&model_path()).is_dir() {
+                assert!(gpu, "Metal should be active");
+            }
         }
         other => panic!("expected Ready, got {other:?}"),
     }
@@ -188,7 +191,8 @@ fn sidecar_survives_a_failing_segment() {
         other => panic!("expected Ready, got {other:?}"),
     }
 
-    // Empty PCM: whisper dislikes it, but the worker must not die of it.
+    // Empty PCM: whisper dislikes it and onnxruntime throws on it (Parakeet),
+    // but the worker must not die of it.
     write_request(
         &mut stdin,
         &Request::Transcribe {

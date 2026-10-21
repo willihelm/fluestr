@@ -19,6 +19,11 @@
   // whisper — and because it is the one an operator reaches for when they hear
   // a wrong word coming back again and again.
   //
+  // And one more: whether the open segment is decoded while it is still being
+  // spoken and shown in its placeholder (P28). Here because it is paid for in
+  // decodes like the rest of the page, and because whether text that rewrites
+  // itself helps or distracts is judged by ear during a show, like the others.
+  //
   // **Every change reaches the session that is already running**, on the next
   // segment rather than at the next Start. That is the whole point of the
   // page: an operator turns one of these while somebody talks, and listens to
@@ -47,7 +52,8 @@
     tuning.silenceTimeoutMs === DEFAULT_TUNING.silenceTimeoutMs &&
       tuning.maxSegmentMs === DEFAULT_TUNING.maxSegmentMs &&
       tuning.speechThresholdPercent === DEFAULT_TUNING.speechThresholdPercent &&
-      tuning.carryContext === DEFAULT_TUNING.carryContext,
+      tuning.carryContext === DEFAULT_TUNING.carryContext &&
+      tuning.livePreview === DEFAULT_TUNING.livePreview,
   );
 
   const reset = () => (tuning = { ...DEFAULT_TUNING });
@@ -69,15 +75,7 @@
     {/if}
   </header>
 
-  <p class="hint">
-    How speech is found and where a segment is cut. Set these by listening: speak on a
-    channel, watch what arrives, move one of them.
-    {#if running}
-      A change reaches the session that is running now, on the next segment.
-    {:else}
-      A change takes effect on the next Start, and on the session running at the time.
-    {/if}
-  </p>
+  <p class="hint">{running ? "Changes apply from the next segment." : "Changes apply on the next Start."}</p>
 
   <div class="control">
     <label for="silence-timeout">
@@ -92,11 +90,7 @@
       step="50"
       bind:value={tuning.silenceTimeoutMs}
     />
-    <p class="note">
-      Waited out on every line before anything is decoded, so it is the one number that
-      is paid in full each time somebody speaks. Shorter is faster to read and cuts more
-      sentences in two where the speaker only drew breath.
-    </p>
+    <p class="note">Shorter is faster, but cuts more sentences in two.</p>
   </div>
 
   <div class="control">
@@ -112,11 +106,7 @@
       step="500"
       bind:value={tuning.maxSegmentMs}
     />
-    <p class="note">
-      The ceiling for somebody who does not pause. Below about two seconds whisper has
-      too little to work with and starts inventing sentences, so this is a trade rather
-      than a free way to be quicker.
-    </p>
+    <p class="note">Below about two seconds whisper starts inventing sentences.</p>
   </div>
 
   <div class="control">
@@ -132,12 +122,7 @@
       step="5"
       bind:value={tuning.speechThresholdPercent}
     />
-    <p class="note">
-      Lower hears the quiet ones and sends more of the room to be decoded; higher keeps
-      the noise out and loses a command murmured into a beltpack. On a machine that
-      could not load the speech model and fell back to the level detector this does
-      nothing — the status bar says which one is running.
-    </p>
+    <p class="note">Lower hears quiet speech; higher keeps noise out.</p>
   </div>
 
   <div class="control">
@@ -145,19 +130,21 @@
       <input type="checkbox" bind:checked={tuning.carryContext} />
       Carry the previous sentence into the next segment
     </label>
+    <p class="note">Turn it off if a wrong word keeps coming back.</p>
+  </div>
+
+  <div class="control">
+    <label class="switch">
+      <input type="checkbox" bind:checked={tuning.livePreview} />
+      Show what is being said before the line is finished
+    </label>
     <p class="note">
-      The model reads what the same channel said last before it decodes the next
-      segment, so a sentence cut in two comes out whole. Only within a few seconds, and
-      never across a language change. Turn it off if one wrong word keeps coming back, or
-      if a quiet channel starts repeating what was said before.
+      The placeholder fills with a rough draft while somebody talks; the line replaces it. Turn it
+      off if text that rewrites itself is more distracting than text that arrives later.
     </p>
   </div>
 
-  <p class="budget">
-    Worst case from the last word to the line appearing: <strong>{worstCase}</strong> — the
-    ceiling, the pause and about 330 ms of decoding. Somebody who pauses normally waits the
-    pause and the decoding, and nothing like this.
-  </p>
+  <p class="budget">Worst case until a line appears: <strong>{worstCase}</strong></p>
 </section>
 
 <style>

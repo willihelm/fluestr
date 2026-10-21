@@ -407,6 +407,9 @@
     messages.length;
     // And a placeholder appearing: it is the newest thing in the view.
     boxes.length;
+    // And its live preview growing (P28), which grows the box like a line
+    // joining a bubble does.
+    for (const a of active) a.preview;
     if (following && container) {
       // Back at the newest edge, the pages that were opened to read backwards
       // are no longer being looked at. Dropping them keeps a session that ran
@@ -689,10 +692,20 @@
     </article>
   {/snippet}
 
+  <!-- With the live preview (P28), what has been heard so far instead of the
+       word "speaking": dimmed and in italics, so it never reads as a line
+       that has arrived, and replaced wholesale by the next preview and in
+       the end by the line itself. -->
   {#snippet indicator(a: SpeechActivity)}
-    <p class="indicator" aria-label="{a.label || 'Stream ' + a.streamId} is {waitingText(a)}">
-      {waitingText(a)}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
-    </p>
+    {#if a.preview}
+      <p class="indicator preview" aria-label="{a.label || 'Stream ' + a.streamId} is {waitingText(a)}">
+        {a.preview}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+      </p>
+    {:else}
+      <p class="indicator" aria-label="{a.label || 'Stream ' + a.streamId} is {waitingText(a)}">
+        {waitingText(a)}<span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+      </p>
+    {/if}
   {/snippet}
 
   {#if newestTop}
@@ -1143,6 +1156,14 @@
     color: var(--channel);
     font-size: 0.85rem;
     font-style: italic;
+  }
+
+  /* A draft of the words on their way (P28): the size of a line, so nothing
+     jumps when the line replaces it, but the colour of a hint. */
+  .indicator.preview {
+    color: var(--text-dim);
+    font-size: inherit;
+    overflow-wrap: anywhere;
   }
 
   article:not(.placeholder) .indicator {

@@ -58,6 +58,25 @@ body {
   text-size-adjust: 100%;
 }
 
+/* A select is drawn by the page, not by the platform. WebKit — the app's own
+   WebView and Safari both — draws a native select at a fixed height and
+   ignores its padding, so next to a text or number field styled the same way
+   it came out a third shorter, and a row of fields did not line up. With the
+   native look switched off the padding counts, and a select is as tall as the
+   field beside it.
+
+   Only what the components do not set is set here: each component still owns
+   its select's colours, border, padding and font, and gives it `padding-right`
+   for the chevron. They set `background-color` rather than `background`, which
+   would take the chevron away again. */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239aa1b4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 0.6rem auto;
+}
+
 /* Where the pointer is a finger, every control is at least a fingertip tall.
    Written once, here, against the elements rather than a class: the rule is
    about the input device and not about any one panel, and a component that

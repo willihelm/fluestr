@@ -83,8 +83,8 @@ export const MAX_SEGMENT_MS_MAX = 15000;
 
 /**
  * The three detection thresholds as they stand when nobody has moved them
- * (P12), and whether a channel's previous sentence is carried into its next
- * prompt (P25). Mirrors `config::Tuning::default()`, which is itself the
+ * (P12), whether a channel's previous sentence is carried into its next
+ * prompt (P25), and whether segments are previewed while spoken (P28). Mirrors `config::Tuning::default()`, which is itself the
  * constants the app compiled in before they were settings — so a file written
  * before that and a fresh install describe the same pipeline.
  */
@@ -93,6 +93,7 @@ export const DEFAULT_TUNING = {
   maxSegmentMs: 6000,
   speechThresholdPercent: 50,
   carryContext: true,
+  livePreview: true,
 };
 
 /**

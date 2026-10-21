@@ -55,13 +55,13 @@ async fn a_model_arrives_verified_and_installed() {
     assert_eq!(path, models::installed_path(&dir, entry.id));
     assert_eq!(
         std::fs::metadata(&path).unwrap().len(),
-        entry.bytes,
+        entry.bytes(),
         "the catalogue's size is the file's actual size"
     );
     // The checksum baked into the catalogue is the published one. A typo there
     // is otherwise only discovered on a real machine, ten minutes into a
     // download of the large model.
-    assert!(models::verify(&path, entry.sha256).unwrap());
+    assert!(models::verify(&path, entry.files[0].sha256).unwrap());
 
     let stages = stages.lock().unwrap();
     assert!(
@@ -90,13 +90,13 @@ async fn an_interrupted_download_is_continued_rather_than_restarted() {
     // rather than invented, because a resume that splices the right bytes onto
     // the wrong ones is precisely what the checksum at the end has to catch —
     // and here it must *not* fire.
-    let whole = reqwest::get(entry.url)
+    let whole = reqwest::get(entry.files[0].url)
         .await
         .expect("fetching the reference copy")
         .bytes()
         .await
         .expect("reading the reference copy");
-    assert_eq!(whole.len() as u64, entry.bytes);
+    assert_eq!(whole.len() as u64, entry.bytes());
     let cut = 400_000;
     std::fs::write(&part, &whole[..cut]).expect("writing the partial download");
 
@@ -123,7 +123,7 @@ async fn an_interrupted_download_is_continued_rather_than_restarted() {
         Some(cut as u64),
         "a resumed download reports the bytes it already had"
     );
-    assert!(models::verify(&path, entry.sha256).unwrap());
+    assert!(models::verify(&path, entry.files[0].sha256).unwrap());
 }
 
 #[tokio::test]
@@ -142,7 +142,7 @@ async fn a_tampered_download_is_rejected_and_discarded() {
     // which is the case the hash is here for — a part file of the full size is
     // discarded as debris before it ever reaches the check, so writing one
     // would test the wrong thing.
-    std::fs::write(&part, vec![0xABu8; entry.bytes as usize - 1]).expect("writing the fake");
+    std::fs::write(&part, vec![0xABu8; entry.bytes() as usize - 1]).expect("writing the fake");
     let err = models::download(entry, &dir, Arc::new(AtomicBool::new(false)), |_| {})
         .await
         .map(|_| ())

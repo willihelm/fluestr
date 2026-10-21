@@ -303,7 +303,6 @@
       language?: string;
       gainDb?: number;
       muted?: boolean;
-      description?: string;
     },
   ) => {
     updateStreamConfig({ streamId, ...update })
@@ -1534,10 +1533,10 @@
     font: inherit;
     font-size: 0.85rem;
     color: var(--text);
-    background: var(--bg);
+    background-color: var(--bg);
     border: 1px solid var(--border);
     border-radius: 0.3rem;
-    padding: 0.3rem 0.45rem;
+    padding: 0.3rem 1.5rem 0.3rem 0.45rem;
     max-width: 14rem;
     text-overflow: ellipsis;
     cursor: pointer;

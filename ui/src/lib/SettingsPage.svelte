@@ -2,7 +2,8 @@
   export type Section =
     | "profiles"
     | "audio"
-    | "output"
+    | "listen"
+    | "shoutbox"
     | "groups"
     | "rules"
     | "models"
@@ -60,7 +61,8 @@
   import RemoteSettings from "./RemoteSettings.svelte";
   import ViewSettings from "./ViewSettings.svelte";
   import DetectionSettings from "./DetectionSettings.svelte";
-  import OutputSettings from "./OutputSettings.svelte";
+  import ListenSettings from "./ListenSettings.svelte";
+  import ShoutboxSettings from "./ShoutboxSettings.svelte";
   import { lengthWarning } from "./vocabulary";
   import { connectedDevice, type ModelChoice, type Profile } from "./profiles";
   import type { SortDirection } from "./sort";
@@ -71,6 +73,7 @@
     type DeviceOption,
     type Language,
     type StoredRemote,
+    type SpeechEngine,
     type StreamLevel,
     type Tuning,
   } from "./bridge";
@@ -128,7 +131,6 @@
             language?: string;
             gainDb?: number;
             muted?: boolean;
-            description?: string;
           },
         ) => void)
       | null;
@@ -250,6 +252,9 @@
   // whether this machine can transcribe at all. Nothing else on the page can
   // work it out — it is a question about files on disk, not about the setup.
   let modelFlag = $state<Flag>(null);
+  // Also from the model manager: which recogniser runs, because Parakeet
+  // ignores the vocabulary and that page should say so.
+  let modelEngine = $state<SpeechEngine | null>(null);
 
   // The sidecar's language list, fetched once for the whole page and handed to
   // every picker on it. `null` until it arrives, and it stays `null` if the
@@ -276,9 +281,12 @@
     // profile list, and it is said once in the strip at the top of the page.
     profiles: null,
     audio: problem === null ? null : "warn",
+    // Never flagged: a replay with no output of its own plays on the system
+    // output, which is a choice rather than a problem.
+    listen: null,
     // Never flagged: the shoutbox reports its own trouble inside the section,
     // and it is off on most machines.
-    output: null,
+    shoutbox: null,
     groups: null,
     // Never flagged: an empty rule list is the normal state, not a problem.
     rules: null,
@@ -319,11 +327,15 @@
       scope: "Profile",
       items: [
         { id: "profiles", title: "Profiles" },
-        { id: "audio", title: "Audio input" },
-        // Beside the input because both are patched on the profile's
-        // interface: the replay headphones and the shoutbox (P22, P26).
-        { id: "output", title: "Audio output" },
+        // The input device and the channel map on it.
+        { id: "audio", title: "Channels" },
+        // Under the channels, because a group is a set of them.
         { id: "groups", title: "Groups" },
+        // Two sections and not one: the replay headphones and the talkback
+        // speaker are two different jobs, set up by different people, and the
+        // shoutbox alone is a long page (P22, P26).
+        { id: "listen", title: "Listen" },
+        { id: "shoutbox", title: "Shoutbox" },
         // With the profile, because a trigger names channels and groups and
         // neither exists outside one.
         { id: "rules", title: "Rules" },
@@ -501,10 +513,6 @@
                 {/if}
               </select>
             </label>
-            <p class="hint">
-              One multichannel interface for every stream. Two devices would mean two
-              clocks, and no common timebase to order one chat by.
-            </p>
           </section>
 
           <StreamSetup
@@ -515,8 +523,6 @@
             {locked}
             {live}
             {levels}
-            {vocabulary}
-            carry={tuning.carryContext}
           />
 
           {#if listError}
@@ -527,8 +533,12 @@
           {/if}
         </div>
 
-        <div class="sheet" hidden={section !== "output"}>
-          <OutputSettings bind:outputs={active.outputs} bind:inputDevices={devices} />
+        <div class="sheet" hidden={section !== "listen"}>
+          <ListenSettings bind:outputs={active.outputs} bind:inputDevices={devices} />
+        </div>
+
+        <div class="sheet" hidden={section !== "shoutbox"}>
+          <ShoutboxSettings bind:outputs={active.outputs} bind:inputDevices={devices} />
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>
@@ -545,11 +555,16 @@
       {/if}
 
       <div class="sheet" hidden={section !== "vocabulary"}>
-        <VocabularyEditor bind:vocabulary {locked} />
+        <VocabularyEditor bind:vocabulary {locked} ignored={modelEngine === "parakeet"} />
       </div>
 
       <div class="sheet" hidden={section !== "models"}>
-        <ModelPicker bind:models {locked} onstatus={(flag) => (modelFlag = flag)} />
+        <ModelPicker
+          bind:models
+          {locked}
+          onstatus={(flag) => (modelFlag = flag)}
+          onengine={(engine) => (modelEngine = engine)}
+        />
       </div>
 
       {#if !isRemote}
@@ -787,19 +802,13 @@
   }
 
   select {
-    background: var(--bg);
+    background-color: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 0.3rem;
-    padding: 0.3rem 0.45rem;
+    padding: 0.3rem 1.5rem 0.3rem 0.45rem;
     font: inherit;
     font-size: 0.9rem;
-  }
-
-  .hint {
-    margin: 0.4rem 0 0;
-    font-size: 0.8rem;
-    color: var(--text-dim);
   }
 
   /* --- The rail as a drawer (narrow) -------------------------------------

@@ -75,6 +75,7 @@ import type {
   ModelSource,
   ModelStatus,
   ModelsView,
+  SpeechEngine,
 } from "./generated/models";
 import type { Interface, RemoteStatus } from "./generated/remote";
 import type { WebhookStatus } from "./generated/webhook";
@@ -108,6 +109,7 @@ export type {
   SessionStart,
   SessionState,
   Snapshot,
+  SpeechEngine,
   StoredChannel,
   StoredConfig,
   StoredGroup,

@@ -4,11 +4,8 @@
   // a session runs, and its colour. The meter is here and not only on the
   // strip above the chat because the trim is here: a knob is set against a
   // bar, and one on the page that is not on screen is no help at all.
-  // Vocabulary is
-  // not here — it is one global list for every channel, edited beside this on
-  // the Settings page (P15). What *is* here is each channel's description for
-  // the model (P25): the line under the row, read after the vocabulary before
-  // every segment of that channel, for the terms only that position uses.
+  // Vocabulary is not here — it is one global list for every channel, edited
+  // beside this on the Settings page (P15).
   //
   // Lives on the Settings page rather than above the chat, so the live view is
   // only the live view. It belongs to the profile selected above it and is
@@ -42,7 +39,6 @@
   import { canSolo, watchSolo } from "./solo.svelte";
   import LevelMeter from "./LevelMeter.svelte";
   import type { Language, StreamLevel } from "./bridge";
-  import { channelPromptWarning } from "./vocabulary";
 
   interface Props {
     channels: Channel[];
@@ -65,12 +61,7 @@
     /// and flipping to the chat to read the level of the channel being
     /// adjusted means the knob is on the page that is not on screen.
     levels?: Map<number, StreamLevel> | null;
-    /// The global vocabulary and whether the previous sentence is carried —
-    /// only to tell a channel whose description makes its whole prompt too
-    /// long (P25). The three share one window, so no one box can say it.
-    vocabulary?: string;
-    carry?: boolean;
-    /// Pushes a label, a language, a trim, a mute or a description into the
+    /// Pushes a label, a language, a trim or a mute into the
     /// session that is already running, or `null` when none is. Its presence
     /// is also what unlocks those fields: there is nothing live to change
     /// without it.
@@ -87,7 +78,6 @@
             language?: string;
             gainDb?: number;
             muted?: boolean;
-            description?: string;
           },
         ) => void)
       | null;
@@ -101,8 +91,6 @@
     locked,
     live,
     levels = null,
-    vocabulary = "",
-    carry = true,
   }: Props = $props();
 
   let duplicates = $derived(duplicateChannels(channels));
@@ -154,9 +142,6 @@
         disabled={locked}
       />
     </label>
-    <!-- Not capped at the device's channel count: the setup describes the
-         production, not whatever interface happens to be plugged in now. -->
-    <button class="action" onclick={add} disabled={locked}>Add channel</button>
   </header>
 
   <div class="rows">
@@ -287,42 +272,20 @@
           <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
             title="Remove this channel">×</button>
         </div>
-
-        <!-- Live like the label, and on `onchange` for the label's reason: a
-             description reaches the next segment when it has been typed, not
-             once per keystroke. The placeholder is an example rather than an
-             explanation because the one mistake worth preventing is writing
-             an instruction here — whisper does not follow one, it continues
-             it. -->
-        <input
-          class="description"
-          type="text"
-          aria-label="Words {channel.label} uses, for the model"
-          placeholder="Words this channel uses, as they should be written — Stellwerk, Moving Heads, Preset 12"
-          bind:value={channel.description}
-          disabled={locked && live === null}
-          onchange={() => live?.(index, { description: channel.description.trim() })}
-        />
-        {#if channelPromptWarning(vocabulary, channel.description, carry)}
-          <p class="prompt-warn">
-            {channelPromptWarning(vocabulary, channel.description, carry)}
-          </p>
-        {/if}
       </div>
     {/each}
-
-    {#if channels.length > 0}
-      <p class="hint">
-        The line under each channel is read by the model before every segment of that
-        channel, after the vocabulary. Write what the channel sounds like — its terms and
-        names — not what the model should do: it does not follow instructions, it
-        continues them.
-      </p>
-    {/if}
 
     {#if channels.length === 0}
       <p class="empty">No channels yet. Add one to start transcribing.</p>
     {/if}
+
+    <!-- After the last row rather than in the header, so that with a long
+         list it is still where the next channel goes. Not capped at the
+         device's channel count: the setup describes the production, not
+         whatever interface happens to be plugged in now. -->
+    <div class="add">
+      <button class="action" onclick={add} disabled={locked}>Add channel</button>
+    </div>
   </div>
 
   {#if divergent.length > 0}
@@ -343,20 +306,14 @@
          operator who sees a channel stay silent for a whole show has to be
          able to find out here why, and the reason is the device, not the
          setup. -->
-    <p class="warn">
-      {absent.size} of {channels.length} channels are above the {deviceChannels} the selected
-      device has; they start silent and receive no audio.
-    </p>
+    <p class="warn">{absent.size} of {channels.length} channels are not on the selected device and receive no audio.</p>
   {/if}
 
   {#if duplicates.length > 0}
     <!-- Allowed, not forbidden: two views of one channel is a legitimate if
          unusual setup. But during setup it is nearly always a slip, and the
          symptom — every line appearing twice — does not point at its cause. -->
-    <p class="warn">
-      Channel {duplicates.map((c) => c + 1).join(", ")} is used by more than one stream;
-      it will be transcribed once per stream.
-    </p>
+    <p class="warn">Channel {duplicates.map((c) => c + 1).join(", ")} is used more than once and is transcribed once per use.</p>
   {/if}
 </section>
 
@@ -387,32 +344,8 @@
     color: var(--text-dim);
   }
 
-  /* Under the row, from the channel number to the end: it belongs to the
-     channel, and it is the one field that needs a line's width to be read. */
-  .description,
-  .prompt-warn {
-    grid-column: 2 / -1;
-  }
-
-  .description {
-    font-size: 0.8rem;
-  }
-
-  .description::placeholder {
-    color: var(--text-dim);
-    opacity: 0.7;
-  }
-
-  .prompt-warn {
-    color: #f2b544;
-    font-size: 0.75rem;
-    margin: 0;
-  }
-
-  .hint {
-    color: var(--text-dim);
-    font-size: 0.8rem;
-    margin: 0.5rem 0 0;
+  .add {
+    margin-top: 0.4rem;
   }
 
   /* Narrow: the three live controls — mute, gain, level — drop to a second
@@ -429,9 +362,7 @@
       grid-template-columns: 2.4rem 3.2rem minmax(0, 1fr) minmax(0, 1fr) 2rem;
       grid-template-areas:
         "colour ch label lang end"
-        "mute gain level level level"
-        "desc desc desc desc desc"
-        "warn warn warn warn warn";
+        "mute gain level level level";
       row-gap: 0.35rem;
     }
 
@@ -449,10 +380,10 @@
       border-top: 1px solid var(--border);
     }
 
-    /* The header's four parts do not fit on one line on a phone, and squeezed
-       onto one they turn the count into three lines and the button into two.
-       Title, count and action keep the first line; the language preset, which
-       is a field and not a title, takes the second. */
+    /* The header's three parts do not fit on one line on a phone, and
+       squeezed onto one they turn the count into three lines. Title and count
+       keep the first line; the language preset, which is a field and not a
+       title, takes the second. */
     section.panel > header {
       flex-wrap: wrap;
       align-items: center;
@@ -494,12 +425,6 @@
     .row > *:nth-child(8) {
       grid-area: end;
     }
-    .row > .description {
-      grid-area: desc;
-    }
-    .row > .prompt-warn {
-      grid-area: warn;
-    }
   }
 
   .keys {
@@ -535,8 +460,7 @@
     opacity: 0.55;
   }
 
-  /* Sits with the count rather than with the Add button: it describes the
-     list, it does not act on it. */
+  /* Sits with the count: it describes the list, it does not act on it. */
   .preset {
     display: flex;
     align-items: center;

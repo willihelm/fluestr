@@ -141,6 +141,7 @@ for now, with the reason recorded in the package.
 | P25 | Channel context for the model | **Partial** | Built on 2026-09-28; the sidecar test with a description and an evening in the house are missing |
 | P26 | Shoutbox following the room's level | **Partial** | Built on 2026-09-29 and run on a loopback device; a real mic, a real speaker and a show are missing |
 | P27 | The shoutbox as a VST3 plug-in | **Open** | An idea of 2026-10-05 — everything, beginning with whether each host passes a sidechain |
+| P28 | Live preview by re-decoding the open segment | **Partial** | Built on 2026-10-20; not yet run on a show, and the latency of the final lines under load is unmeasured |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -1044,6 +1045,19 @@ map. `just model` and `just vad-model` are kept for the integration tests and
 The remaining acceptance half — a machine that has never run this, guided to
 its first transcription — is P21's guide, and it still needs P13 to be walked
 on a machine that is not this one.
+
+**Parakeet as a second engine (2026-10-19).** The catalogue also offers NVIDIA
+Parakeet TDT 0.6B v3 (int8), run in the same sidecar through sherpa-onnx on
+the CPU. It is four files, so it installs as a directory, and a directory is
+what tells the sidecar to run Parakeet instead of whisper. Each file is
+resumed and verified on its own, and the folder is renamed into place in one
+step. The custom model accepts such a folder too. The cost is what the
+transducer does not take: no prompt, so the vocabulary (P15) and the carried
+sentence (P25) are dropped, and no fixed language, because v3 picks its own.
+The Models and Vocabulary pages both say so while it is the active model. On
+the `de_mixed` fixture it transcribes the sentence in ~490 ms but writes
+"Q5" where whisper with the prompt writes "Cue 5". This is not the streaming
+engine P20 is about: the export is offline, segment in and text out.
 
 ### P12 — Settings & configuration persistence — **Done**
 
@@ -1978,6 +1992,14 @@ different component and a different thing to read while a show is running.
 session audio, and this file records which engine the app keeps and why. A
 measured "no" closes this package as legitimately as a "yes" does.
 
+**Since P28** the question has moved. The premise above — that no text can
+exist before the speaker stops — holds for whisper as an engine but not for
+the app: P28 decodes the open segment again as it grows and shows the draft.
+What is left for a streaming engine is what that cannot do: a first partial
+sooner than about a second into the segment, at a cost that does not grow
+with the number of channels talking, and partials that change less. Measure
+against P28, not against the placeholder.
+
 **Risk:** the comparison is not engine against engine but *system* against
 system. The current path has a 6 s ceiling, a forced cut with overlap, a
 vocabulary prompt (P15) and a per-segment language (P4) — a streaming
@@ -2242,10 +2264,10 @@ house actually runs, fullscreen included, for a whole show.
 
 **Built:** `prompt::Prompter` composes each segment's prompt when a worker
 takes it (`PoolConfig::prompter`), in the order and under the rules below; the
-segmenter no longer attaches one. The description is a field on the channel
-(`StoredChannel::description`), a line under each row on the Settings page,
-live through `update_stream_config`, with a per-channel estimate against the
-shared window. Carrying the previous sentence is `Tuning::carry_context`, on by
+segmenter no longer attaches one. The per-channel description was built too
+and **removed again on 2026-10-19**: the prompt is now the vocabulary and the
+previous sentence only. A stored file that still
+has `description` on its channels loads; the field is ignored. Carrying the previous sentence is `Tuning::carry_context`, on by
 default and switched on the Detection page, live like the thresholds. The
 aggregator records only text that reached the chat; a language change forgets
 the channel's sentence. Constants: `CARRY_WITHIN` 10 s, `CARRY_CHARS` 200.
@@ -2640,6 +2662,69 @@ that an offline render equals a realtime one.
 
 ---
 
+### P28 — Live preview by re-decoding the open segment — **Partial**
+
+*An idea of 2026-10-20, from how [voice-type](https://github.com/mikecann/voice-type)
+shows a draft while the key is held; built the same day.*
+
+**What it is.** While somebody is talking, the segment that is still open is
+handed to whisper again every time it has grown by a little, and what comes
+back is shown in the channel's "speaking…" placeholder (P23) — dimmed, in
+italics, replaced wholesale by the next draft and in the end by the line. No
+streaming engine and no new model: the same engine, the same model and the
+same prompt as the real decode, run on time the pool has to spare. P20
+assumed a draft needs a streaming recogniser; this is the cheaper route that
+assumption skipped, and it fits here better than it does in voice-type
+because a segment is never longer than the ceiling.
+
+**Built:**
+
+- `Segmenter::open_segment` copies the segment being built, pre-roll
+  included, without spending its sequence number.
+- The processing thread asks for a preview once a segment holds
+  `PREVIEW_FIRST` (1 s) and again each time it has grown by `PREVIEW_STEP`
+  (0.8 s) — growth, not a clock. A forced cut starts the count again.
+- The pool keeps **one preview slot per stream**: a newer request replaces
+  the waiting one and keeps its place, a worker takes a preview only when no
+  closed segment is waiting, a closing segment cancels its stream's waiting
+  preview, and a closed queue forgets them. A preview is never retried and
+  never answers as a `Completed`, so the "exactly one result per segment"
+  invariant and the overload count are untouched. A sidecar that dies under
+  a preview is replaced like under any decode.
+- The aggregator filters a preview like a transcript (repetition loop, no
+  speech, annotation only); one that fails keeps the previous draft rather
+  than blanking it.
+- `Activity` holds the draft per channel and sends it in `speech-activity`
+  as `preview`, so the main chat, group windows, the remote, a window opened
+  mid-sentence and the ticker get it the way they get the placeholder. A
+  generation number per channel drops a preview whose segment closed while
+  it was being decoded. A closed segment's last draft stays until its line
+  lands, so a long sentence cut by the ceiling reads as one draft.
+- The ticker shows a dimmed draft line per channel with a preview, at the
+  newest edge. It shows nothing for a bare "speaking…", for which a strip has
+  no room.
+- A switch on the Detection page, **on by default**, that reaches a running
+  session with the rest of the tuning. Off is the app exactly as before.
+
+**Deliberately not:** rules, alerts, webhooks, history, replay and search
+never see a draft. The last word is not trimmed, although it is the one most
+often cut in half — that waits until it bothers somebody, because trimming it
+delays every draft by a word.
+
+**Missing:** a show, and a number. The cost is about five extra decodes per
+six-second segment on a channel that is talking; two workers clear about
+five decodes a second, so two or three channels at once leave room and eight
+leave none — at which point previews simply stop and the placeholder says
+"speaking…" again. That they cost a closed segment at most the decode
+already running when it arrived is argued above, not measured: the latency
+of the final lines with previews on and off, under four and eight talking
+channels, is the measurement this package is owed.
+
+**Accepted when:** on a show the operators keep it on, and the final lines'
+latency with it on is within one decode of it off.
+
+---
+
 
 ## Dependencies
 
@@ -2689,7 +2774,9 @@ P19's view addressing; P25 off P15 and the channel map in P12. P26, added on
 2026-09-29, hangs off P1 — whose `AudioBackend` gains an output half — and off
 P3's energy detector, P8's meters and P12's profile; P22's listen output hangs
 off P26's output layer. P27, added on 2026-10-05, hangs off P26, whose DSP
-it takes into a crate of its own, and off P18 for its Windows build.
+it takes into a crate of its own, and off P18 for its Windows build. P28,
+added on 2026-10-20, hangs off P23's placeholder, P5's pool and P3's
+segmenter, and moves the question P20 asks.
 
 **Milestone A (technical backbone):** P0 → P1 → P2 → P4 → P5. *Reached, and
 confirmed on real hardware in the live session of 2026-09-21.*
@@ -2763,6 +2850,10 @@ a position already runs. It is best after P26's evening in the house: the
 plug-in should copy a shoutbox that has been proved, not one that has only
 run on a loopback device. Its first step, the sidechain check in the four
 hosts, is an afternoon and can come earlier.
+
+**P28**, added and built on 2026-10-20, needs the same as P23, and is best
+judged on the same evening: whether the placeholder with a draft in it is
+better to work beside than without, with the switch flipped during the show.
 
 ## Whole-system verification
 

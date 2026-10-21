@@ -241,12 +241,7 @@
     <h2>Remote client</h2>
   </header>
 
-  <p class="hint">
-    Serves this same interface to a browser on the local network, so the session
-    can run where the audio interface is and be worked from somewhere else. The
-    browser is a full peer: it sees the whole chat and can start, stop and
-    change the setup.
-  </p>
+  <p class="hint">Serves this interface to browsers on the local network.</p>
 
   <label class="switch">
     <input
@@ -309,25 +304,15 @@
   </label>
 
   {#if remote.key === ""}
-    <p class="hint">
-      Empty: anyone who can reach the address can drive the session. Reasonable
-      on a network you control, and on nothing else.
-    </p>
+    <p class="hint">Empty: anyone on the network can drive the session.</p>
   {:else}
-    <p class="hint">
-      Already in the address and in the code below — scanning is the whole of
-      it, and a browser that has scanned once is not asked again. A new key
-      disconnects every browser that had the old one.
-    </p>
+    <p class="hint">A new key disconnects every browser using the old one.</p>
   {/if}
 
   {#if listFailed}
     <p class="error">The network interfaces could not be listed: {listFailed}</p>
   {:else if routable.length === 0}
-    <p class="warn">
-      This machine is not on a network another machine could reach it over. Only
-      the loopback address is available, which serves this machine and no other.
-    </p>
+    <p class="warn">Only the loopback address is available, so no other machine can connect.</p>
   {/if}
 
   {#if status?.error}
@@ -376,12 +361,7 @@
     <p class="dim">Starting …</p>
   {/if}
 
-  <p class="warn">
-    Served over plain http, so the key is readable by anyone who can read the
-    network itself — it keeps out somebody who types in the address, not
-    somebody watching the wire. Pick an interface on a network you control, and
-    leave this off on a venue's guest wifi.
-  </p>
+  <p class="warn">Plain http: use it only on a network you control.</p>
 </section>
 
 
@@ -421,8 +401,12 @@
     padding: 0.3rem 0.4rem;
     border-radius: 0.3rem;
     border: 1px solid var(--border);
-    background: var(--bg);
+    background-color: var(--bg);
     color: var(--text);
+  }
+
+  select {
+    padding-right: 1.5rem;
   }
 
   input[type="number"] {

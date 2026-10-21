@@ -7,8 +7,9 @@
   // the desk. The number is under it, the name over it: on a touchscreen there
   // is no hover to find out what a knob is.
   //
-  // Double-tap, double-click or Alt-click goes back to `reset`; the wheel
-  // turns it one step a notch; the arrow keys as on any slider.
+  // Double-tap, double-click or Alt-click goes back to `reset`; the arrow
+  // keys as on any slider. Not the wheel: the knobs sit on a page that is
+  // scrolled, and a scroll that passes over one must not turn it.
 
   interface Props {
     value: number;
@@ -115,12 +116,6 @@
     }
   };
 
-  const wheel = (event: WheelEvent) => {
-    if (event.deltaY === 0) return;
-    event.preventDefault();
-    set(value + (event.deltaY < 0 ? step : -step));
-  };
-
   const key = (event: KeyboardEvent) => {
     const delta =
       event.key === "ArrowUp" || event.key === "ArrowRight"
@@ -160,7 +155,6 @@
   onpointermove={move}
   onpointerup={up}
   onpointercancel={up}
-  onwheel={wheel}
   onkeydown={key}
 >
   <span class="label">{label}</span>

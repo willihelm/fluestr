@@ -54,11 +54,29 @@ pub enum ModelKind {
     Vad,
 }
 
+/// Which recogniser a speech model is for.
+///
+/// Decided by the files rather than by a setting: the sidecar runs Parakeet
+/// when `--model` is a directory and whisper when it is a file. Reported to
+/// the UI because the two do not take the same input — Parakeet has no prompt,
+/// so the vocabulary does nothing while it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "models.ts", rename = "SpeechEngine")]
+pub enum Engine {
+    /// whisper.cpp, one `ggml-*.bin`. Reads the vocabulary prompt.
+    Whisper,
+    /// NVIDIA Parakeet TDT through sherpa-onnx: a directory of ONNX files.
+    /// Ignores the vocabulary and the stream's language.
+    Parakeet,
+}
+
 /// One model the app knows how to fetch.
 #[derive(Debug, Clone, Copy)]
 pub struct Entry {
-    /// Stable identifier, also the file name: `ggml-{id}.bin`. This is what a
-    /// profile stores, so it must not change once shipped.
+    /// Stable identifier, also the installed name — `ggml-{id}.bin`, or the
+    /// directory `{id}` for a model of several files. This is what a profile
+    /// stores, so it must not change once shipped.
     pub id: &'static str,
     pub kind: ModelKind,
     /// Shown in the picker.
@@ -66,6 +84,17 @@ pub struct Entry {
     /// One line on when to choose this one. The operator picking a model is an
     /// audio engineer, not somebody who knows what a quantised tensor is.
     pub note: &'static str,
+    /// What is downloaded. One file for whisper and the VAD; several for
+    /// Parakeet, which installs as a directory — see [`installed_path`].
+    pub files: &'static [File],
+}
+
+/// One file of a catalogue entry.
+#[derive(Debug, Clone, Copy)]
+pub struct File {
+    /// The name inside the model's directory. Unused for a single-file entry,
+    /// which installs as `ggml-{id}.bin` whatever the host calls it.
+    pub name: &'static str,
     pub url: &'static str,
     /// SHA256 of the finished file, as the host publishes it.
     pub sha256: &'static str,
@@ -74,51 +103,118 @@ pub struct Entry {
     pub bytes: u64,
 }
 
+impl Entry {
+    /// Everything that is downloaded, in bytes.
+    pub fn bytes(&self) -> u64 {
+        self.files.iter().map(|f| f.bytes).sum()
+    }
+
+    /// A directory of files rather than one `.bin`.
+    pub fn is_bundle(&self) -> bool {
+        self.files.len() > 1
+    }
+
+    pub fn engine(&self) -> Option<Engine> {
+        match self.kind {
+            ModelKind::Speech if self.is_bundle() => Some(Engine::Parakeet),
+            ModelKind::Speech => Some(Engine::Whisper),
+            ModelKind::Vad => None,
+        }
+    }
+}
+
 /// The models the app offers to download.
 ///
 /// Deliberately short. A picker with thirty entries is a research project, and
 /// the question an engineer actually has is "faster or better?" — so there is
-/// one recommendation, one step down and one step up.
+/// one recommendation, one step down and one step up — and Parakeet beside
+/// them, the other engine, for houses where its speed is worth more than the
+/// vocabulary.
 ///
 /// Sizes and checksums are the ones published for these files; see
-/// [`Entry::sha256`] for what they are for.
+/// [`File::sha256`] for what they are for.
 pub const CATALOGUE: &[Entry] = &[
     Entry {
         id: "base-q5_1",
         kind: ModelKind::Speech,
         label: "Base (quantised)",
-        note: "Fastest. For weak machines, or when latency matters more than the odd wrong word.",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
-        sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
-        bytes: 59_707_625,
+        note: "Fastest, for weak machines.",
+        files: &[File {
+            name: "",
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+            sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+            bytes: 59_707_625,
+        }],
     },
     Entry {
         id: "small-q5_1",
         kind: ModelKind::Speech,
         label: "Small (quantised)",
-        note: "Recommended. The measured ~330 ms end to end is this model; it handles DE/EN code switching.",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
-        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-        bytes: 190_085_487,
+        note: "Fast and accurate; handles German and English mixed.",
+        files: &[File {
+            name: "",
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+            sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+            bytes: 190_085_487,
+        }],
     },
     Entry {
         id: "large-v3-turbo-q5_0",
         kind: ModelKind::Speech,
         label: "Large v3 turbo (quantised)",
-        note: "Most accurate, and slower. Worth measuring against your own audio before a show, not during one.",
-        url:
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
-        bytes: 574_041_195,
+        note: "Most accurate, and slower.",
+        files: &[File {
+            name: "",
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+            sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+            bytes: 574_041_195,
+        }],
+    },
+    Entry {
+        id: "parakeet-tdt-0.6b-v3-int8",
+        kind: ModelKind::Speech,
+        label: "Parakeet TDT v3 (NVIDIA)",
+        note: "Fast and accurate, picks the language itself. Ignores the vocabulary.",
+        // Pinned to one revision of the export, so the checksums cannot be
+        // moved under it.
+        files: &[
+            File {
+                name: "encoder.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/encoder.int8.onnx",
+                sha256: "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247",
+                bytes: 652_184_281,
+            },
+            File {
+                name: "decoder.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/decoder.int8.onnx",
+                sha256: "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e",
+                bytes: 11_845_275,
+            },
+            File {
+                name: "joiner.int8.onnx",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/joiner.int8.onnx",
+                sha256: "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3",
+                bytes: 6_355_277,
+            },
+            File {
+                name: "tokens.txt",
+                url: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/tokens.txt",
+                sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+                bytes: 93_939,
+            },
+        ],
     },
     Entry {
         id: "silero-v5.1.2",
         kind: ModelKind::Vad,
         label: "Silero VAD v5.1.2",
-        note: "Speech detection. Small, and the app is much worse without it — install it.",
-        url: "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin",
-        sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
-        bytes: 885_098,
+        note: "Required for good results.",
+        files: &[File {
+            name: "",
+            url: "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin",
+            sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
+            bytes: 885_098,
+        }],
     },
 ];
 
@@ -154,13 +250,56 @@ pub fn file_name(id: &str) -> String {
     format!("ggml-{id}.bin")
 }
 
+/// Where a model is installed: `ggml-{id}.bin`, or the directory `{id}` for
+/// one of several files. The directory is what the sidecar is handed, and its
+/// being a directory is how it knows to run Parakeet.
 pub fn installed_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(file_name(id))
+    match entry(id) {
+        Some(entry) if entry.is_bundle() => dir.join(id),
+        _ => dir.join(file_name(id)),
+    }
 }
 
-/// Where an interrupted download waits to be continued.
+/// Where an interrupted download waits to be continued: `<name>.part` beside
+/// the model, a file or a directory as the model is.
 fn part_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("{}.part", file_name(id)))
+    let installed = installed_path(dir, id);
+    let mut name = installed.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    installed.with_file_name(name)
+}
+
+/// Bytes waiting in a part file, or in all the files of a part directory.
+fn part_bytes(path: &Path) -> u64 {
+    if path.is_dir() {
+        std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.metadata().ok())
+            .filter(|m| m.is_file())
+            .map(|m| m.len())
+            .sum()
+    } else {
+        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    }
+}
+
+/// Whether a path holds a model the sidecar can be handed — a `.bin`, or a
+/// Parakeet directory. Only installed bundles are directories, and they
+/// appear in one rename, so a directory that exists is a whole one.
+fn is_model(path: &Path) -> bool {
+    path.is_file() || path.is_dir()
+}
+
+/// Which engine the sidecar will run for a model path. Mirrors the sidecar's
+/// own test, so the UI is told what actually happens.
+pub fn engine_of(path: &Path) -> Engine {
+    if path.is_dir() {
+        Engine::Parakeet
+    } else {
+        Engine::Whisper
+    }
 }
 
 /// Which models the operator chose. The slice of [`crate::config::Config`]
@@ -230,8 +369,8 @@ pub fn resolve(dir: &Path, selection: &Selection) -> Result<Resolved> {
 
     if let Ok(path) = std::env::var("FLUESTR_MODEL") {
         let path = PathBuf::from(path);
-        if !path.is_file() {
-            bail!("FLUESTR_MODEL points at {} — not a file", path.display());
+        if !is_model(&path) {
+            bail!("FLUESTR_MODEL points at {} — not a model", path.display());
         }
         return Ok(Resolved {
             speech: path,
@@ -252,7 +391,7 @@ pub fn resolve(dir: &Path, selection: &Selection) -> Result<Resolved> {
                 )
             })?;
         let path = PathBuf::from(path);
-        if !path.is_file() {
+        if !is_model(&path) {
             bail!(
                 "the model file set in Settings is not there: {}",
                 path.display()
@@ -270,7 +409,7 @@ pub fn resolve(dir: &Path, selection: &Selection) -> Result<Resolved> {
         .flatten()
     {
         let path = installed_path(dir, id);
-        if path.is_file() {
+        if is_model(&path) {
             return Ok(Resolved {
                 speech: path,
                 vad,
@@ -357,6 +496,10 @@ pub enum Stage {
 /// `report` is called as bytes arrive and again at each stage change. `cancel`
 /// is checked between chunks: cancelling leaves the part file alone, because
 /// the whole reason it exists is that this may take several attempts.
+///
+/// An entry of several files is fetched into a `.part` directory, each file
+/// resumed and verified on its own, and the directory is renamed into place
+/// once the last one checks out — so an installed bundle is always whole.
 pub async fn download(
     entry: &'static Entry,
     dir: &Path,
@@ -368,36 +511,94 @@ pub async fn download(
 
     let target = installed_path(dir, entry.id);
     let part = part_path(dir, entry.id);
-
-    // Already there and already correct: nothing to do. Checked rather than
-    // assumed, because "installed" is what the picker shows and a file that
-    // was truncated after the fact should not keep claiming to be a model.
-    if target.is_file() && verify(&target, entry.sha256)? {
-        report(Progress {
-            id: entry.id.into(),
-            received: entry.bytes,
-            total: entry.bytes,
-            stage: Stage::Done,
-            message: None,
-        });
-        return Ok(target);
-    }
-
-    let mut have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-    // A part file larger than the finished model is not a resume point, it is
-    // debris from an interrupted write or a changed URL. Starting over is the
-    // only thing a range request cannot recover from.
-    if have >= entry.bytes {
-        let _ = std::fs::remove_file(&part);
-        have = 0;
-    }
+    let total = entry.bytes();
+    let done = |received| Progress {
+        id: entry.id.into(),
+        received,
+        total,
+        stage: Stage::Done,
+        message: None,
+    };
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("fluestr/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("building the HTTP client")?;
 
-    let mut request = client.get(entry.url);
+    if !entry.is_bundle() {
+        let file = &entry.files[0];
+        // Already there and already correct: nothing to do. Checked rather
+        // than assumed, because "installed" is what the picker shows and a
+        // file that was truncated after the fact should not keep claiming to
+        // be a model.
+        if target.is_file() && verify(&target, file.sha256)? {
+            report(done(total));
+            return Ok(target);
+        }
+        fetch(&client, entry, file, &part, &target, 0, &cancel, &report).await?;
+        report(done(total));
+        return Ok(target);
+    }
+
+    // A bundle is installed by one rename, so one that exists is whole.
+    if target.is_dir() {
+        report(done(total));
+        return Ok(target);
+    }
+    std::fs::create_dir_all(&part).with_context(|| format!("creating {}", part.display()))?;
+    let mut offset = 0;
+    for file in entry.files {
+        let path = part.join(file.name);
+        // Finished on an earlier attempt: renamed into the staging directory
+        // only once it had passed its checksum, so it is not fetched again.
+        if !path.is_file() {
+            let file_part = part.join(format!("{}.part", file.name));
+            fetch(
+                &client, entry, file, &file_part, &path, offset, &cancel, &report,
+            )
+            .await?;
+        }
+        offset += file.bytes;
+    }
+    std::fs::rename(&part, &target).with_context(|| format!("installing {}", target.display()))?;
+    report(done(total));
+    Ok(target)
+}
+
+/// Fetches one file into `part`, verifies it and renames it to `target`.
+///
+/// `offset` is what the entry's earlier files already account for, so the
+/// progress bar runs across the whole entry rather than once per file.
+#[allow(clippy::too_many_arguments)]
+async fn fetch(
+    client: &reqwest::Client,
+    entry: &Entry,
+    file: &File,
+    part: &Path,
+    target: &Path,
+    offset: u64,
+    cancel: &AtomicBool,
+    report: &impl Fn(Progress),
+) -> Result<()> {
+    let total = entry.bytes();
+    let progress = |received, stage| Progress {
+        id: entry.id.into(),
+        received: offset + received,
+        total,
+        stage,
+        message: None,
+    };
+
+    let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+    // A part file larger than the finished model is not a resume point, it is
+    // debris from an interrupted write or a changed URL. Starting over is the
+    // only thing a range request cannot recover from.
+    if have >= file.bytes {
+        let _ = std::fs::remove_file(part);
+        have = 0;
+    }
+
+    let mut request = client.get(file.url);
     if have > 0 {
         request = request.header(reqwest::header::RANGE, format!("bytes={have}-"));
     }
@@ -405,13 +606,13 @@ pub async fn download(
     let response = request
         .send()
         .await
-        .with_context(|| format!("requesting {}", entry.url))?;
+        .with_context(|| format!("requesting {}", file.url))?;
 
     if !response.status().is_success() {
         bail!(
             "the download server answered {} for {}",
             response.status(),
-            entry.url
+            file.url
         );
     }
 
@@ -428,12 +629,12 @@ pub async fn download(
         have = 0;
     }
 
-    let mut file = std::fs::OpenOptions::new()
+    let mut out = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .append(resumed)
         .truncate(!resumed)
-        .open(&part)
+        .open(part)
         .with_context(|| format!("opening {}", part.display()))?;
 
     let mut received = have;
@@ -442,89 +643,55 @@ pub async fn download(
     // events per second is plenty for a human, and a 600 MB file arrives in
     // tens of thousands of chunks.
     let mut last_reported = received;
-    let step = (entry.bytes / 200).max(256 * 1024);
+    let step = (total / 200).max(256 * 1024);
 
-    report(Progress {
-        id: entry.id.into(),
-        received,
-        total: entry.bytes,
-        stage: Stage::Downloading,
-        message: None,
-    });
+    report(progress(received, Stage::Downloading));
 
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
             // Deliberately without removing the part file.
-            report(Progress {
-                id: entry.id.into(),
-                received,
-                total: entry.bytes,
-                stage: Stage::Cancelled,
-                message: None,
-            });
+            report(progress(received, Stage::Cancelled));
             bail!("cancelled");
         }
 
         let chunk = chunk.context("reading the download")?;
         use std::io::Write;
-        file.write_all(&chunk)
+        out.write_all(&chunk)
             .with_context(|| format!("writing {}", part.display()))?;
         received += chunk.len() as u64;
 
         if received - last_reported >= step {
             last_reported = received;
-            report(Progress {
-                id: entry.id.into(),
-                received,
-                total: entry.bytes,
-                stage: Stage::Downloading,
-                message: None,
-            });
+            report(progress(received, Stage::Downloading));
         }
     }
-    drop(file);
+    drop(out);
 
-    report(Progress {
-        id: entry.id.into(),
-        received,
-        total: entry.bytes,
-        stage: Stage::Verifying,
-        message: None,
-    });
+    report(progress(received, Stage::Verifying));
 
     // The cheap check first: a size that does not match cannot have the right
     // hash, and saying "truncated" is more useful than "checksum mismatch".
-    let size = std::fs::metadata(&part)?.len();
-    if size != entry.bytes {
-        std::fs::remove_file(&part).ok();
+    let size = std::fs::metadata(part)?.len();
+    if size != file.bytes {
+        std::fs::remove_file(part).ok();
         bail!(
             "the download is {size} bytes, expected {} — it was cut short and has been discarded",
-            entry.bytes
+            file.bytes
         );
     }
 
-    if !verify(&part, entry.sha256)? {
+    if !verify(part, file.sha256)? {
         // Removed, not kept: a file that fails its checksum must never be one
         // resume away from being installed, and keeping it is how a corrupt
         // model survives every later attempt.
-        std::fs::remove_file(&part).ok();
+        std::fs::remove_file(part).ok();
         bail!(
             "the downloaded file does not match its published checksum and has been discarded — \
              it is damaged or was tampered with"
         );
     }
 
-    std::fs::rename(&part, &target).with_context(|| format!("installing {}", target.display()))?;
-
-    report(Progress {
-        id: entry.id.into(),
-        received,
-        total: entry.bytes,
-        stage: Stage::Done,
-        message: None,
-    });
-
-    Ok(target)
+    std::fs::rename(part, target).with_context(|| format!("installing {}", target.display()))
 }
 
 /// Hashes a file and compares it to a hex digest.
@@ -545,10 +712,18 @@ pub fn verify(path: &Path, expected: &str) -> Result<bool> {
 pub fn remove(dir: &Path, id: &str) -> Result<()> {
     let entry = entry(id).ok_or_else(|| anyhow!("no such model: {id}"))?;
     let target = installed_path(dir, entry.id);
+    let part = part_path(dir, entry.id);
+    if entry.is_bundle() {
+        if target.exists() {
+            std::fs::remove_dir_all(&target)
+                .with_context(|| format!("removing {}", target.display()))?;
+        }
+        let _ = std::fs::remove_dir_all(&part);
+        return Ok(());
+    }
     if target.exists() {
         std::fs::remove_file(&target).with_context(|| format!("removing {}", target.display()))?;
     }
-    let part = part_path(dir, entry.id);
     if part.exists() {
         let _ = std::fs::remove_file(&part);
     }
@@ -564,6 +739,8 @@ pub struct ModelStatus {
     pub kind: ModelKind,
     pub label: String,
     pub note: String,
+    /// `None` for the VAD, which is not a recogniser.
+    pub engine: Option<Engine>,
     pub bytes: u64,
     pub installed: bool,
     /// Bytes of an interrupted download waiting to be continued. Shown so that
@@ -584,6 +761,9 @@ pub struct ModelsView {
     /// The speech model a session would start with right now, and where it
     /// comes from. `None` is the "no model" state, with `problem` saying so.
     pub active: Option<String>,
+    /// The recogniser `active` runs on. The vocabulary editor says it is
+    /// ignored when this is Parakeet.
+    pub engine: Option<Engine>,
     pub source: Option<Source>,
     pub problem: Option<String>,
     /// Whether speech detection would be running. A session without it works
@@ -595,20 +775,19 @@ pub fn view(dir: &Path, selection: &Selection) -> ModelsView {
     let models = CATALOGUE
         .iter()
         .map(|entry| {
-            let installed = installed_path(dir, entry.id).is_file();
+            let installed = is_model(&installed_path(dir, entry.id));
             ModelStatus {
                 id: entry.id.into(),
                 kind: entry.kind,
                 label: entry.label.into(),
                 note: entry.note.into(),
-                bytes: entry.bytes,
+                engine: entry.engine(),
+                bytes: entry.bytes(),
                 installed,
                 partial: if installed {
                     0
                 } else {
-                    std::fs::metadata(part_path(dir, entry.id))
-                        .map(|m| m.len())
-                        .unwrap_or(0)
+                    part_bytes(&part_path(dir, entry.id))
                 },
                 recommended: entry.id == DEFAULT_SPEECH || entry.id == DEFAULT_VAD,
             }
@@ -620,6 +799,7 @@ pub fn view(dir: &Path, selection: &Selection) -> ModelsView {
             dir: dir.display().to_string(),
             models,
             active: Some(resolved.speech.display().to_string()),
+            engine: Some(engine_of(&resolved.speech)),
             source: Some(resolved.source),
             problem: None,
             vad: resolved.vad.is_some(),
@@ -628,6 +808,7 @@ pub fn view(dir: &Path, selection: &Selection) -> ModelsView {
             dir: dir.display().to_string(),
             models,
             active: None,
+            engine: None,
             source: None,
             problem: Some(err.to_string()),
             vad: resolve_vad(dir, selection).is_some(),
@@ -668,24 +849,32 @@ mod tests {
     fn every_catalogue_entry_has_a_usable_checksum() {
         // A typo here is not caught by anything else until a download fails
         // on a real machine, having spent ten minutes fetching the file.
-        for entry in CATALOGUE {
+        for (entry, file) in CATALOGUE
+            .iter()
+            .flat_map(|e| e.files.iter().map(move |f| (e, f)))
+        {
             assert_eq!(
-                entry.sha256.len(),
+                file.sha256.len(),
                 64,
                 "{}: a SHA256 is 64 hex characters",
                 entry.id
             );
             assert!(
-                entry.sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                file.sha256.chars().all(|c| c.is_ascii_hexdigit()),
                 "{}: not hex",
                 entry.id
             );
-            assert!(entry.bytes > 0, "{}: no expected size", entry.id);
+            assert!(file.bytes > 0, "{}: no expected size", entry.id);
             assert!(
-                entry.url.starts_with("https://"),
+                file.url.starts_with("https://"),
                 "{}: models are not fetched over plain HTTP",
                 entry.id
             );
+            // A bundle's files are named into its directory; an empty or
+            // shared name would put two of them in one place.
+            if entry.is_bundle() {
+                assert!(!file.name.is_empty(), "{}: a file without a name", entry.id);
+            }
         }
     }
 
@@ -917,5 +1106,59 @@ mod tests {
             .expect("the default is in the catalogue");
         assert!(!status.installed);
         assert_eq!(status.partial, 4096);
+    }
+
+    const PARAKEET: &str = "parakeet-tdt-0.6b-v3-int8";
+
+    #[test]
+    fn parakeet_installs_as_a_directory_and_runs_as_parakeet() {
+        // The directory is the switch the sidecar reads, so the catalogue has
+        // to put it there and the UI has to be told the same answer.
+        let dir = temp_dir();
+        assert_eq!(
+            entry(PARAKEET).and_then(Entry::engine),
+            Some(Engine::Parakeet)
+        );
+        assert_eq!(installed_path(&dir, PARAKEET), dir.join(PARAKEET));
+        assert_eq!(
+            part_path(&dir, PARAKEET),
+            dir.join(format!("{PARAKEET}.part"))
+        );
+        assert_eq!(
+            entry(DEFAULT_SPEECH).and_then(Entry::engine),
+            Some(Engine::Whisper)
+        );
+
+        if !environment_is_clean() {
+            return;
+        }
+        std::fs::create_dir_all(dir.join(PARAKEET)).unwrap();
+        let view = view(
+            &dir,
+            &Selection {
+                speech: Some(PARAKEET.into()),
+                vad: None,
+                path: None,
+            },
+        );
+        assert_eq!(view.engine, Some(Engine::Parakeet));
+        assert!(view.models.iter().any(|m| m.id == PARAKEET && m.installed));
+    }
+
+    #[test]
+    fn a_half_downloaded_bundle_counts_every_file_and_is_removed_whole() {
+        let dir = temp_dir();
+        let part = part_path(&dir, PARAKEET);
+        std::fs::create_dir_all(&part).unwrap();
+        std::fs::write(part.join("tokens.txt"), vec![0u8; 100]).unwrap();
+        std::fs::write(part.join("encoder.int8.onnx.part"), vec![0u8; 4000]).unwrap();
+
+        let view = view(&dir, &Selection::default());
+        let status = view.models.iter().find(|m| m.id == PARAKEET).unwrap();
+        assert!(!status.installed);
+        assert_eq!(status.partial, 4100);
+
+        remove(&dir, PARAKEET).expect("removing");
+        assert!(!part.exists());
     }
 }

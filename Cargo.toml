@@ -135,6 +135,10 @@ hound = "3.5"
 # No GPU backend here: `metal` does not build off macOS, so each crate that
 # links whisper.cpp adds the one its target has (P18).
 whisper-rs = { version = "0.16", features = ["tracing_backend"] }
+# The second engine: NVIDIA Parakeet TDT through sherpa-onnx. Linked statically
+# from the prebuilt archive its build script fetches, onnxruntime included, so
+# the sidecar stays one binary. CPU only — the GPU is whisper's (P4).
+sherpa-onnx = "1.13"
 
 [profile.release]
 opt-level = 3

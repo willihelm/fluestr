@@ -155,16 +155,7 @@
     <button class="action" onclick={add}>Add rule</button>
   </header>
 
-  <p class="hint">
-    A rule is a trigger and what it does. Words are matched whole and in any capitalisation,
-    so <em>Cue</em> does not fire on <em>rescue</em> — add the compound if you need it. Leave
-    the words empty for every message, leave the channels empty for every channel, and
-    fill in both for the rule that could not be written before: this word, on that channel.
-    <strong>A channel is an input, a group is a window:</strong> channels say where it has to
-    be said, groups say which window flashes. Every new message is marked in the chat whatever
-    these say. A rule can also <strong>call a webhook</strong> — one HTTP request per matching
-    bubble, written here on the machine and sent from it.
-  </p>
+  <p class="hint">Words match whole, in any capitalisation. Channels say where it was said; groups say which window flashes.</p>
 
   {#if rules.length === 0}
     <p class="hint empty">No rules. Nothing is highlighted and nothing flashes.</p>
@@ -314,11 +305,7 @@
                 />
               </div>
 
-              <p class="hint example">
-                Bitfocus Companion, which most houses already have, is a fan-out point: a
-                button there reaches every device Companion has a module for — MIDI among
-                them. Two to copy:
-              </p>
+              <p class="hint example">Bitfocus Companion, for example:</p>
               <pre class="example">POST http://&lt;companion-host&gt;:8000/api/location/1/0/2/press
 POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
      body: &#123;&#123;text&#125;&#125;</pre>
@@ -364,22 +351,10 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
               </div>
 
               <p class="hint">
-                The URL, every header value and the body are templates.
+                URL, header values and body are templates:
                 {#each PLACEHOLDERS as placeholder, i (placeholder.name)}<code
                   >{placeholder.name}</code
                 >&nbsp;is {placeholder.means}{i < PLACEHOLDERS.length - 1 ? ", " : "."}{/each}
-                A value put in the URL is percent-encoded, and one put in a body is escaped as
-                JSON when a <code>Content-Type</code> header says JSON. <strong>The body starts
-                empty on purpose:</strong> putting <code>&#123;&#123;text&#125;&#125;</code> in
-                it sends what was said in this production to that address, so it is a thing to
-                do deliberately.
-              </p>
-
-              <p class="hint">
-                One request per matching bubble, from this machine, with a three-second timeout
-                and one retry — then it is dropped and counted beside the meters. Use the limit
-                below on a rule with a channel trigger: it is what keeps a busy talkback from
-                becoming a stream of requests.
               </p>
             </div>
           {:else if isRemote && callsOut(rule)}
@@ -389,10 +364,7 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
                  the session, not which of the people holding it is typing, and
                  an arbitrary URL writable from a browser form is a different
                  proposition from the remote that decision was made for. -->
-            <p class="hint out">
-              This rule calls a webhook. The request is set up on the machine running the
-              session — untick the action above to stop it from here.
-            </p>
+            <p class="hint out">This rule calls a webhook, set up on the host machine.</p>
           {/if}
 
           <label class="limit">
@@ -410,12 +382,6 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
       {/each}
     </ul>
 
-    <p class="hint foot">
-      A rule with a channel and no words fires on <em>every</em> message of that channel,
-      which on a busy talkback is several a minute. That is what the limit is for, and a
-      rule inside its limit does nothing at all — including highlighting. A flash with no
-      group named reaches every window showing that channel, the main window included.
-    </p>
   {/if}
 </section>
 
@@ -425,10 +391,6 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
     font-size: 0.8rem;
     color: var(--text-dim);
     max-width: 44rem;
-  }
-
-  .foot {
-    margin: 1rem 0 0;
   }
 
   .empty {
@@ -619,13 +581,13 @@ POST http://&lt;companion-host&gt;:8000/api/custom-variable/last_call/value
   }
 
   .request select {
-    background: var(--bg);
+    background-color: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 0.3rem;
-    padding: 0.25rem 0.3rem;
+    padding: 0.25rem 1.5rem 0.25rem 0.4rem;
     font: inherit;
-    font-size: 0.8rem;
+    font-size: 0.85rem;
   }
 
   .request code {

@@ -14,6 +14,11 @@
   // already the window in front of everything.
   //
   // Where it is, it remembers per view and per screen; see `ticker.ts`.
+  //
+  // The live preview (P28) is shown here too, as a dimmed line at the newest
+  // edge per channel that has one — the draft of what is being said, replaced
+  // by the line when it lands. Not the bare "speaking…" placeholder: a strip
+  // this narrow has no room for a line that says nothing yet.
 
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
@@ -22,6 +27,7 @@
   import { arrange, DEFAULT_DIRECTION, type SortDirection } from "./sort";
   import { mergeHistory, toBubbles, type Bubble } from "./bubbles";
   import { attentionFor } from "./attention";
+  import { adoptSpeech, speech, watchSpeech } from "./speech.svelte";
   import { LINES, resized, saveGeometry, type Edge, type Geometry } from "./ticker";
   import { ALL_CHANNELS_VIEW, setWindowTitle, type GroupView } from "./windows";
   import type { Channel } from "./streams";
@@ -75,6 +81,15 @@
   let bubbles = $derived(toBubbles(messages.filter((m) => visible.has(m.streamId))));
   let lines = $derived(arrange(bubbles.slice(-LINES), chatSort));
   let newestTop = $derived(chatSort === "newest-top");
+  /// Channels of this view with a live preview (P28), in the order their
+  /// lines will land.
+  let drafts = $derived(
+    Object.values(speech.active)
+      .map((entry) => entry.activity)
+      .filter((a) => a.preview !== "" && visible.has(a.streamId))
+      .sort((a, b) => a.sinceMs - b.sinceMs || a.streamId - b.streamId),
+  );
+  let shownDrafts = $derived(newestTop ? [...drafts].reverse() : drafts);
 
   const colorOf = (streamId: number) => colors.get(streamId) ?? "var(--accent)";
 
@@ -139,10 +154,15 @@
       failure = `event bridge unavailable: ${e}`;
     });
 
+    watchSpeech();
     const first = async () => {
       apply(await loadConfig());
+      const askedAt = Date.now();
       const snapshot = await sessionSnapshot();
       messages = mergeHistory(snapshot.transcripts, messages);
+      // What is being said right now (P28) — `?? []` for a backend that
+      // predates it.
+      adoptSpeech(snapshot.activity ?? [], askedAt);
       if (status.state === "idle" && snapshot.state) status = snapshot.state;
     };
     first().catch((e) => (failure = String(e)));
@@ -253,6 +273,18 @@
   });
 </script>
 
+<!-- The drafts (P28): laid out like a line, but not a button — there is
+     nothing in the main window to reveal yet — and dimmed, so a draft never
+     reads as something that was said in those words. -->
+{#snippet draftLines()}
+  {#each shownDrafts as a (a.streamId)}
+    <div class="line draft" style="--channel: {colorOf(a.streamId)}">
+      <span class="label">{a.label || "Stream " + a.streamId}</span>
+      <span class="text"><span>{a.preview}…</span></span>
+    </div>
+  {/each}
+{/snippet}
+
 <main>
   <!-- What the window is moved by: without a title bar, something has to be
        the title bar. A strip down the edge rather than across the top,
@@ -264,11 +296,12 @@
       <p class="note error" data-tauri-drag-region>{failure}</p>
     {:else if known && !showsAll && target === null}
       <p class="note" data-tauri-drag-region>This group is no longer in the active profile.</p>
-    {:else if lines.length === 0}
+    {:else if lines.length === 0 && drafts.length === 0}
       <p class="note" data-tauri-drag-region>
         {name} · {status.state === "running" ? "nothing said yet" : "not running"}
       </p>
     {:else}
+      {#if newestTop}{@render draftLines()}{/if}
       {#each lines as bubble (bubble.key)}
         <button
           class="line"
@@ -280,6 +313,7 @@
           <span class="text"><span>{bubble.text}</span></span>
         </button>
       {/each}
+      {#if !newestTop}{@render draftLines()}{/if}
     {/if}
   </div>
 
@@ -365,6 +399,17 @@
 
   .line:hover {
     background: var(--bg);
+  }
+  .line.draft {
+    cursor: default;
+    border-left-style: dashed;
+  }
+  .line.draft:hover {
+    background: transparent;
+  }
+  .line.draft .text {
+    color: var(--text-dim);
+    font-style: italic;
   }
 
   .label {

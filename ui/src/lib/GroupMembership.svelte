@@ -47,12 +47,7 @@
     <button class="action" onclick={add}>Add group</button>
   </header>
 
-  <p class="hint">
-    A group is a view onto some of the channels, selected in the sidebar of the chat.
-    A channel can be in any number of groups; removing it from one leaves it in the
-    others and in the setup. A group can also be named by a rule, which is how a view
-    gets a reaction of its own — see Rules.
-  </p>
+  <p class="hint">A view onto some of the channels, chosen in the chat's sidebar.</p>
 
   {#if groups.length === 0}
     <p class="empty">No groups yet. The chat shows every channel.</p>

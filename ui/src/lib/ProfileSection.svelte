@@ -83,12 +83,7 @@
     <button class="action" onclick={add} disabled={locked}>New profile</button>
   </header>
 
-  <p class="hint">
-    A profile is one production's setup: the interface, the channel map with its
-    labels, languages and colours, and the groups those channels are seen through.
-    The vocabulary and the installed models are not in it — they are shared by every
-    profile and by the machine.
-  </p>
+  <p class="hint">One production's setup: interface, channels and groups.</p>
 
   <ul class="list">
     {#each profiles as profile (profile.key)}
@@ -140,10 +135,7 @@
   </ul>
 
   {#if locked}
-    <p class="note">
-      Locked while the session runs: the capture configuration is fixed once capture
-      has opened.
-    </p>
+    <p class="note">Locked while a session runs.</p>
   {/if}
 </section>
 

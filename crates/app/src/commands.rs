@@ -553,7 +553,7 @@ async fn download_model<R: Runtime>(app: &AppHandle<R>, id: String) -> Result<()
                 models::Progress {
                     id,
                     received: 0,
-                    total: entry.bytes,
+                    total: entry.bytes(),
                     stage: models::Stage::Failed,
                     message: Some(err.to_string()),
                 },

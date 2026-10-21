@@ -19,10 +19,16 @@
 //!
 //! Edge-triggered: one event when a channel's state changes, never per frame.
 //! The levels event already covers the per-frame case.
+//!
+//! The live preview (P28) rides on the same event: what has been heard of the
+//! words on their way so far, decoded while they are still being spoken. It
+//! is part of the channel's state like the gate is, so every view that shows
+//! the placeholder — a group window, the ticker, the remote, a window opened
+//! mid-sentence — gets it the same way and loses it the same way.
 
 use crate::session::EventSink;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -49,6 +55,15 @@ pub struct SpeechActivity {
     /// compares with the last bubble's end to decide whether the words on
     /// their way will join it or start a new one.
     pub since_ms: u64,
+    /// What has been heard so far of the words on their way (P28): the last
+    /// preview of every segment still being decoded, then the one still being
+    /// spoken. Empty when there is none — the live preview is off, the first
+    /// one has not come back yet, or it was not speech.
+    ///
+    /// Provisional by nature. Each preview replaces the one before it, and
+    /// the transcript replaces all of them; nothing here is ever a line of the
+    /// chat, and nothing here is seen by the rules.
+    pub preview: String,
 }
 
 impl SpeechActivity {
@@ -58,17 +73,35 @@ impl SpeechActivity {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct Stream {
     gate: bool,
     /// Segments submitted and not yet settled.
     outstanding: u32,
     since_ms: u64,
+    /// Counts the segments this channel has opened, so that a preview can be
+    /// matched to the one it was taken from (P28). Moves whenever the open
+    /// segment stops being open — closed and submitted, or abandoned with the
+    /// gate — so a preview that comes back after that is recognisably stale.
+    generation: u64,
+    /// The latest preview of the segment still being spoken.
+    open: String,
+    /// The latest preview of each segment that has closed and not come back,
+    /// by sequence number — what stays on screen until its transcript does.
+    closing: BTreeMap<u64, String>,
 }
 
 impl Stream {
-    fn visible(&self) -> (bool, bool) {
-        (self.gate, self.outstanding > 0)
+    fn visible(&self) -> (bool, bool, String) {
+        let preview = self
+            .closing
+            .values()
+            .chain(std::iter::once(&self.open))
+            .map(|text| text.trim())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        (self.gate, self.outstanding > 0, preview)
     }
 }
 
@@ -104,21 +137,67 @@ impl Activity {
     }
 
     /// The speech gate of `stream` opened or closed.
+    ///
+    /// Closing it abandons whatever preview the open segment had: a segment
+    /// that closed properly was submitted first and took its preview with it,
+    /// so what is left here belongs to one too short to be decoded at all.
     pub fn gate(&self, stream: u16, open: bool) {
-        self.change(stream, |s| s.gate = open);
+        self.change(stream, |s| {
+            s.gate = open;
+            if !open {
+                s.open.clear();
+                s.generation += 1;
+            }
+        });
     }
 
     /// A segment of `stream` is on its way to the pool. Called *before* it is
     /// submitted, so the aggregator cannot settle it first.
-    pub fn submitted(&self, stream: u16) {
-        self.change(stream, |s| s.outstanding += 1);
+    ///
+    /// Its preview moves with it, to stay on screen until its text arrives;
+    /// whatever is spoken next is a new segment with previews of its own.
+    pub fn submitted(&self, stream: u16, seq: u64) {
+        self.change(stream, |s| {
+            s.outstanding += 1;
+            let open = std::mem::take(&mut s.open);
+            if !open.is_empty() {
+                s.closing.insert(seq, open);
+            }
+            s.generation += 1;
+        });
     }
 
     /// A segment of `stream` came back from the pool — as text, as nothing, or
     /// as a loss. Called after its transcript went out, if it had one, so a
     /// view sees the text land before the placeholder goes.
-    pub fn settled(&self, stream: u16) {
-        self.change(stream, |s| s.outstanding = s.outstanding.saturating_sub(1));
+    pub fn settled(&self, stream: u16, seq: u64) {
+        self.change(stream, |s| {
+            s.outstanding = s.outstanding.saturating_sub(1);
+            s.closing.remove(&seq);
+        });
+    }
+
+    /// What a preview of `stream`'s open segment is tagged with when it is
+    /// asked for (P28), so that [`Activity::preview`] can tell whether that
+    /// segment is still the one being spoken when the text comes back.
+    pub fn generation(&self, stream: u16) -> u64 {
+        self.streams
+            .lock()
+            .ok()
+            .and_then(|streams| streams.get(&stream).map(|s| s.generation))
+            .unwrap_or(0)
+    }
+
+    /// A preview of `stream` came back (P28). Shown if the segment it was
+    /// taken from is still open, dropped if it has closed since — the
+    /// segment's own text is on its way by then, and a late preview would
+    /// put older words over newer ones.
+    pub fn preview(&self, stream: u16, generation: u64, text: &str) {
+        self.change(stream, |s| {
+            if s.gate && s.generation == generation {
+                s.open = text.trim().to_string();
+            }
+        });
     }
 
     /// The session is over: whatever is still showing ends now. Nothing more
@@ -145,6 +224,7 @@ impl Activity {
         if after == before {
             return;
         }
+        let (speaking, decoding, preview) = after;
         if !was_active {
             state.since_ms = self.started.elapsed().as_millis() as u64;
         }
@@ -158,9 +238,10 @@ impl Activity {
             session_id: self.session_id,
             stream_id: stream,
             label,
-            speaking: after.0,
-            decoding: after.1,
+            speaking,
+            decoding,
             since_ms: state.since_ms,
+            preview,
         });
     }
 }
@@ -204,9 +285,9 @@ mod tests {
     fn a_sentence_is_active_from_the_gate_until_its_text_is_back() {
         let (activity, recorder) = activity();
         activity.gate(0, true);
-        activity.submitted(0);
+        activity.submitted(0, 0);
         activity.gate(0, false);
-        activity.settled(0);
+        activity.settled(0, 0);
 
         assert_eq!(
             states(&recorder),
@@ -232,9 +313,9 @@ mod tests {
         let (activity, recorder) = activity();
         activity.gate(0, true);
         activity.gate(0, true);
-        activity.submitted(0);
-        activity.submitted(0);
-        activity.settled(0);
+        activity.submitted(0, 0);
+        activity.submitted(0, 1);
+        activity.settled(0, 0);
         assert_eq!(states(&recorder), [(true, false), (true, true)]);
     }
 
@@ -242,12 +323,12 @@ mod tests {
     fn every_segment_has_to_come_back_before_it_ends() {
         let (activity, recorder) = activity();
         activity.gate(0, true);
-        activity.submitted(0);
-        activity.submitted(0);
+        activity.submitted(0, 0);
+        activity.submitted(0, 1);
         activity.gate(0, false);
-        activity.settled(0);
+        activity.settled(0, 0);
         assert_eq!(states(&recorder).last(), Some(&(false, true)));
-        activity.settled(0);
+        activity.settled(0, 1);
         assert_eq!(states(&recorder).last(), Some(&(false, false)));
     }
 
@@ -255,7 +336,7 @@ mod tests {
     fn a_sentence_carried_on_keeps_the_moment_it_began() {
         let (activity, recorder) = activity();
         activity.gate(0, true);
-        activity.submitted(0);
+        activity.submitted(0, 0);
         activity.gate(0, false);
         std::thread::sleep(std::time::Duration::from_millis(5));
         activity.gate(0, true);
@@ -267,7 +348,7 @@ mod tests {
     fn the_end_of_the_session_ends_everything() {
         let (activity, recorder) = activity();
         activity.gate(0, true);
-        activity.submitted(0);
+        activity.submitted(0, 0);
         activity.gate(3, true);
         activity.end();
         let events = recorder.0.lock().unwrap();
@@ -279,5 +360,77 @@ mod tests {
             events.iter().find(|e| e.stream_id == 3).unwrap().label,
             "stream 3"
         );
+    }
+
+    fn previews(recorder: &Recorder) -> Vec<String> {
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.preview.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_preview_fills_the_placeholder_until_the_text_is_back() {
+        let (activity, recorder) = activity();
+        activity.gate(0, true);
+        let open = activity.generation(0);
+        activity.preview(0, open, "Achtung");
+        activity.preview(0, open, "Achtung, Licht");
+        activity.submitted(0, 0);
+        activity.gate(0, false);
+        activity.settled(0, 0);
+        assert_eq!(
+            previews(&recorder),
+            [
+                "",
+                "Achtung",
+                "Achtung, Licht",
+                "Achtung, Licht",
+                "Achtung, Licht",
+                ""
+            ]
+        );
+    }
+
+    #[test]
+    fn a_preview_of_a_segment_that_has_closed_is_dropped() {
+        // The real decode is on its way; the late preview would put older
+        // words over the newer ones of the segment after it.
+        let (activity, recorder) = activity();
+        activity.gate(0, true);
+        let first = activity.generation(0);
+        activity.submitted(0, 0);
+        activity.preview(0, first, "stale");
+        assert!(previews(&recorder).iter().all(|p| p.is_empty()));
+    }
+
+    #[test]
+    fn a_long_sentence_shows_the_closed_part_and_the_open_part() {
+        // A forced cut: the first part is decoding, the second still spoken.
+        let (activity, recorder) = activity();
+        activity.gate(0, true);
+        activity.preview(0, activity.generation(0), "erster Teil");
+        activity.submitted(0, 0);
+        activity.preview(0, activity.generation(0), "zweiter");
+        assert_eq!(previews(&recorder).last().unwrap(), "erster Teil zweiter");
+        activity.settled(0, 0);
+        assert_eq!(previews(&recorder).last().unwrap(), "zweiter");
+    }
+
+    #[test]
+    fn a_cough_takes_its_preview_with_it() {
+        let (activity, recorder) = activity();
+        activity.gate(0, true);
+        let open = activity.generation(0);
+        activity.preview(0, open, "hm");
+        activity.gate(0, false);
+        activity.preview(0, open, "hm");
+        let events = recorder.0.lock().unwrap();
+        let last = events.last().unwrap();
+        assert!(!last.active());
+        assert!(last.preview.is_empty());
     }
 }

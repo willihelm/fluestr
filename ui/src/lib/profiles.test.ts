@@ -23,7 +23,7 @@ import {
   toStoredConfig,
   type Profile,
 } from "./profiles";
-import type { StoredConfig } from "./bridge";
+import type { StoredConfig, Tuning } from "./bridge";
 import { restoreChannel, DEFAULT_LANGUAGE } from "./streams";
 import { restoreGroup } from "./groups";
 import { restoreRule } from "./rules";
@@ -45,7 +45,7 @@ const anOldFile = <T>(written: unknown): T => written as T;
 const aProfile = (): Profile => {
   const channels = [
     restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false }),
-    // Trimmed and described, so the round trip has values to lose.
+    // Trimmed and muted, so the round trip has values to lose.
     restoreChannel({
       channel: 3,
       label: "Licht",
@@ -53,7 +53,6 @@ const aProfile = (): Profile => {
       color: "#5fd38d",
       gainDb: 9,
       muted: true,
-      description: "Licht. Verfolger 2, Preset 12",
     }),
   ];
 
@@ -106,7 +105,6 @@ const stored: StoredProfile = {
       color: "#6ea8fe",
       gainDb: 0,
       muted: false,
-      description: "",
     },
     {
       channel: 3,
@@ -115,7 +113,6 @@ const stored: StoredProfile = {
       color: "#5fd38d",
       gainDb: 9,
       muted: true,
-      description: "Licht. Verfolger 2, Preset 12",
     },
   ],
   groups: [{ name: "Bühne", onTop: false, members: [1] }],
@@ -436,6 +433,7 @@ describe("the configuration as a whole", () => {
       maxSegmentMs: 4_000,
       speechThresholdPercent: 65,
       carryContext: false,
+      livePreview: false,
     });
 
     expect(config.tuning).toEqual({
@@ -443,6 +441,7 @@ describe("the configuration as a whole", () => {
       maxSegmentMs: 4_000,
       speechThresholdPercent: 65,
       carryContext: false,
+      livePreview: false,
     });
   });
 
@@ -475,11 +474,25 @@ describe("the configuration as a whole", () => {
       maxSegmentMs: 600_000,
       speechThresholdPercent: 250,
       carryContext: true,
+      livePreview: true,
     });
 
     expect(clamped.silenceTimeoutMs).toBeGreaterThanOrEqual(150);
     expect(clamped.maxSegmentMs).toBeLessThanOrEqual(15_000);
     expect(clamped.speechThresholdPercent).toBe(100);
+  });
+
+  // A file written before the live preview existed (P28) gets it switched on,
+  // the default, rather than off by a field that is missing.
+  it("reads a file without the live preview switch as switched on", () => {
+    const clamped = clampTuning({
+      silenceTimeoutMs: 500,
+      maxSegmentMs: 6_000,
+      speechThresholdPercent: 50,
+      carryContext: true,
+    } as Tuning);
+
+    expect(clamped.livePreview).toBe(true);
   });
 
   it("falls back to the default rather than storing a box that is not a number", () => {
@@ -488,6 +501,7 @@ describe("the configuration as a whole", () => {
       maxSegmentMs: Number.NaN,
       speechThresholdPercent: Number.NaN,
       carryContext: true,
+      livePreview: true,
     });
 
     expect(clamped).toEqual(DEFAULT_TUNING);
@@ -824,6 +838,7 @@ describe("adopting a configuration", () => {
         maxSegmentMs: 4_000,
         speechThresholdPercent: 60,
         carryContext: false,
+        livePreview: false,
       },
       true,
       true,

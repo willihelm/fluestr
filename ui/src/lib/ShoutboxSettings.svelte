@@ -1,26 +1,20 @@
 <script lang="ts">
-  // Where audio leaves the app (P22, P26).
-  //
-  // Two outputs and deliberately two: the **listen** output, where a bubble is
-  // heard again — headphones, so nobody else hears it — and the **shoutbox**,
-  // one intercom channel passed through to a talkback speaker with its level
-  // following a measurement mic in the room.
+  // The shoutbox (P26): one intercom channel passed through to a talkback
+  // speaker, its level following a measurement mic in the room. The replay
+  // output beside it is `ListenSettings`.
   //
   // Everything here is part of the profile and reaches the backend through the
   // save, like the channel map: the backend opens what the file says, at
   // startup and on every save, independently of any session. The two things
-  // that cannot wait for the save's debounce — the shoutbox's trim and mute —
-  // also go straight to it.
+  // that cannot wait for the save's debounce — the trim and the mute — also go
+  // straight to it.
   //
-  // In a browser on the LAN (P16) the listen output is shown and not editable:
-  // the headphones are the host machine's, and a replay there plays in the
-  // browser. The shoutbox is editable in full, because whoever tunes it is
-  // standing by the speaker rather than at the laptop.
+  // Editable in full in a browser on the LAN (P16) too, because whoever tunes
+  // it is standing by the speaker rather than at the laptop.
 
   import { onMount } from "svelte";
   import ShoutboxControls from "./ShoutboxControls.svelte";
   import {
-    isRemote,
     listDevices,
     listOutputDevices,
     SHOUTBOX_ESTIMATED_CALIBRATION_DB,
@@ -30,8 +24,6 @@
     type DeviceOption,
     type OutputDeviceOption,
     type ShoutboxStatus,
-    type StoredInputRoute,
-    type StoredOutputRoute,
     type StoredOutputs,
   } from "./bridge";
   import {
@@ -41,8 +33,12 @@
     roundTenth,
     shoutboxDefaults,
     decodeChannels,
+    deviceFor,
     encodeChannels,
     outputChoices,
+    pickInput,
+    pickOutput,
+    routeKey,
   } from "./outputs";
 
   interface Props {
@@ -55,10 +51,9 @@
   let { outputs = $bindable(), inputDevices = $bindable() }: Props = $props();
 
   // Both lists are asked for again whenever the section opens, and on
-  // Refresh. The app lists its inputs once, at startup, and a Bluetooth
-  // headset or a USB mic connected after that would otherwise be offered as
-  // an output and not as an input — the one place it is needed here being the
-  // measurement mic.
+  // Refresh. The app lists its inputs once, at startup, and a USB mic
+  // connected after that would otherwise not be offered — the one place it is
+  // needed here being the measurement mic.
   let outputDevices = $state<OutputDeviceOption[]>([]);
   let listError = $state<string | null>(null);
   let status = $state<ShoutboxStatus | null>(null);
@@ -82,44 +77,6 @@
     return () => unlisten?.();
   });
 
-  const routeKey = (route: { deviceId: string; device: string }) => route.deviceId || route.device;
-
-  const outputDevice = (route: StoredOutputRoute) =>
-    outputDevices.find((d) => d.id === route.deviceId) ??
-    outputDevices.find((d) => d.name === route.device);
-  const inputDevice = (route: StoredInputRoute) =>
-    inputDevices.find((d) => d.id === route.deviceId) ??
-    inputDevices.find((d) => d.name === route.device);
-
-  /// Picking a device sets both halves and forgets channels it may not have.
-  const pickOutput = (route: StoredOutputRoute, id: string) => {
-    const option = outputDevices.find((d) => d.id === id);
-    if (id === "") {
-      route.device = "";
-      route.deviceId = "";
-      route.channels = [];
-      return;
-    }
-    if (!option) return;
-    route.device = option.name;
-    route.deviceId = option.id;
-    if (route.channels.some((c) => c >= option.channels)) route.channels = [];
-  };
-
-  const pickInput = (route: StoredInputRoute, id: string) => {
-    const option = inputDevices.find((d) => d.id === id);
-    if (id === "") {
-      route.device = "";
-      route.deviceId = "";
-      route.channel = 0;
-      return;
-    }
-    if (!option) return;
-    route.device = option.name;
-    route.deviceId = option.id;
-    if (route.channel >= option.channels) route.channel = 0;
-  };
-
   let shoutbox = $derived(outputs.shoutbox);
 
   /// The tuning back to the defaults; see `shoutboxDefaults` for what stays.
@@ -128,7 +85,6 @@
     outputs.shoutbox = shoutboxDefaults(shoutbox);
     live(outputs.shoutbox.trimDb, outputs.shoutbox.muted);
   };
-  let listen = $derived(outputs.listen);
 
   /// The output must be on the program's interface — one clock. Said here,
   /// before the backend refuses it, in the same words.
@@ -171,81 +127,6 @@
 
 <section class="panel">
   <header>
-    <h2>Listen</h2>
-    <button type="button" class="link" onclick={refresh} title="Look for input and output devices again">
-      Refresh devices
-    </button>
-  </header>
-  <p class="hint">
-    Where a message is heard again when its ▶ is pressed. Headphones, typically, so a
-    replay reaches you and nobody else. What is kept is only speech, and only in memory:
-    clearing the chat clears it too.
-    {#if isRemote}
-      In this browser a replay plays here, in your own ears; this output is the host
-      machine's.
-    {/if}
-  </p>
-
-  <div class="row">
-    <label>
-      <span>Output</span>
-      <select
-        value={routeKey(listen.output)}
-        disabled={isRemote}
-        onchange={(e) => pickOutput(listen.output, e.currentTarget.value)}
-      >
-        <option value="">System output</option>
-        {#each outputDevices as option (option.id)}
-          <option value={option.id}>{option.name} ({option.channels} ch)</option>
-        {/each}
-        {#if listen.output.device !== "" && !outputDevice(listen.output)}
-          <option value={routeKey(listen.output)}>{listen.output.device} — not connected</option>
-        {/if}
-      </select>
-    </label>
-    {#if listen.output.device !== ""}
-      <label class="narrow">
-        <span>Channels</span>
-        <select
-          value={encodeChannels(listen.output.channels)}
-          disabled={isRemote}
-          onchange={(e) => (listen.output.channels = decodeChannels(e.currentTarget.value))}
-        >
-          <option value="">Default</option>
-          {#each outputChoices(outputDevice(listen.output)?.channels ?? 2) as choice (choice.label)}
-            <option value={encodeChannels(choice.channels)}>{choice.label}</option>
-          {/each}
-        </select>
-      </label>
-    {/if}
-    <label class="narrow">
-      <span>Keep (minutes of speech)</span>
-      <input
-        type="number"
-        min="0"
-        max="120"
-        disabled={isRemote}
-        bind:value={listen.keepMinutes}
-      />
-    </label>
-  </div>
-
-  {#if listen.keepMinutes === 0}
-    <p class="note">Nothing is kept, so no message has a ▶.</p>
-  {:else}
-    <p class="note">
-      Only speech counts, not time: silence is never kept, so on a quiet evening an old message can
-      still be replayed. Once {listen.keepMinutes} minutes of talking have piled up, the oldest message
-      goes.
-    </p>
-  {/if}
-  {#if listError}
-    <p class="failed">The audio devices could not be listed: {listError}</p>
-  {/if}
-</section>
-
-<section class="panel">
-  <header>
     <h2>Shoutbox</h2>
     <span class="state {status?.state ?? 'off'}">{stateText[status?.state ?? "off"]}</span>
     <button type="button" class="link" onclick={refresh} title="Look for input and output devices again">
@@ -263,13 +144,7 @@
     {/if}
   </header>
 
-  <p class="hint">
-    One intercom channel passed through to a talkback speaker, its level following a
-    measurement mic in the room: quiet in the quiet moments, above the room in the loud
-    ones. The room is measured only while the shoutbox is silent — otherwise it would
-    measure itself — so the level changes between sentences, never during one. Runs
-    whenever it is switched on, with or without a transcription session.
-  </p>
+  <p class="hint">Passes one intercom channel to a talkback speaker, its level following a mic in the room.</p>
 
   <label class="switch">
     <input type="checkbox" bind:checked={shoutbox.enabled} />
@@ -279,6 +154,9 @@
   {#if status?.message}
     <p class="failed">{status.message}</p>
   {/if}
+  {#if listError}
+    <p class="failed">The audio devices could not be listed: {listError}</p>
+  {/if}
 
   <h3>Patch</h3>
   <div class="row">
@@ -286,13 +164,13 @@
       <span>Program input</span>
       <select
         value={routeKey(shoutbox.program)}
-        onchange={(e) => pickInput(shoutbox.program, e.currentTarget.value)}
+        onchange={(e) => pickInput(shoutbox.program, inputDevices, e.currentTarget.value)}
       >
         <option value="">Not patched</option>
         {#each inputDevices as option (option.id)}
           <option value={option.id}>{option.name}</option>
         {/each}
-        {#if shoutbox.program.device !== "" && !inputDevice(shoutbox.program)}
+        {#if shoutbox.program.device !== "" && !deviceFor(inputDevices, shoutbox.program)}
           <option value={routeKey(shoutbox.program)}>{shoutbox.program.device} — not connected</option>
         {/if}
       </select>
@@ -300,7 +178,7 @@
     <label class="narrow">
       <span>Channel</span>
       <select bind:value={shoutbox.program.channel}>
-        {#each Array.from({ length: inputDevice(shoutbox.program)?.channels ?? shoutbox.program.channel + 1 }, (_, c) => c) as c (c)}
+        {#each Array.from({ length: deviceFor(inputDevices, shoutbox.program)?.channels ?? shoutbox.program.channel + 1 }, (_, c) => c) as c (c)}
           <option value={c}>{c + 1}</option>
         {/each}
       </select>
@@ -312,13 +190,13 @@
       <span>Measurement mic</span>
       <select
         value={routeKey(shoutbox.reference)}
-        onchange={(e) => pickInput(shoutbox.reference, e.currentTarget.value)}
+        onchange={(e) => pickInput(shoutbox.reference, inputDevices, e.currentTarget.value)}
       >
         <option value="">Not patched</option>
         {#each inputDevices as option (option.id)}
           <option value={option.id}>{option.name}</option>
         {/each}
-        {#if shoutbox.reference.device !== "" && !inputDevice(shoutbox.reference)}
+        {#if shoutbox.reference.device !== "" && !deviceFor(inputDevices, shoutbox.reference)}
           <option value={routeKey(shoutbox.reference)}>{shoutbox.reference.device} — not connected</option>
         {/if}
       </select>
@@ -326,7 +204,7 @@
     <label class="narrow">
       <span>Channel</span>
       <select bind:value={shoutbox.reference.channel}>
-        {#each Array.from({ length: inputDevice(shoutbox.reference)?.channels ?? shoutbox.reference.channel + 1 }, (_, c) => c) as c (c)}
+        {#each Array.from({ length: deviceFor(inputDevices, shoutbox.reference)?.channels ?? shoutbox.reference.channel + 1 }, (_, c) => c) as c (c)}
           <option value={c}>{c + 1}</option>
         {/each}
       </select>
@@ -338,13 +216,13 @@
       <span>Shoutbox output</span>
       <select
         value={routeKey(shoutbox.output)}
-        onchange={(e) => pickOutput(shoutbox.output, e.currentTarget.value)}
+        onchange={(e) => pickOutput(shoutbox.output, outputDevices, e.currentTarget.value)}
       >
         <option value="">Not patched</option>
         {#each outputDevices as option (option.id)}
           <option value={option.id}>{option.name}</option>
         {/each}
-        {#if shoutbox.output.device !== "" && !outputDevice(shoutbox.output)}
+        {#if shoutbox.output.device !== "" && !deviceFor(outputDevices, shoutbox.output)}
           <option value={routeKey(shoutbox.output)}>{shoutbox.output.device} — not connected</option>
         {/if}
       </select>
@@ -356,7 +234,7 @@
         onchange={(e) => (shoutbox.output.channels = decodeChannels(e.currentTarget.value))}
       >
         <option value="">Default</option>
-        {#each outputChoices(outputDevice(shoutbox.output)?.channels ?? 2) as choice (choice.label)}
+        {#each outputChoices(deviceFor(outputDevices, shoutbox.output)?.channels ?? 2) as choice (choice.label)}
           <option value={encodeChannels(choice.channels)}>{choice.label}</option>
         {/each}
       </select>
@@ -364,11 +242,6 @@
   </div>
   {#if clockProblem}
     <p class="failed">{clockProblem}</p>
-  {:else}
-    <p class="note">
-      The output has to be on the program's interface — one clock for what is passed
-      through. A macOS aggregate device counts as one. The mic may be anywhere.
-    </p>
   {/if}
 
   <h3>Measurement</h3>
@@ -417,22 +290,10 @@
       Calibrate{offset !== null ? ` (offset ${offset.toFixed(1)} dB)` : ""}
     </button>
   </div>
-  <p class="note">
-    The room is read in dB SPL, A-weighted. Without a calibration that is an estimate
-    ({SHOUTBOX_ESTIMATED_CALIBRATION_DB} dB over weighted dBFS) and can be ten off either
-    way. Calibrating moves the quiet threshold with it, so the shoutbox behaves as it
-    did and only the numbers become right. Read the meter while nothing plays on the
-    shoutbox.
-  </p>
+  <p class="note">Without a calibration the room level is an estimate. Read the meter while the shoutbox is silent.</p>
 
   <ShoutboxControls bind:shoutbox={outputs.shoutbox} {status} />
 
-  <p class="note">
-    While the program is louder than Room Hold Above — and for the Room Hold Time after it
-    — the room level is held rather than measured, and the gain goes on towards what the
-    held level asks for. The Limit Ceiling is a limiter behind everything: nothing leaves
-    above it, whatever the curve asked for.
-  </p>
 </section>
 
 <style>
@@ -498,13 +359,17 @@
 
   select,
   input[type="number"] {
-    background: var(--bg);
+    background-color: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 0.3rem;
     padding: 0.3rem 0.45rem;
     font: inherit;
     font-size: 0.9rem;
+  }
+
+  select {
+    padding-right: 1.5rem;
   }
 
   input[type="checkbox"] {
