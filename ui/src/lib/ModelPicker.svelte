@@ -42,10 +42,11 @@
 
   interface Props {
     models: ModelChoice;
-    /// While a session runs the sidecar holds the model file open, so
-    /// switching or deleting one is locked for the same reason the channel map
-    /// is: it would take effect at a moment nobody chose.
+    /// While a session starts. Switching the model while one runs is allowed
+    /// and applied by restarting it — see `restartKey` in `App.svelte`.
     locked: boolean;
+    /// Whether a session runs, so the model it has open is not deleted.
+    running: boolean;
     /// Told whenever the answer to "can this machine transcribe" changes, so
     /// the Settings rail can mark this section from anywhere on the page. It
     /// is the one problem here that nothing outside this component can see:
@@ -56,7 +57,7 @@
     onengine?: (engine: SpeechEngine | null) => void;
   }
 
-  let { models = $bindable(), locked, onstatus, onengine }: Props = $props();
+  let { models = $bindable(), locked, running, onstatus, onengine }: Props = $props();
 
   let view = $state<ModelsView | null>(null);
   let error = $state<string | null>(null);
@@ -195,6 +196,17 @@
     model.kind === "speech"
       ? (models.model ?? null) === model.id
       : (models.vadModel ?? null) === model.id;
+
+  /// Whether the running session may have this file open. The one model that
+  /// stays undeletable during a session: picking another is a restart, but
+  /// deleting the one the sidecars are reading is pulling it out from under
+  /// them. A detector left on "never chose" resolves to whichever is
+  /// installed, so every installed one counts.
+  const inUse = (model: ModelStatus) =>
+    running &&
+    (active(model) ||
+      view?.active === model.id ||
+      (model.kind === "vad" && (models.vadModel ?? null) === null));
 </script>
 
 <section class="panel">
@@ -267,7 +279,13 @@
               {#if busy}
                 <button onclick={() => cancelDownload(model.id)}>Cancel</button>
               {:else if model.installed}
-                <button onclick={() => remove(model.id)} disabled={locked}>Remove</button>
+                <button
+                  onclick={() => remove(model.id)}
+                  disabled={locked || inUse(model)}
+                  title={inUse(model) ? "In use by the running session" : undefined}
+                >
+                  Remove
+                </button>
               {:else}
                 <button onclick={() => download(model.id)}>
                   <!-- Honest about what pressing it does: the bytes from the

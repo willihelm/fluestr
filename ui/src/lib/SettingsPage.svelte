@@ -108,7 +108,16 @@
     /// it.
     tuning: Tuning;
     deviceChannels: number;
+    /// Whether a session is starting — or restarting to take on an edit. The
+    /// only time the setup is not editable: what is being opened is read from
+    /// it, and an edit made in that moment would be one it does not have.
     locked: boolean;
+    /// Whether the running session is about to be restarted to take on a
+    /// change only a restart can apply — the profile, the device, the channel
+    /// map or the model. Said on the page, because the restart is a second or
+    /// two of audio that is not transcribed, and nobody should hear about it
+    /// from the gap in the chat.
+    pending: boolean;
     /// Whether capture is running. Narrower than `locked`, which also covers
     /// a session that is starting: the Detection section says whether a
     /// change reaches the audio *now*, and during a start there is nothing
@@ -174,6 +183,7 @@
     tuning = $bindable(),
     deviceChannels,
     locked,
+    pending,
     running,
     saveError,
     liveError,
@@ -389,6 +399,10 @@
          reaching the session that is running, which is the half an operator
          mid-show is actually asking about. -->
     <p class="failed">The running session was not changed: {liveError}</p>
+  {:else if pending}
+    <p class="pending">
+      Applying your change — the session restarts for a moment. The chat is kept.
+    </p>
   {/if}
 
   <!-- On a narrow window the rail is not a column beside the sections but a
@@ -562,6 +576,7 @@
         <ModelPicker
           bind:models
           {locked}
+          {running}
           onstatus={(flag) => (modelFlag = flag)}
           onengine={(engine) => (modelEngine = engine)}
         />
@@ -680,13 +695,19 @@
   /* A strip in the shape of the two bars above it rather than a card, so it
      reads as part of the window's status furniture and not as one more thing
      on the page to configure. */
-  .failed {
+  .failed,
+  .pending {
     margin: 0;
     padding: 0.4rem 1rem;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
     color: #ff6b6b;
     font-size: 0.8rem;
+  }
+
+  /* Not a failure: nothing went wrong, the session is about to be told. */
+  .pending {
+    color: var(--text-dim);
   }
 
   /* --- The rail ---------------------------------------------------------
@@ -945,7 +966,8 @@
       padding-bottom: max(1.5rem, var(--safe-bottom));
     }
 
-    .failed {
+    .failed,
+    .pending {
       padding: 0.4rem 0.7rem;
       padding-left: max(0.7rem, var(--safe-left));
       padding-right: max(0.7rem, var(--safe-right));

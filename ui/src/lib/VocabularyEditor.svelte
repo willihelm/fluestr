@@ -1,9 +1,9 @@
 <script lang="ts">
   // The one active vocabulary, for every channel of the session.
   //
-  // A single box rather than one per channel — see `vocabulary.ts` for why —
-  // and locked while a session runs, because the prompt is handed to the
-  // workers when the session starts.
+  // A single box rather than one per channel — see `vocabulary.ts` for why.
+  // Editable during a session: the running one takes the edit from its next
+  // segment on, because a misheard cue name is noticed while it is said.
 
   import { DEFAULT_VOCABULARY, estimatedTokens, lengthWarning, TOKEN_LIMIT } from "./vocabulary";
 

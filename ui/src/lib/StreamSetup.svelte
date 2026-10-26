@@ -12,17 +12,16 @@
   // stored with it (P12) — an engineer does not remap eight channels before
   // every show.
   //
-  // Most of it is locked while a session runs, because the channel map is
-  // fixed when capture opens. Four fields are not: the label, the language,
-  // the input trim and the mute go into the running session through
-  // `update_stream_config` (P6). They are the four that turn out to be wrong
-  // in the middle of a show — somebody else took the position over, the guest
-  // director speaks English, nobody had spoken on that channel during the
-  // sound check, somebody left their beltpack open in the workshop — and the
-  // four that need no restart. The device channel and
-  // the colour stay locked: the first is the channel map, the second would
-  // repaint a chat whose old lines were read under the colour they were said
-  // in.
+  // All of it is editable while a session runs. Four fields go into the
+  // running session as they are: the label, the language, the input trim and
+  // the mute, through `update_stream_config` (P6). They are the four that turn
+  // out to be wrong in the middle of a show — somebody else took the position
+  // over, the guest director speaks English, nobody had spoken on that channel
+  // during the sound check, somebody left their beltpack open in the workshop.
+  // The colour is the view's alone and simply repaints. The channel map —
+  // adding, removing, repatching — is fixed when capture opens, so a change to
+  // it restarts the session (see `restartKey` in `App.svelte`). Only while a
+  // session is starting is the list locked.
 
   import {
     newChannel,
@@ -67,9 +66,9 @@
     /// without it.
     ///
     /// The stream id is the row's position, which is how the backend assigns
-    /// it — see `SessionConfig::streams`. Safe here precisely because the rest
-    /// of the list is locked: no row can be added, removed or reordered under
-    /// a running session, so a position means the same thing on both sides.
+    /// it — see `SessionConfig::streams`. Once a row was added or removed the
+    /// positions stop agreeing with the session's; the caller drops the push
+    /// then, because the restart that change causes carries the value anyway.
     live:
       | ((
           streamId: number,

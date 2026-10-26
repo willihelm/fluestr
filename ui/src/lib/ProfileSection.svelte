@@ -19,10 +19,11 @@
   // there" is answered by looking rather than by opening a menu, and each row
   // can carry its own name field and its own Duplicate and Delete.
   //
-  // Locked while a session runs, like the channel map and for the same reason:
-  // the capture configuration is fixed once capture has opened, and switching
-  // profiles under a running session would mean the meters, the colours and the
-  // groups no longer describe what is being recorded.
+  // Editable while a session runs. The capture configuration is fixed once
+  // capture has opened, so switching to another profile restarts the session
+  // on it — otherwise the meters, the colours and the groups would describe a
+  // setup that is not the one being recorded. Locked only while a session is
+  // starting, when the setup is being read.
 
   import { duplicate, newProfile, type Profile } from "./profiles";
 
@@ -135,7 +136,7 @@
   </ul>
 
   {#if locked}
-    <p class="note">Locked while a session runs.</p>
+    <p class="note">Locked while the session starts.</p>
   {/if}
 </section>
 

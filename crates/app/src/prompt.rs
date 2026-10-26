@@ -109,6 +109,17 @@ impl Prompter {
         }
     }
 
+    /// Replaces the vocabulary, for every channel, from the next segment a
+    /// worker takes on.
+    ///
+    /// Live rather than fixed at Start: a cue name that whisper keeps getting
+    /// wrong is noticed while it is being said, and that is when it has to be
+    /// typed in. Nothing carried is forgotten — the vocabulary sits in front of
+    /// the previous sentence and does not change what that sentence was.
+    pub fn set_vocabulary(&self, vocabulary: Option<String>) {
+        self.inner().vocabulary = non_empty(vocabulary.as_deref());
+    }
+
     /// Drops what one channel said last — its language changed, or the
     /// channel was handed to somebody else.
     pub fn forget(&self, stream: u16) {
@@ -274,6 +285,20 @@ mod tests {
             prompter.compose(&segment(3, 5, 11_000)).as_deref(),
             Some("Standby, Cue, Go. Preset 12 steht")
         );
+    }
+
+    #[test]
+    fn a_vocabulary_edited_mid_session_reaches_the_next_segment() {
+        let prompter = Prompter::new(Some("Standby".into()), true);
+        prompter.set_vocabulary(Some("Standby, Zug 14".into()));
+        assert_eq!(
+            prompter.compose(&segment(0, 0, 0)).as_deref(),
+            Some("Standby, Zug 14")
+        );
+
+        // Cleared is no vocabulary, not an empty one in front of nothing.
+        prompter.set_vocabulary(Some("  ".into()));
+        assert_eq!(prompter.compose(&segment(0, 1, 1_000)), None);
     }
 
     #[test]

@@ -115,6 +115,11 @@ pub enum Command {
     UpdateTuning {
         tuning: crate::config::Tuning,
     },
+    /// The vocabulary, pushed into the running session the way the tuning
+    /// is. `None` or blank is no vocabulary.
+    UpdateVocabulary {
+        vocabulary: Option<String>,
+    },
     /// Opens the device just to meter it, while no session is running (P8).
     ///
     /// Idempotent: asked for what is already being metered, it does nothing,
@@ -263,6 +268,7 @@ pub async fn dispatch<R: Runtime>(
         Command::StopSession => json(stop_session(app)?),
         Command::UpdateStreamConfig { update } => json(update_stream_config(app, update)?),
         Command::UpdateTuning { tuning } => json(update_tuning(app, tuning)?),
+        Command::UpdateVocabulary { vocabulary } => json(update_vocabulary(app, vocabulary)?),
         // On a blocking thread, like Start: opening an audio device is a
         // driver call that can take a moment, and the async runtime is also
         // what serves the LAN remote.
@@ -832,6 +838,20 @@ fn update_tuning<R: Runtime>(
     let session = state.session.lock().map_err(|_| "session state poisoned")?;
     if let Some(session) = session.as_ref() {
         session.update_tuning(tuning);
+    }
+    Ok(())
+}
+
+/// Carries an edited vocabulary into the running session, if there is one.
+/// Without one there is nothing to reach: the next Start sends it itself.
+fn update_vocabulary<R: Runtime>(
+    app: &AppHandle<R>,
+    vocabulary: Option<String>,
+) -> Result<(), String> {
+    let state = state(app)?;
+    let session = state.session.lock().map_err(|_| "session state poisoned")?;
+    if let Some(session) = session.as_ref() {
+        session.update_vocabulary(vocabulary);
     }
     Ok(())
 }

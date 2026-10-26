@@ -1041,6 +1041,15 @@ impl Session {
         let _ = self.tuning.send(tuning);
     }
 
+    /// Replaces the vocabulary of every stream while the session runs.
+    ///
+    /// Straight to the prompter, which every worker reads once per decode, so
+    /// it reaches the next segment a worker takes on. Like the tuning, nothing
+    /// in the session state changes and there is nothing to announce.
+    pub fn update_vocabulary(&self, vocabulary: Option<String>) {
+        self.prompter.set_vocabulary(vocabulary);
+    }
+
     /// Stops in the order the data flows, so nothing is left half-processed.
     pub fn stop(mut self) {
         self.shutdown();

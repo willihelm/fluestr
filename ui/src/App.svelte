@@ -64,6 +64,7 @@
     stopSession,
     updateStreamConfig,
     updateTuning,
+    updateVocabulary,
     startMonitor,
     stopMonitor,
     setMonitorGain,
@@ -108,6 +109,13 @@
   /// operator is waiting to see a bar move. Long enough that typing a
   /// two-digit channel number is one open and not two.
   const METER_DEBOUNCE_MS = 250;
+
+  /// How long after the last change that needs a restart the running session
+  /// is restarted with it — see `restartKey`.
+  ///
+  /// Longer than the save: every restart is a second or two of audio that is
+  /// not transcribed, and building a channel is several edits in a row.
+  const RESTART_DEBOUNCE_MS = 1500;
 
   /// Whether the Settings dialog is standing over the chat.
   let settings = $state(false);
@@ -305,6 +313,11 @@
       muted?: boolean;
     },
   ) => {
+    // The stream id is a position in the channel list the session was started
+    // with. Once a channel was added, removed or the profile switched, the
+    // positions here no longer mean the same streams there — and the restart
+    // that is already on its way carries this value along with the rest.
+    if (restartPending) return;
     updateStreamConfig({ streamId, ...update })
       .then(() => (liveError = null))
       .catch((e) => (liveError = String(e)));
@@ -328,7 +341,7 @@
     // value — the profile above is, and it is what the next session starts
     // with; these are the audio it applies to right now.
     if (running) liveStream(streamId, { gainDb });
-    else setMonitorGain(streamId, gainDb).catch(() => {});
+    else if (!busy) setMonitorGain(streamId, gainDb).catch(() => {});
   };
 
   /// Mutes or unmutes a channel from the meter strip.
@@ -359,6 +372,39 @@
   // assigns it — see `SessionConfig::streams`.
   let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
   let problem = $derived(validate(channels, device, deviceChannels, connected));
+
+  /// Everything a running session can only take on by being started again:
+  /// the profile, the device, which channels there are in which order and
+  /// what they are patched to, the model and how many copies of it decode.
+  ///
+  /// Editable during a session all the same. The capture and the sidecars are
+  /// fixed when they open, so a change to any of these is applied by stopping
+  /// and starting the session — a second or two of audio, with the chat kept
+  /// (Start is non-destructive) — rather than by refusing the edit until the
+  /// show is over. Everything else on the Settings page reaches the running
+  /// session without that.
+  ///
+  /// Channels by key as well as by patch, so removing one and adding another
+  /// on the same input is still a different list.
+  let restartKey = $derived(
+    JSON.stringify([
+      activeKey,
+      deviceId || device,
+      channels.map((c) => [c.key, c.channel]),
+      models.model ?? null,
+      models.vadModel ?? null,
+      models.modelPath ?? null,
+      models.workers ?? null,
+    ]),
+  );
+  /// `restartKey` as it was when the running session was started, or `null`
+  /// while none runs.
+  let startedKey = $state<string | null>(null);
+  /// Whether the running session is behind the Settings page on something
+  /// only a restart can apply.
+  let restartPending = $derived(running && startedKey !== null && restartKey !== startedKey);
+  /// Whether this window is in the middle of applying one.
+  let restarting = $state(false);
 
   /// Why the input could not be metered with no session running (P8), or
   /// `null` while it can be.
@@ -699,7 +745,7 @@
     // adopting its own keystroke. A save that then fails says so in the strip
     // at the top, and no echo follows it, because nothing was written.
     agreed = written;
-    saveConfig(config)
+    saving = saveConfig(config)
       .then(() => (saveError = null))
       .catch((e) => {
         saveError = String(e);
@@ -711,6 +757,11 @@
         if (agreed === written) agreed = null;
       });
   };
+
+  /// The last save on its way to the file, settled either way. Waited for by
+  /// a restart: the model and the worker count are read from the file when a
+  /// session starts, not sent with it.
+  let saving: Promise<unknown> = Promise.resolve();
 
   /// The configuration as this view currently holds it, for the one save that
   /// cannot wait for anything — see `beforeLeaving`.
@@ -858,10 +909,94 @@
     return () => clearTimeout(timer);
   });
 
+  // Every field, not only the three thresholds: the context switch and the
+  // live preview's are pushed the same way, and a comparison that left them
+  // out would let them sit unsent until somebody also moved a slider.
   const sameTuning = (a: Tuning, b: Tuning) =>
-    a.silenceTimeoutMs === b.silenceTimeoutMs &&
-    a.maxSegmentMs === b.maxSegmentMs &&
-    a.speechThresholdPercent === b.speechThresholdPercent;
+    (Object.keys(a) as (keyof Tuning)[]).every((k) => a[k] === b[k]);
+
+  // The vocabulary, pushed the way the thresholds are: a cue name whisper
+  // keeps getting wrong is noticed while it is being said, and that is when it
+  // gets typed in. Not reset between sessions — a new one is started with the
+  // vocabulary as it stands, so the first push after it is a no-op at worst.
+  let pushedVocabulary: string | null | undefined = undefined;
+  $effect(() => {
+    if (!loaded || !running) return;
+    const next = vocabularyConfig(vocabulary);
+    if (next === pushedVocabulary) return;
+
+    const timer = setTimeout(() => {
+      updateVocabulary(next)
+        .then(() => (pushedVocabulary = next))
+        .catch((e) => console.warn("the vocabulary did not reach the session:", e));
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  });
+
+  // What the running session was started with, for a session this window did
+  // not start — pressed on a browser on the LAN, or running before a reload.
+  // Its setup is the one on this page at the moment it is first seen running,
+  // which is what the shared configuration says it was started from.
+  $effect(() => {
+    if (!running) {
+      startedKey = null;
+      return;
+    }
+    if (startedKey === null) startedKey = untrack(() => restartKey);
+  });
+
+  // Applies a change only a restart can apply (see `restartKey`) — by itself,
+  // so that the edit is the whole of what the operator has to do.
+  //
+  // Debounced, and held while a field is being typed into: patching a new
+  // channel is "Add", then a channel number of two digits, and that is one
+  // restart, not three. Only from the app's own window: a browser on the LAN
+  // edits the same configuration, which this window adopts and then applies,
+  // and two views each restarting the session would be two restarts.
+  //
+  // Not when the new setup could not start: stopping a session that works for
+  // one that will not would end the show over a typo. The operator is told
+  // why, the session runs on as it was, and the restart follows once the
+  // problem is gone — which is why this reads `problem` here.
+  $effect(() => {
+    if (isRemote || !restartPending || restarting) return;
+    if (problem) {
+      liveError = `${problem} — the change is applied once that is fixed.`;
+      return () => {
+        liveError = null;
+      };
+    }
+
+    let stopWaiting: (() => void) | null = null;
+    const timer = setTimeout(() => {
+      stopWaiting = whenEditingEnds(() => restart());
+    }, RESTART_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      stopWaiting?.();
+    };
+  });
+
+  /// Stops the running session and starts it again on the setup as it now
+  /// stands.
+  const restart = async () => {
+    if (!running || restarting || problem) return;
+
+    restarting = true;
+    try {
+      // The model and the worker count are read from the file when a session
+      // starts, so the file has to say what this page says first.
+      if (latest) write(latest);
+      await saving;
+      await stopSession();
+      await launch({ stay: true });
+      liveError = null;
+    } finally {
+      restarting = false;
+    }
+  };
 
   // A deleted channel has to leave the groups it was in, and a deleted group
   // has to release the chat. Both are cheap to do on every change and easy to
@@ -1033,13 +1168,20 @@
   // per-channel Start button. And it is non-destructive: the chat keeps what
   // is already in it and new transcripts are appended. Emptying it is the
   // separate, confirmed Clear all communication action and nothing else.
-  const start = async () => {
+  const start = () => launch({ stay: false });
+
+  /// Starts the session. `stay` is a restart from the Settings page, which
+  /// leaves the page open: the operator is in the middle of editing it.
+  const launch = async ({ stay }: { stay: boolean }) => {
     if (problem) {
       status = { state: "failed", message: problem };
       settings = true;
       return;
     }
 
+    // What the session is started with, read now rather than once it is up:
+    // an edit made during the model load is one the session does not have.
+    const key = restartKey;
     // The model load happens inside `start_session` and can take seconds on a
     // machine's first ever start — the UI has to say so rather than look hung.
     status = { state: "starting" };
@@ -1057,9 +1199,10 @@
         tuning: clampTuning(tuning),
       });
       noteSession(status);
+      startedKey = key;
       // The errand the dialog was open for is done — capture is running, and
       // what the window is for is behind it.
-      settings = false;
+      if (!stay) settings = false;
     } catch (e) {
       status = { state: "failed", message: String(e) };
     }
@@ -1185,15 +1328,15 @@
            is one show too late to find out the wrong profile was loaded.
 
            A picker rather than a label, so the setup can be changed here
-           too. Locked while a session runs, like the list in Settings: the
-           capture configuration is fixed once capture has opened. -->
+           too — during a session as well, which then restarts on the other
+           profile (see `restartKey`). Locked only while one is starting. -->
       {#if active}
         <select
           class="profile"
           bind:value={activeKey}
-          disabled={running || busy}
-          title={running || busy
-            ? "Active profile — stop the session to switch"
+          disabled={busy || restarting}
+          title={running
+            ? "Active profile — switching restarts the session"
             : "Active profile"}
           aria-label="Active profile"
         >
@@ -1361,8 +1504,9 @@
       bind:sort={chatSort}
       bind:tuning
       {deviceChannels}
-      locked={running || busy}
+      locked={busy || restarting}
       {running}
+      pending={restartPending || restarting}
       {saveError}
       {liveError}
       live={running ? liveStream : null}
