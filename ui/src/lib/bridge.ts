@@ -24,8 +24,15 @@ import { type UnlistenFn } from "@tauri-apps/api/event";
 import { call, emit, isRemote, on } from "./transport";
 import { flashPage, floodWindow } from "./flash";
 import type { Ask } from "./attention";
-import { ALL_CHANNELS_VIEW, closeGroupTabs, openGroupTab, type GroupView } from "./windows";
-import { loadGeometry } from "./ticker";
+import {
+  ALL_CHANNELS_VIEW,
+  closeGroupTabs,
+  openGroupTab,
+  openShoutboxTab,
+  openTickerTab,
+  type GroupView,
+} from "./windows";
+import { loadGeometry, loadPopupPlace, popupFeatures } from "./ticker";
 import type {
   DeviceOption,
   RunningStream,
@@ -314,18 +321,30 @@ export const onGroupOnTop = (fn: (e: GroupOnTop) => void): Promise<UnlistenFn> =
 ///
 /// Addressed like `openGroupWindow`, and carrying where this view's ticker was
 /// last left on this screen, which the backend uses if that place is still on
-/// a monitor. Desktop only: a browser tab cannot stay in front of anything,
-/// and the sidebar does not offer it there.
-export const openTickerWindow = (group: GroupView, name: string): Promise<void> =>
-  invoke<void>("open_ticker_window", {
+/// a monitor. In a browser it is a pop-up of the same size instead (P16) —
+/// one that cannot stay in front of the windows around the browser, which is
+/// the part of a ticker a page cannot have.
+export const openTickerWindow = (group: GroupView, name: string): Promise<void> => {
+  if (isRemote) {
+    openTickerTab(group, name, popupFeatures(loadPopupPlace(group)));
+    return Promise.resolve();
+  }
+  return invoke<void>("open_ticker_window", {
     group: group === ALL_CHANNELS_VIEW ? null : group,
     name,
     geometry: loadGeometry(group),
   });
+};
 
-/// Opens the shoutbox window (P26), or brings it forward. Desktop only, like
-/// a ticker: the status bar does not offer it in a browser.
-export const openShoutboxWindow = (): Promise<void> => invoke<void>("open_shoutbox_window");
+/// Opens the shoutbox window (P26), or brings it forward. A pop-up in a
+/// browser, like a ticker.
+export const openShoutboxWindow = (): Promise<void> => {
+  if (isRemote) {
+    openShoutboxTab();
+    return Promise.resolve();
+  }
+  return invoke<void>("open_shoutbox_window");
+};
 
 /// The shoutbox window asking for its edit to be stored.
 ///
@@ -357,8 +376,16 @@ export interface RevealMessage {
 
 /// Sends the main window to a line and brings it forward: the message first,
 /// so the chat is already moving when the window comes up.
+///
+/// In a browser the main window is the tab that opened the ticker, and
+/// whether it may be brought forward is the browser's decision — most let a
+/// page focus the one that opened it, some do not.
 export const revealInMain = async (view: GroupView, segment: ClipKey): Promise<void> => {
   await emit("reveal-message", { view, segment } satisfies RevealMessage);
+  if (isRemote) {
+    window.opener?.focus();
+    return;
+  }
   await invoke<void>("focus_main_window");
 };
 
@@ -415,6 +442,14 @@ export const updateStreamConfig = (update: StreamUpdate) =>
 /// changes, so there is nothing for a view to adopt. The next Start reads the
 /// numbers from the file.
 export const updateTuning = (tuning: Tuning) => call<void>("update_tuning", { tuning });
+
+/// Carries the vocabulary into the running session, from the next segment on.
+///
+/// Live for the tuning's reason: a cue name whisper keeps getting wrong is
+/// noticed while it is being said. Succeeds with nothing running — the next
+/// Start sends the vocabulary itself.
+export const updateVocabulary = (vocabulary: string | null) =>
+  call<void>("update_vocabulary", { vocabulary });
 
 /// Opens the input device just to meter it, while no session is running (P8).
 ///

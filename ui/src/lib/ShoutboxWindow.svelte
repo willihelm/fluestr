@@ -10,14 +10,19 @@
   // re-read on every `config-changed`, and hands its edits to the main window,
   // which stores them: the configuration has one writer. Trim and mute also go
   // to the running shoutbox at once, as they do from the Settings page.
+  //
+  // In a browser (P16) it is a pop-up of the main tab, and the main tab is
+  // the writer it hands its edits to — so one closed behind it is said.
 
   import { onMount } from "svelte";
   import ShoutboxControls from "./ShoutboxControls.svelte";
   import { canonical } from "./profiles";
-  import { canPin, setWindowOnTop } from "./windows";
+  import { canPin, setWindowOnTop, setWindowTitle } from "./windows";
   import {
+    isRemote,
     loadConfig,
     onConfigChanged,
+    onReconnected,
     onShoutboxStatus,
     requestShoutboxEdit,
     shoutboxStatus,
@@ -33,6 +38,10 @@
   let status = $state<ShoutboxStatus | null>(null);
   let failure = $state<string | null>(null);
   let onTop = $state(false);
+  /// Whether the main tab this pop-up was opened from has gone, so that
+  /// nothing stores what is changed here. Never in the app, whose main window
+  /// is there for as long as the app is.
+  let orphaned = $state(false);
 
   /// The shoutbox as this window last knew the app to have it, in a form that
   /// does not depend on field order. An edit equal to it is no edit.
@@ -70,17 +79,29 @@
   };
 
   onMount(() => {
+    // What the backend names the app's window; a pop-up names itself.
+    if (isRemote) setWindowTitle("Shoutbox — Fluestr");
     const subscriptions = [
       onConfigChanged(adopt),
       onShoutboxStatus((next) => (status = next)),
     ];
-    loadConfig()
-      .then(adopt)
-      .catch((e) => (failure = String(e)));
-    shoutboxStatus()
-      .then((s) => (status ??= s))
-      .catch(() => {});
+    const first = () => {
+      loadConfig()
+        .then(adopt)
+        .catch((e) => (failure = String(e)));
+      shoutboxStatus()
+        .then((s) => (status ??= s))
+        .catch(() => {});
+    };
+    first();
+    // A pop-up that lost the socket missed every change meanwhile; it reads
+    // them again as it did when it opened. Never fires in the app.
+    const reconnected = onReconnected(() => {
+      status = null;
+      first();
+    });
     return () => {
+      reconnected();
       for (const subscription of subscriptions) {
         subscription.then((unlisten) => unlisten()).catch(() => {});
       }
@@ -96,6 +117,7 @@
     if (edit === known) return;
     known = edit;
     sent.push(edit);
+    if (isRemote) orphaned = !window.opener || window.opener.closed;
     void requestShoutboxEdit(profile, snapshot).catch(() => {});
   });
 
@@ -137,6 +159,13 @@
       <p class="note">The shoutbox is switched off. It is switched on, and patched, in Settings.</p>
     {:else if status?.state === "failed" && status.message}
       <p class="failed">{status.message}</p>
+    {/if}
+    {#if orphaned}
+      <p class="note">
+        The Fluestr tab this was opened from is closed. Changes made here are only kept while
+        Fluestr is open in another tab of this browser; trim and mute reach the shoutbox
+        either way, until it next starts.
+      </p>
     {/if}
     <ShoutboxControls bind:shoutbox {status} />
   {/if}

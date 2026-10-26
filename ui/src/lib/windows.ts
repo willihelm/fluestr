@@ -21,7 +21,8 @@
 // everything as it is one group.
 //
 // A browser has neither a label nor a second OS window, so the query string is
-// what is left — `?group=2`, `?group=all`. It buys back both properties in the browser's own
+// what is left — `?group=2`, `?group=all`, and `?ticker=2` and `?shoutbox` for
+// the two pop-ups. It buys back both properties in the browser's own
 // terms: it is in the URL before the document is parsed, and a named
 // `window.open` target reuses the tab that is already showing that group.
 
@@ -76,12 +77,24 @@ export const tickerIndexOf = (label: string): GroupView | null => {
   return viewOf(label.slice(TICKER_WINDOW_PREFIX.length));
 };
 
+/// The query parameter a remote ticker carries — `?ticker=2`, `?ticker=all`.
+/// The browser's equivalent of the ticker's label, like `GROUP_PARAM`.
+const TICKER_PARAM = "ticker";
+
+/// The view a URL asks for a ticker of, or `null` when it asks for none. As
+/// strict as `groupParamOf`, for its reason.
+export const tickerParamOf = (search: string): GroupView | null =>
+  viewOf(new URLSearchParams(search).get(TICKER_PARAM));
+
 /// The view this window is a ticker of, or `null` when it is none.
 ///
-/// Only ever in the app: a browser tab cannot stay in front of anything, which
-/// is the whole of what a ticker is for, so there is no URL that asks for one.
+/// The window label in the app, the query string in a browser. A browser's
+/// ticker is a small pop-up window rather than a strip that stays in front —
+/// a page cannot put itself above the windows around the browser — but it is
+/// the same least-room layout, which is what a second laptop or a phone
+/// beside the desk is short of as well.
 export const currentTicker = (): GroupView | null => {
-  if (isRemote) return null;
+  if (isRemote) return tickerParamOf(window.location.search);
 
   try {
     return tickerIndexOf(getCurrentWindow().label);
@@ -95,10 +108,15 @@ export const currentTicker = (): GroupView | null => {
 /// is one shoutbox, the active profile's.
 export const SHOUTBOX_WINDOW = "shoutbox";
 
-/// Whether this window is the shoutbox window. Only ever in the app, like a
-/// ticker: in a browser the shoutbox is tuned on the Settings page.
+/// Whether a URL asks for the shoutbox window: `?shoutbox`, the browser's
+/// equivalent of the label, and named after it.
+export const shoutboxParamOf = (search: string): boolean =>
+  new URLSearchParams(search).has(SHOUTBOX_WINDOW);
+
+/// Whether this window is the shoutbox window. The label in the app, the query
+/// string in a browser, where it is a pop-up opened from the status bar.
 export const isShoutboxWindow = (): boolean => {
-  if (isRemote) return false;
+  if (isRemote) return shoutboxParamOf(window.location.search);
 
   try {
     return getCurrentWindow().label === SHOUTBOX_WINDOW;
@@ -140,13 +158,38 @@ export const currentGroup = (): GroupView | null => {
   }
 };
 
-/// The group tabs this page has opened, by group.
+/// The tabs and pop-ups this page has opened, by their target name — which is
+/// the window label they stand in for: `group-2`, `ticker-all`, `shoutbox`.
 ///
-/// Kept so that switching profiles can close them, which is the one thing the
-/// desktop's `close_group_windows` does that a browser cannot be asked to do
-/// from the backend: a tab belongs to the browser, and only the page that
-/// opened it holds a handle to it.
-const tabs = new Map<GroupView, Window>();
+/// Kept so that switching profiles can close the views among them, which is
+/// the one thing the desktop's `close_group_windows` does that a browser
+/// cannot be asked to do from the backend: a tab belongs to the browser, and
+/// only the page that opened it holds a handle to it. Kept as well so that
+/// asking again focuses what is open: `window.open` on a name that is in use
+/// would load the page in it again, from the start.
+const tabs = new Map<string, Window>();
+
+/// Opens `query` on this page under the target `name`, or brings forward
+/// what is already open under it. `features` makes it a pop-up of that size
+/// rather than a tab; a phone opens a tab either way.
+const openTab = (name: string, query: string, title: string, features?: string): Window | null => {
+  const existing = tabs.get(name);
+  if (existing && !existing.closed) {
+    existing.focus();
+    return existing;
+  }
+
+  const opened = window.open(`${window.location.pathname}?${query}`, name, features);
+  // A blocked pop-up. Worth a line rather than a silent nothing: the operator
+  // clicked something and a browser decided for them, and nothing on the page
+  // would otherwise say so.
+  if (!opened) {
+    console.warn(`the browser refused to open a window for ${title}`);
+    return null;
+  }
+  tabs.set(name, opened);
+  return opened;
+};
 
 /// Opens a group in a tab of its own, or brings the one already open forward.
 ///
@@ -155,37 +198,35 @@ const tabs = new Map<GroupView, Window>();
 /// guarantee the window label gives on the desktop, by the same mechanism of
 /// naming the thing after what it shows.
 export const openGroupTab = (group: GroupView, name: string) => {
-  const existing = tabs.get(group);
-  if (existing && !existing.closed) {
-    existing.focus();
-    return;
-  }
-
-  const opened = window.open(
-    `${window.location.pathname}?${GROUP_PARAM}=${group}`,
-    `${GROUP_WINDOW_PREFIX}${group}`,
-  );
-  // A blocked pop-up. Worth a line rather than a silent nothing: the operator
-  // clicked something and a browser decided for them, and nothing on the page
-  // would otherwise say so.
-  if (!opened) {
-    console.warn(`the browser refused to open a tab for ${name}`);
-    return;
-  }
-  tabs.set(group, opened);
+  openTab(`${GROUP_WINDOW_PREFIX}${group}`, `${GROUP_PARAM}=${group}`, name);
 };
 
-/// Closes every group tab this page opened.
+/// Opens a view as a ticker in a pop-up of its own (P24), or brings the one
+/// already open forward. The browser's half of `openTickerWindow`: `features`
+/// carries where this view's ticker was last left — see `ticker.ts`.
+export const openTickerTab = (view: GroupView, name: string, features: string) => {
+  openTab(`${TICKER_WINDOW_PREFIX}${view}`, `${TICKER_PARAM}=${view}`, `the ${name} ticker`, features);
+};
+
+/// Opens the shoutbox in a pop-up of its own (P26), or brings it forward. The
+/// size the app's shoutbox window opens at: the curve beside its fields.
+export const openShoutboxTab = () => {
+  openTab(SHOUTBOX_WINDOW, SHOUTBOX_WINDOW, "the shoutbox", "popup,width=760,height=520");
+};
+
+/// Closes every group tab and every ticker this page opened.
 ///
 /// Called when the active profile changes, like its desktop counterpart: the
-/// stream ids a group view filters by are positions in the active profile's
-/// channel list, so a tab carried over to another production would be
-/// filtering the right numbers against the wrong channels.
+/// stream ids a view filters by are positions in the active profile's channel
+/// list, so a tab carried over to another production would be filtering the
+/// right numbers against the wrong channels. The shoutbox stays, as its window
+/// does in the app: it follows the active profile and is no view of it.
 export const closeGroupTabs = () => {
-  for (const [, tab] of tabs) {
+  for (const [name, tab] of tabs) {
+    if (name === SHOUTBOX_WINDOW) continue;
     if (!tab.closed) tab.close();
+    tabs.delete(name);
   }
-  tabs.clear();
 };
 
 /// Keeps this window in front of other windows, or stops doing so.

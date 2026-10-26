@@ -19,6 +19,10 @@
   // edge per channel that has one — the draft of what is being said, replaced
   // by the line when it lands. Not the bare "speaking…" placeholder: a strip
   // this narrow has no room for a line that says nothing yet.
+  //
+  // In a browser (P16) it is a pop-up opened from the main tab: the same
+  // lines, in a window the browser frames, moves and resizes itself — so no
+  // grip and no handles — and that cannot stay in front of anything.
 
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
@@ -28,12 +32,21 @@
   import { mergeHistory, toBubbles, type Bubble } from "./bubbles";
   import { attentionFor } from "./attention";
   import { adoptSpeech, speech, watchSpeech } from "./speech.svelte";
-  import { LINES, resized, saveGeometry, type Edge, type Geometry } from "./ticker";
+  import {
+    LINES,
+    resized,
+    saveGeometry,
+    savePopupPlace,
+    type Edge,
+    type Geometry,
+  } from "./ticker";
   import { ALL_CHANNELS_VIEW, setWindowTitle, type GroupView } from "./windows";
   import type { Channel } from "./streams";
   import {
+    isRemote,
     loadConfig,
     onCleared,
+    onReconnected,
     onConfigChanged,
     onSessionState,
     onTranscript,
@@ -129,6 +142,10 @@
   };
 
   const close = () => {
+    if (isRemote) {
+      window.close();
+      return;
+    }
     getCurrentWindow()
       .close()
       .catch((e) => console.warn("the ticker did not close:", e));
@@ -167,7 +184,14 @@
     };
     first().catch((e) => (failure = String(e)));
 
+    // A remote ticker that lost the socket missed what was said meanwhile,
+    // and opens again for `GroupWindow`'s reason. Never fires in the app.
+    const reconnected = onReconnected(() => {
+      first().catch((e) => (failure = String(e)));
+    });
+
     return () => {
+      reconnected();
       for (const subscription of subscriptions) {
         subscription.then((unlisten) => unlisten()).catch(() => {});
       }
@@ -250,6 +274,18 @@
   let place: Geometry | null = null;
 
   $effect(() => {
+    // A pop-up's place is the browser's to report, and it reports no moves:
+    // it is read off the window as it is resized and once more as it goes.
+    if (isRemote) {
+      const keep = () => savePopupPlace(view);
+      window.addEventListener("resize", keep);
+      window.addEventListener("pagehide", keep);
+      return () => {
+        window.removeEventListener("resize", keep);
+        window.removeEventListener("pagehide", keep);
+      };
+    }
+
     const me = getCurrentWindow();
     const keep = (next: Partial<Geometry>) => {
       if (place === null) return;
@@ -289,7 +325,9 @@
   <!-- What the window is moved by: without a title bar, something has to be
        the title bar. A strip down the edge rather than across the top,
        because the top is a line of text the ticker cannot spare. -->
-  <div class="grip" data-tauri-drag-region title="{name} — drag to move"></div>
+  {#if !isRemote}
+    <div class="grip" data-tauri-drag-region title="{name} — drag to move"></div>
+  {/if}
 
   <div class="lines" class:newest-top={newestTop}>
     {#if failure}
@@ -317,7 +355,7 @@
     {/if}
   </div>
 
-  {#each EDGES as edge}
+  {#each isRemote ? [] : EDGES as edge}
     <div
       class="resize {edge}"
       aria-hidden="true"

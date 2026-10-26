@@ -439,11 +439,36 @@ export const on = <T>(event: string, fn: (payload: T) => void): Promise<Unlisten
   });
 };
 
+// --- Between this browser's pages (remote only) ---------------------------
+
+/// What a page's sibling pages hear from it: the tabs and pop-ups opened from
+/// the same app in the same browser. The browser's equivalent of Tauri's
+/// window-to-window events, and on the same origin by construction — every
+/// one of them was served by the same app.
+///
+/// `null` where there is none: in the app, under the unit tests, and in a
+/// browser too old to have one, where a pop-up still shows what it shows and
+/// only its requests to the main tab go nowhere.
+const siblings: BroadcastChannel | null =
+  isRemote && typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("fluestr") : null;
+
+if (siblings) {
+  siblings.onmessage = (message) => {
+    const frame = message.data as { event?: unknown; payload?: unknown } | null;
+    if (typeof frame?.event !== "string") return;
+    for (const fn of listeners.get(frame.event) ?? []) fn(frame.payload);
+  };
+}
+
 /// Sends an event from this view to the app's other views.
 ///
-/// Window-to-window traffic, and only ever that — the group window asking the
-/// main window to remember its pin. A browser has no such sibling and nothing
-/// to say to one, so it is a no-op there rather than a socket frame the
-/// backend has no reason to route.
-export const emit = (event: string, payload: unknown): Promise<void> =>
-  isRemote ? Promise.resolve() : tauriEmit(event, payload);
+/// Window-to-window traffic, and only ever that — a pop-up asking the main
+/// window to store an edit or to show a line. In a browser it goes to the
+/// pages this browser has open on the app, and to no other machine: what one
+/// operator's pop-up asks of their own main tab is nobody else's business,
+/// and the backend has no reason to route it.
+export const emit = (event: string, payload: unknown): Promise<void> => {
+  if (!isRemote) return tauriEmit(event, payload);
+  siblings?.postMessage({ event, payload });
+  return Promise.resolve();
+};

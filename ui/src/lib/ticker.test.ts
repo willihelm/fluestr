@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { geometryKey, MIN_HEIGHT, MIN_WIDTH, readGeometry, resized } from "./ticker";
+import {
+  geometryKey,
+  MIN_HEIGHT,
+  MIN_WIDTH,
+  popupFeatures,
+  POPUP_HEIGHT,
+  POPUP_WIDTH,
+  readGeometry,
+  resized,
+} from "./ticker";
 import { ALL_CHANNELS_VIEW } from "./windows";
 
 describe("readGeometry", () => {
@@ -63,5 +72,24 @@ describe("resized", () => {
     const squashed = resized(start, "top", 0, 5000, 2);
     expect(squashed.height).toBe(MIN_HEIGHT * 2);
     expect(squashed.y + squashed.height).toBe(start.y + start.height);
+  });
+});
+
+// A remote ticker is a pop-up (P16), opened where the last one was left.
+describe("popupFeatures", () => {
+  it("opens at the app's default strip the first time", () => {
+    expect(popupFeatures(null)).toBe(`popup,width=${POPUP_WIDTH},height=${POPUP_HEIGHT}`);
+  });
+
+  it("opens where the last one was left", () => {
+    expect(popupFeatures({ x: 20, y: -900, width: 800, height: 90 })).toBe(
+      "popup,width=800,height=90,left=20,top=-900",
+    );
+  });
+
+  it("never opens smaller than a ticker can be", () => {
+    expect(popupFeatures({ x: 0, y: 0, width: 10, height: 10 })).toBe(
+      `popup,width=${MIN_WIDTH},height=${MIN_HEIGHT},left=0,top=0`,
+    );
   });
 });

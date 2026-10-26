@@ -114,3 +114,55 @@ export const resized = (
   }
   return next;
 };
+
+// --- In a browser (P16) ---------------------------------------------------
+//
+// A remote ticker is a pop-up, and a page can neither read where a pop-up was
+// moved to as it happens nor put it anywhere once it is open — only say where
+// it opens. So the place is written when the ticker is resized and when it
+// goes, and read by the page that opens the next one. In CSS pixels, which is
+// what `window.open` takes, and under a key of its own: the app's physical
+// pixels are a different unit, and the browser is a different machine's
+// screen as often as not.
+
+export const popupKey = (view: GroupView): string => `fluestr.ticker-popup.${view}`;
+
+/// The size a remote ticker opens at the first time: the app's default strip.
+/// Kept in step with `DEFAULT_WIDTH` and `DEFAULT_HEIGHT` in
+/// `crates/app/src/ticker.rs`.
+export const POPUP_WIDTH = 640;
+export const POPUP_HEIGHT = 76;
+
+/// The `window.open` features for a view's remote ticker: where the last one
+/// was left, or the default size wherever the browser puts it.
+export const popupFeatures = (place: Geometry | null): string => {
+  const width = Math.max(MIN_WIDTH, place?.width ?? POPUP_WIDTH);
+  const height = Math.max(MIN_HEIGHT, place?.height ?? POPUP_HEIGHT);
+  const at = place === null ? "" : `,left=${place.x},top=${place.y}`;
+  return `popup,width=${width},height=${height}${at}`;
+};
+
+/// Where this view's remote ticker was last left, or `null` for the default.
+export const loadPopupPlace = (view: GroupView): Geometry | null => {
+  try {
+    return readGeometry(window.localStorage.getItem(popupKey(view)));
+  } catch {
+    return null;
+  }
+};
+
+/// Remembers where this remote ticker is, read off the window it is in.
+export const savePopupPlace = (view: GroupView) => {
+  const place: Geometry = {
+    x: Math.round(window.screenX),
+    y: Math.round(window.screenY),
+    width: Math.round(window.innerWidth),
+    height: Math.round(window.innerHeight),
+  };
+  if (place.width <= 0 || place.height <= 0) return;
+  try {
+    window.localStorage.setItem(popupKey(view), JSON.stringify(place));
+  } catch {
+    // No storage — the next ticker opens at the default place.
+  }
+};

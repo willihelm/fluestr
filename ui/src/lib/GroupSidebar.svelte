@@ -127,8 +127,8 @@
   /// on top, for beside the DAW. Addressed like `detach`, and focused rather
   /// than stacked when it is already open, for the same reason.
   ///
-  /// Only offered where windows can be kept in front of each other, which is
-  /// the whole of what a ticker is — the pin's rule, and its reason.
+  /// In a browser it is a pop-up instead, which cannot stay in front of
+  /// anything but is still the least room a view can be read in.
   const ticker = (view: GroupView, name: string) => {
     openTickerWindow(view, name).catch((e) => console.warn("the ticker did not open:", e));
   };
@@ -234,19 +234,13 @@
   <!-- The ticker's button, beside "detach" on every row. Drawn: a strip with
        two lines of text in it, for the reason the detach glyph is drawn. -->
   {#snippet tickerButton(view: GroupView, name: string)}
-    {#if canPin}
-      <button
-        class="detach"
-        onclick={() => ticker(view, name)}
-        title="Open {name} as a ticker that stays on top"
-        aria-label="Open {name} as a ticker that stays on top"
-      >
-        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-          <rect x="1" y="4" width="14" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
-          <path d="M4 7h8M4 9.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-        </svg>
-      </button>
-    {/if}
+    {@const what = canPin ? `Open ${name} as a ticker that stays on top` : `Open ${name} as a ticker`}
+    <button class="detach" onclick={() => ticker(view, name)} title={what} aria-label={what}>
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+        <rect x="1" y="4" width="14" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3" />
+        <path d="M4 7h8M4 9.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+      </svg>
+    </button>
   {/snippet}
 
   <!-- A row is a button and carries a second one, so it is a div rather than a

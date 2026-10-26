@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { ALL_CHANNELS_VIEW, groupIndexOf, groupParamOf, tickerIndexOf } from "./windows";
+import {
+  ALL_CHANNELS_VIEW,
+  groupIndexOf,
+  groupParamOf,
+  shoutboxParamOf,
+  tickerIndexOf,
+  tickerParamOf,
+} from "./windows";
 
 describe("groupIndexOf", () => {
   it("reads the group out of a group window's label", () => {
@@ -78,5 +85,30 @@ describe("tickerIndexOf", () => {
     expect(tickerIndexOf("ticker-two")).toBeNull();
     expect(tickerIndexOf("ticker-alle")).toBeNull();
     expect(tickerIndexOf("ticker--1")).toBeNull();
+  });
+});
+
+// The browser's half of the two pop-ups (P16): a remote ticker is
+// `?ticker=2`, the shoutbox `?shoutbox`.
+describe("tickerParamOf", () => {
+  it("reads the view out of a remote ticker's URL", () => {
+    expect(tickerParamOf("?ticker=0")).toBe(0);
+    expect(tickerParamOf("?ticker=all")).toBe(ALL_CHANNELS_VIEW);
+  });
+
+  it("takes a group tab or the main view for no ticker", () => {
+    expect(tickerParamOf("?group=2")).toBeNull();
+    expect(tickerParamOf("")).toBeNull();
+    expect(tickerParamOf("?ticker=")).toBeNull();
+    expect(tickerParamOf("?ticker=-1")).toBeNull();
+  });
+});
+
+describe("shoutboxParamOf", () => {
+  it("knows the shoutbox pop-up by its parameter", () => {
+    expect(shoutboxParamOf("?shoutbox")).toBe(true);
+    expect(shoutboxParamOf("?shoutbox=")).toBe(true);
+    expect(shoutboxParamOf("")).toBe(false);
+    expect(shoutboxParamOf("?group=shoutbox")).toBe(false);
   });
 });
