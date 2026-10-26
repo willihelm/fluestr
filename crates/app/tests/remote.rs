@@ -423,9 +423,11 @@ async fn a_key_stands_in_front_of_the_socket() {
         .expect("offering a key");
     assert_eq!(refused.status().as_u16(), 403);
 
+    // In the other case, because the key screen shows whatever is typed in upper
+    // case and a difference nobody can see must not be a wrong key.
     let accepted = client
         .post(format!("{base}/auth"))
-        .body(KEY)
+        .body(KEY.to_uppercase())
         .send()
         .await
         .expect("offering the key");

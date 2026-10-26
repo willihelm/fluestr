@@ -989,7 +989,7 @@ async fn proxy(dev: &str, path: &str) -> Response {
 /// one of them only ever has to be compared. Keyed with the secret — see
 /// [`COOKIE_DOMAIN`] for why that matters.
 fn cookie_for(secret: &[u8; 32], key: &str) -> String {
-    let message = [COOKIE_DOMAIN.as_bytes(), key.as_bytes()].concat();
+    let message = [COOKIE_DOMAIN.as_bytes(), folded(key).as_bytes()].concat();
     hex::encode(mac(secret, &message))
 }
 
@@ -1001,6 +1001,16 @@ fn cookie_for(secret: &[u8; 32], key: &str) -> String {
 fn same(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |seen, (x, y)| seen | (x ^ y)) == 0
+}
+
+/// A key with its case taken out of it, for comparing.
+///
+/// The key screen draws what is typed in upper case, so a key typed in lower
+/// case looks right and would be refused for a difference nobody can see.
+/// Folded on both sides of every check — and in the cookie, so a key whose
+/// case was edited in Settings does not log everybody out.
+fn folded(key: &str) -> String {
+    key.to_uppercase()
 }
 
 /// One cookie out of the header, by name.
@@ -1130,7 +1140,7 @@ async fn unlock<R: Runtime>(
             .into_response();
     }
 
-    if !same(offered.trim(), &key) {
+    if !same(&folded(offered.trim()), &folded(&key)) {
         server.hub.gate.failed(who.ip());
         tracing::warn!(from = %who.ip(), "a wrong key was offered to the remote");
         return (StatusCode::FORBIDDEN, "that is not the key").into_response();
@@ -1579,6 +1589,18 @@ mod tests {
     #[test]
     fn no_key_lets_everyone_in() {
         assert!(unlocked(&HeaderMap::new(), &[0; 32], ""));
+    }
+
+    /// The key screen shows what is typed in upper case, so case cannot be
+    /// what makes a key wrong — not when it is offered, and not in the cookie.
+    #[test]
+    fn a_key_is_the_same_key_in_any_case() {
+        assert!(same(&folded("k7p4m2rq"), &folded("K7P4M2RQ")));
+        assert!(!same(&folded("k7p4m2rq"), &folded("K7P4M2RX")));
+        assert_eq!(
+            cookie_for(&[7; 32], "k7p4m2rq"),
+            cookie_for(&[7; 32], "K7P4M2RQ")
+        );
     }
 
     /// And a key means the cookie, or nothing.

@@ -46,9 +46,9 @@
 
     <label>
       <span>Key</span>
-      <!-- `autocapitalize` off because the alphabet is upper case and a phone
-           that capitalises the first letter and nothing else produces a key
-           that is wrong in a way nobody can see. -->
+      <!-- Shown and capitalised in upper case because the alphabet is. The
+           server compares without case, so what is typed in lower case on a
+           keyboard that ignores `autocapitalize` still gets in. -->
       <input
         bind:value={key}
         type="text"
