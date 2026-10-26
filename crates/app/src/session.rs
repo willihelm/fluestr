@@ -98,15 +98,11 @@ const NO_SPEECH_THRESHOLD: f32 = 0.6;
 /// said a moment ago, which the "speaking…" placeholder already covers.
 const PREVIEW_FIRST: Duration = Duration::from_millis(1_000);
 
-/// How much more has to have been said before the next preview of the same
-/// segment is asked for (P28).
-///
-/// Growth rather than a clock, so that a pool with nothing else to do is not
-/// asked to decode the same audio twice, and a decode takes about half of
-/// this — two passes at most queue up behind each other on a busy stream, and
-/// the slot replaces rather than queues even then. A six-second segment costs
-/// about six previews.
-const PREVIEW_STEP: Duration = Duration::from_millis(800);
+// How much more has to have been said before the next preview of the same
+// segment is asked for is a setting since it turned out to be what a long
+// monologue costs the GPU — see `config::Tuning::preview_step_ms`. Growth
+// rather than a clock, so that a pool with nothing else to do is not asked to
+// decode the same audio twice.
 
 /// One intercom channel, as the UI configures it.
 ///
@@ -148,6 +144,18 @@ pub struct StreamConfig {
     /// which is exactly what every channel in it did.
     #[serde(default)]
     pub muted: bool,
+    /// Whether this channel gets a live draft while somebody talks on it
+    /// (P28). Off excludes it from the preview alone: its lines are decoded
+    /// as before, they only arrive without a draft ahead of them.
+    ///
+    /// `default = "enabled"` — drafted — for a configuration written before
+    /// it existed, in which every channel was.
+    #[serde(default = "enabled")]
+    pub preview: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 /// A change to one channel of a session that is already running (P6).
@@ -195,6 +203,10 @@ pub struct StreamUpdate {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub muted: Option<bool>,
+    /// Whether the channel gets a live draft. See [`StreamConfig::preview`].
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub preview: Option<bool>,
 }
 
 /// What the UI sends to start a session.
@@ -401,6 +413,8 @@ pub struct RunningStream {
     /// Muted by the operator: the audio arrives and is metered, and nothing
     /// is transcribed from it. See [`StreamConfig::muted`].
     pub muted: bool,
+    /// Gets a live draft. See [`StreamConfig::preview`].
+    pub preview: bool,
     /// The trim actually in force, which is the configured one clamped into
     /// range. Echoed back for the same reason the channel is: this is the
     /// authority on what the session is doing, and a knob that shows a value
@@ -492,6 +506,9 @@ struct Pipeline {
     /// or half a sentence sits in the segmenter until the channel is unmuted
     /// and then arrives in the chat minutes late.
     was_muted: bool,
+    /// Shared with [`Session::previews`]: whether this channel is drafted
+    /// (P28), read once per pump like the mute.
+    preview: Arc<AtomicBool>,
     /// Whether the segmenter's gate was open at the last pump, so that only
     /// its edges are reported (P23).
     speaking: bool,
@@ -556,6 +573,9 @@ pub struct Session {
     /// decoded rather than left in the segmenter until the channel comes
     /// back. That is a comparison the reader makes, not a message it is sent.
     mutes: HashMap<u16, Arc<AtomicBool>>,
+    /// Whether each live stream is drafted (P28), shared with the pipeline
+    /// that reads it once per pump.
+    previews: HashMap<u16, Arc<AtomicBool>>,
     /// What whisper is told before each segment (P25), shared with the pool
     /// that reads it and the aggregator that feeds it each channel's last
     /// sentence. Here so that a language change and the switch on the
@@ -760,6 +780,7 @@ impl Session {
                 label: stream.label.clone(),
                 absent: stream.channel >= info.channels,
                 muted: stream.muted,
+                preview: stream.preview,
                 gain_db: audio_core::gain::clamp_db(stream.gain_db),
             })
             .collect();
@@ -787,6 +808,7 @@ impl Session {
         // paying for eight of them for a device that was going to refuse.
         let mut pipelines = Vec::with_capacity(live.len());
         let mut mutes: HashMap<u16, Arc<AtomicBool>> = HashMap::with_capacity(live.len());
+        let mut previews: HashMap<u16, Arc<AtomicBool>> = HashMap::with_capacity(live.len());
         for (&(stream_id, stream), source) in live.iter().zip(sources) {
             let gain = gains[&stream_id].clone();
             // Held on both sides like the trim: the pipeline reads it, the M
@@ -794,6 +816,8 @@ impl Session {
             let muted = stream.muted;
             let mute = Arc::new(AtomicBool::new(muted));
             mutes.insert(stream_id, mute.clone());
+            let preview = Arc::new(AtomicBool::new(stream.preview));
+            previews.insert(stream_id, preview.clone());
             pipelines.push(Pipeline {
                 processor: StreamProcessor::new(source, granted)?,
                 segmenter: Segmenter::new(
@@ -824,6 +848,7 @@ impl Session {
                 gain,
                 mute,
                 was_muted: muted,
+                preview,
                 speaking: false,
                 previewed: 0,
                 previewed_seq: 0,
@@ -884,6 +909,7 @@ impl Session {
                 replay,
                 activity,
                 live_preview: config.tuning.live_preview,
+                preview_step: config.tuning.preview_step(),
                 solo: crate::solo::Mixer::new(solo, granted, taps),
             },
         );
@@ -923,6 +949,7 @@ impl Session {
                 tuning,
                 gains,
                 mutes,
+                previews,
                 prompter,
                 running: std::sync::Mutex::new(state.clone()),
                 events,
@@ -1001,6 +1028,22 @@ impl Session {
                 mute.store(muted, Ordering::Relaxed);
             }
             tracing::info!(stream_id = update.stream_id, muted, "stream mute changed");
+        }
+
+        if let Some(preview) = update.preview {
+            stream.preview = preview;
+            if let Some(flag) = self.previews.get(&update.stream_id) {
+                flag.store(preview, Ordering::Relaxed);
+            }
+            if !preview {
+                // A draft still waiting would be decoded for nobody.
+                self.pool.cancel_preview(StreamId(update.stream_id));
+            }
+            tracing::info!(
+                stream_id = update.stream_id,
+                preview,
+                "stream preview changed"
+            );
         }
 
         if let Some(language) = update.language {
@@ -1169,6 +1212,9 @@ struct Wiring {
     /// Whether open segments are decoded while they are spoken (P28), as the
     /// session started. Changes arrive with the rest of the tuning.
     live_preview: bool,
+    /// How much a segment has to grow between two previews (P28), as the
+    /// session started. Changes arrive with the rest of the tuning.
+    preview_step: Duration,
     /// The soloed inputs, mixed and sent to the headphones every pump.
     solo: crate::solo::Mixer,
 }
@@ -1187,6 +1233,7 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
         replay,
         activity,
         mut live_preview,
+        mut preview_step,
         mut solo,
     } = wiring;
     // Every segment goes through here on its way to the pool, so this is
@@ -1272,9 +1319,11 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
                         max_segment_ms = tuning.max_segment_ms,
                         threshold = tuning.speech_threshold_percent,
                         live_preview = tuning.live_preview,
+                        preview_step_ms = tuning.preview_step_ms,
                         "detection thresholds changed"
                     );
                     live_preview = tuning.live_preview;
+                    preview_step = tuning.preview_step();
                     for pipeline in &mut pipelines {
                         pipeline
                             .segmenter
@@ -1351,8 +1400,8 @@ fn spawn_processor(mut pipelines: Vec<Pipeline>, wiring: Wiring) -> JoinHandle<(
 
                     // After the gate, so a preview is only ever asked for a
                     // segment the views already show a placeholder for.
-                    if live_preview && !muted {
-                        request_preview(pipeline, &pool, &activity, started);
+                    if live_preview && !muted && pipeline.preview.load(Ordering::Relaxed) {
+                        request_preview(pipeline, &pool, &activity, started, preview_step);
                     }
                 }
                 if let Some(message) = failed {
@@ -1412,6 +1461,7 @@ fn request_preview(
     pool: &WorkerPool,
     activity: &Activity,
     started: Instant,
+    step: Duration,
 ) {
     let open = pipeline.segmenter.open_samples();
     let seq = pipeline.segmenter.emitted();
@@ -1423,7 +1473,7 @@ fn request_preview(
     let due = if pipeline.previewed == 0 {
         open >= samples(PREVIEW_FIRST)
     } else {
-        open >= pipeline.previewed + samples(PREVIEW_STEP)
+        open >= pipeline.previewed + samples(step)
     };
     if !due {
         return;
@@ -2364,6 +2414,7 @@ mod tests {
                     label: "Regie".into(),
                     absent: false,
                     muted: true,
+                    preview: false,
                     gain_db: 6,
                 },
                 RunningStream {
@@ -2372,6 +2423,7 @@ mod tests {
                     label: "Licht".into(),
                     absent: true,
                     muted: false,
+                    preview: true,
                     gain_db: 0,
                 },
             ],

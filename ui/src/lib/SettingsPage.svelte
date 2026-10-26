@@ -10,6 +10,7 @@
     | "detection"
     | "vocabulary"
     | "remote"
+    | "startup"
     | "view";
 
   /// How urgently a section wants attention, shown as a dot on its rail item.
@@ -59,6 +60,7 @@
   import GroupMembership from "./GroupMembership.svelte";
   import ModelPicker from "./ModelPicker.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
+  import StartupSettings from "./StartupSettings.svelte";
   import ViewSettings from "./ViewSettings.svelte";
   import DetectionSettings from "./DetectionSettings.svelte";
   import ListenSettings from "./ListenSettings.svelte";
@@ -107,6 +109,10 @@
     /// to hear belongs to the house, not to the production passing through
     /// it.
     tuning: Tuning;
+    /// Whether the session starts the moment the app opens (P12). Beside the
+    /// login item in Startup, because the two together are what turns a rack
+    /// that is switched on into one that is transcribing.
+    autoStart: boolean;
     deviceChannels: number;
     /// Whether a session is starting — or restarting to take on an edit. The
     /// only time the setup is not editable: what is being opened is read from
@@ -140,6 +146,7 @@
             language?: string;
             gainDb?: number;
             muted?: boolean;
+            preview?: boolean;
           },
         ) => void)
       | null;
@@ -181,6 +188,7 @@
     remote = $bindable(),
     sort = $bindable(),
     tuning = $bindable(),
+    autoStart = $bindable(),
     deviceChannels,
     locked,
     pending,
@@ -305,6 +313,9 @@
     // where the address that caused it is. A dot on the rail would be pointing
     // at a setting that is off on most machines and fine on the rest.
     remote: null,
+    // Never flagged: off is the normal state for both switches, and a failure
+    // to change the login item is said beside it.
+    startup: null,
     models: modelFlag,
     // Never flagged: there is no wrong setting here, only one that suits the
     // house better or worse, and the operator finds that out by listening
@@ -331,6 +342,9 @@
         // — and a browser switching off the thing serving it is a page pulling
         // the floor out from under itself.
         ...(isRemote ? [] : [{ id: "remote" as Section, title: "Remote client" }]),
+        // On the remote as well, for the session's half: the login item is
+        // the host machine's and is left out there — see `StartupSettings`.
+        { id: "startup", title: "Startup" },
       ],
     },
     {
@@ -587,6 +601,10 @@
           <RemoteSettings bind:remote />
         </div>
       {/if}
+
+      <div class="sheet" hidden={section !== "startup"}>
+        <StartupSettings bind:autoStart />
+      </div>
 
       <div class="sheet" hidden={section !== "detection"}>
         <DetectionSettings bind:tuning {running} />

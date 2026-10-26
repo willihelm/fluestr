@@ -28,6 +28,9 @@ export interface Channel {
   /// Not the same thing as a channel the device does not have — see
   /// [`absentChannels`]. One is a decision, the other is an interface.
   muted: boolean;
+  /// Gets a live draft while somebody talks on it (P28). Off for a channel
+  /// whose drafts are not worth the GPU; its lines still arrive as before.
+  preview: boolean;
 }
 
 /// A trim the backend will accept unchanged.
@@ -84,6 +87,8 @@ export const newChannel = (
     gainDb: 0,
     // Open, for the same reason: a channel is added in order to be heard.
     muted: false,
+    // Drafted, like every channel until somebody decides otherwise.
+    preview: true,
   };
 };
 
@@ -99,7 +104,7 @@ export const restoreChannel = (
   // `muted` optional, unlike the rest: a file written before it existed does
   // not carry it, and the frontend reads those files as well as the backend
   // does.
-  stored: Omit<Channel, "key" | "muted"> & { muted?: boolean },
+  stored: Omit<Channel, "key" | "muted" | "preview"> & { muted?: boolean; preview?: boolean },
 ): Channel => ({
   ...stored,
   key: nextKey++,
@@ -110,6 +115,8 @@ export const restoreChannel = (
   // A file written before mute existed has no such field, and every channel
   // in it was open.
   muted: stored.muted ?? false,
+  // The same for drafts: every channel was drafted.
+  preview: stored.preview ?? true,
 });
 
 /// Every channel put onto one language.
@@ -139,6 +146,7 @@ export const toConfig = (channels: Channel[]): StreamConfig[] =>
     language: c.language.trim().toLowerCase(),
     gainDb: clampGain(c.gainDb),
     muted: c.muted,
+    preview: c.preview,
   }));
 
 /// Why the setup cannot be started, or `null` if it can.

@@ -158,6 +158,8 @@ export {
   MAX_SEGMENT_MS_MAX,
   MAX_SEGMENT_MS_MIN,
   MAX_WORKERS,
+  PREVIEW_STEP_MS_MAX,
+  PREVIEW_STEP_MS_MIN,
   REMOTE_DEFAULT_PORT,
   SHOUTBOX_CEILING_DBFS_MAX,
   SHOUTBOX_CEILING_DBFS_MIN,
@@ -200,6 +202,22 @@ export const pickModelFile = (current: string | null) =>
 /// downloads, and the path field is still editable — what it cannot offer is
 /// the button.
 export const canPickModelFile = !isRemote;
+
+/// Whether the app starts when the user logs in to this machine.
+///
+/// Read from the operating system, not from the configuration — see
+/// `autostart_enabled` on the Rust side.
+export const autostartEnabled = () => invoke<boolean>("autostart_enabled");
+/// Turns starting at login on or off, and answers with what holds afterwards.
+export const setAutostart = (enabled: boolean) =>
+  invoke<boolean>("set_autostart", { enabled });
+
+/// Whether there is a login to start with at all.
+///
+/// Desktop only, for the file dialog's reason: it is the host machine that
+/// would start, and a browser on another machine has no business deciding
+/// what that machine does when it is switched on.
+export const canAutostart = !isRemote;
 
 /// The catalogue and what a session would start with.
 ///

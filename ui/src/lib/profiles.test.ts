@@ -44,7 +44,15 @@ const anOldFile = <T>(written: unknown): T => written as T;
 /// Settings page builds one — with keys, not positions.
 const aProfile = (): Profile => {
   const channels = [
-    restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false }),
+    restoreChannel({
+      channel: 0,
+      label: "Regie",
+      language: "de",
+      color: "#6ea8fe",
+      gainDb: 0,
+      muted: false,
+      preview: true,
+    }),
     // Trimmed and muted, so the round trip has values to lose.
     restoreChannel({
       channel: 3,
@@ -53,6 +61,8 @@ const aProfile = (): Profile => {
       color: "#5fd38d",
       gainDb: 9,
       muted: true,
+      // Undrafted, so the round trip has that to lose too.
+      preview: false,
     }),
   ];
 
@@ -105,6 +115,7 @@ const stored: StoredProfile = {
       color: "#6ea8fe",
       gainDb: 0,
       muted: false,
+      preview: true,
     },
     {
       channel: 3,
@@ -113,6 +124,7 @@ const stored: StoredProfile = {
       color: "#5fd38d",
       gainDb: 9,
       muted: true,
+      preview: false,
     },
   ],
   groups: [{ name: "Bühne", onTop: false, members: [1] }],
@@ -434,6 +446,7 @@ describe("the configuration as a whole", () => {
       speechThresholdPercent: 65,
       carryContext: false,
       livePreview: false,
+      previewStepMs: 1_500,
     });
 
     expect(config.tuning).toEqual({
@@ -442,6 +455,7 @@ describe("the configuration as a whole", () => {
       speechThresholdPercent: 65,
       carryContext: false,
       livePreview: false,
+      previewStepMs: 1_500,
     });
   });
 
@@ -475,11 +489,13 @@ describe("the configuration as a whole", () => {
       speechThresholdPercent: 250,
       carryContext: true,
       livePreview: true,
+      previewStepMs: 50,
     });
 
     expect(clamped.silenceTimeoutMs).toBeGreaterThanOrEqual(150);
     expect(clamped.maxSegmentMs).toBeLessThanOrEqual(15_000);
     expect(clamped.speechThresholdPercent).toBe(100);
+    expect(clamped.previewStepMs).toBe(300);
   });
 
   // A file written before the live preview existed (P28) gets it switched on,
@@ -493,6 +509,7 @@ describe("the configuration as a whole", () => {
     } as Tuning);
 
     expect(clamped.livePreview).toBe(true);
+    expect(clamped.previewStepMs).toBe(DEFAULT_TUNING.previewStepMs);
   });
 
   it("falls back to the default rather than storing a box that is not a number", () => {
@@ -502,6 +519,7 @@ describe("the configuration as a whole", () => {
       speechThresholdPercent: Number.NaN,
       carryContext: true,
       livePreview: true,
+      previewStepMs: Number.NaN,
     });
 
     expect(clamped).toEqual(DEFAULT_TUNING);
@@ -839,6 +857,7 @@ describe("adopting a configuration", () => {
         speechThresholdPercent: 60,
         carryContext: false,
         livePreview: false,
+        previewStepMs: 1_500,
       },
       true,
       true,

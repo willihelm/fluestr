@@ -18,10 +18,12 @@
   // out to be wrong in the middle of a show — somebody else took the position
   // over, the guest director speaks English, nobody had spoken on that channel
   // during the sound check, somebody left their beltpack open in the workshop.
-  // The colour is the view's alone and simply repaints. The channel map —
-  // adding, removing, repatching — is fixed when capture opens, so a change to
-  // it restarts the session (see `restartKey` in `App.svelte`). Only while a
-  // session is starting is the list locked.
+  // The drafts (D) are live as well: which channel is not worth drafting
+  // shows when the GPU falls behind, which is during the show. The colour is the view's
+  // alone and simply repaints. The channel map — adding, removing, repatching
+  // — is fixed when capture opens, so a change to it restarts the session
+  // (see `restartKey` in `App.svelte`). Only while a session is starting is
+  // the list locked.
 
   import {
     newChannel,
@@ -34,6 +36,7 @@
   import LanguagePicker from "./LanguagePicker.svelte";
   import GainKnob from "./GainKnob.svelte";
   import MuteButton from "./MuteButton.svelte";
+  import DraftButton from "./DraftButton.svelte";
   import SoloButton from "./SoloButton.svelte";
   import { canSolo, watchSolo } from "./solo.svelte";
   import LevelMeter from "./LevelMeter.svelte";
@@ -77,6 +80,7 @@
             language?: string;
             gainDb?: number;
             muted?: boolean;
+            preview?: boolean;
           },
         ) => void)
       | null;
@@ -157,7 +161,7 @@
         <span>Ch</span>
         <span>Label</span>
         <span>Lang</span>
-        <span>{canSolo ? "M S" : "M"}</span>
+        <span>{canSolo ? "M S D" : "M D"}</span>
         <span>Gain</span>
         <span>Level</span>
         <span></span>
@@ -237,6 +241,17 @@
               disabled={absent.has(index)}
             />
           {/if}
+          <!-- Live too: a channel whose drafts swamp the GPU shows itself
+               by talking, during the show. -->
+          <DraftButton
+            preview={channel.preview}
+            label={channel.label}
+            disabled={locked && live === null}
+            onchange={(next) => {
+              channel.preview = next;
+              live?.(index, { preview: next });
+            }}
+          />
         </div>
 
         <!-- Live like the label and the language, and for a stronger reason
@@ -332,7 +347,7 @@
        holds a name, and "Portuguese (pt)" truncated to "Portug…" is no better
        than the code it replaced. */
     grid-template-columns:
-      2.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 3.3rem 2.4rem
+      2.6rem 4rem minmax(6rem, 1fr) minmax(7rem, 0.8fr) 5.1rem 2.4rem
       minmax(3rem, 0.7fr) 2rem;
     align-items: center;
     gap: 0.5rem;
@@ -361,8 +376,14 @@
       grid-template-columns: 2.4rem 3.2rem minmax(0, 1fr) minmax(0, 1fr) 2rem;
       grid-template-areas:
         "colour ch label lang end"
-        "mute gain level level level";
+        "mute mute gain level level";
       row-gap: 0.35rem;
+    }
+
+    /* Three keys do not fit beside each other in two narrow columns; they
+       wrap rather than spill into the gain beside them. */
+    .keys {
+      flex-wrap: wrap;
     }
 
     /* Two lines per channel means the eye needs telling where one channel

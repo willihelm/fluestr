@@ -82,9 +82,17 @@ export const MAX_SEGMENT_MS_MIN = 2000;
 export const MAX_SEGMENT_MS_MAX = 15000;
 
 /**
+ * The shortest step between two live previews of one segment the page will
+ * offer, in milliseconds, and the longest. Mirror `config::Tuning::PREVIEW_STEP_MS`.
+ */
+export const PREVIEW_STEP_MS_MIN = 300;
+export const PREVIEW_STEP_MS_MAX = 5000;
+
+/**
  * The three detection thresholds as they stand when nobody has moved them
  * (P12), whether a channel's previous sentence is carried into its next
- * prompt (P25), and whether segments are previewed while spoken (P28). Mirrors `config::Tuning::default()`, which is itself the
+ * prompt (P25), and whether and how often segments are previewed while spoken
+ * (P28). Mirrors `config::Tuning::default()`, which is itself the
  * constants the app compiled in before they were settings — so a file written
  * before that and a fresh install describe the same pipeline.
  */
@@ -94,6 +102,7 @@ export const DEFAULT_TUNING = {
   speechThresholdPercent: 50,
   carryContext: true,
   livePreview: true,
+  previewStepMs: 800,
 };
 
 /**

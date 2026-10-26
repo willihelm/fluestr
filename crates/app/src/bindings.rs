@@ -104,9 +104,17 @@ export const MAX_SEGMENT_MS_MIN = {max_segment_min};
 export const MAX_SEGMENT_MS_MAX = {max_segment_max};
 
 /**
+ * The shortest step between two live previews of one segment the page will
+ * offer, in milliseconds, and the longest. Mirror `config::Tuning::PREVIEW_STEP_MS`.
+ */
+export const PREVIEW_STEP_MS_MIN = {preview_step_min};
+export const PREVIEW_STEP_MS_MAX = {preview_step_max};
+
+/**
  * The three detection thresholds as they stand when nobody has moved them
  * (P12), whether a channel's previous sentence is carried into its next
- * prompt (P25), and whether segments are previewed while spoken (P28). Mirrors `config::Tuning::default()`, which is itself the
+ * prompt (P25), and whether and how often segments are previewed while spoken
+ * (P28). Mirrors `config::Tuning::default()`, which is itself the
  * constants the app compiled in before they were settings — so a file written
  * before that and a fresh install describe the same pipeline.
  */
@@ -116,6 +124,7 @@ export const DEFAULT_TUNING = {{
   speechThresholdPercent: {default_threshold},
   carryContext: {default_carry},
   livePreview: {default_live_preview},
+  previewStepMs: {default_preview_step},
 }};
 
 /**
@@ -172,6 +181,9 @@ export const SHOUTBOX_ESTIMATED_CALIBRATION_DB = {shout_estimated};
         default_threshold = crate::config::Tuning::default().speech_threshold_percent,
         default_carry = crate::config::Tuning::default().carry_context,
         default_live_preview = crate::config::Tuning::default().live_preview,
+        default_preview_step = crate::config::Tuning::default().preview_step_ms,
+        preview_step_min = crate::config::Tuning::PREVIEW_STEP_MS.start(),
+        preview_step_max = crate::config::Tuning::PREVIEW_STEP_MS.end(),
         default_outputs = serde_json::to_string_pretty(&crate::config::Outputs::default())
             .expect("the default outputs serialise"),
         shout_gain_min = crate::config::Shoutbox::GAIN_DB.start(),

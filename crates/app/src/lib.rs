@@ -433,6 +433,44 @@ async fn pick_model_file<R: Runtime>(app: AppHandle<R>, current: Option<String>)
     dialog.blocking_pick_file().map(|file| file.to_string())
 }
 
+/// Whether the app is registered to start when the user logs in.
+///
+/// Asked of the operating system every time rather than kept in
+/// `config.json`: the entry can be removed behind the app's back — Login Items
+/// on macOS, the Startup tab of the Task Manager on Windows — and a switch that
+/// said "on" from a file would then be lying about the one thing it is for.
+#[tauri::command]
+fn autostart_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    app.autolaunch().is_enabled().map_err(|err| err.to_string())
+}
+
+/// Registers the app to start at login, or removes it again.
+///
+/// Answers with what the operating system says afterwards rather than with
+/// what was asked for, so the switch shows the state that actually holds.
+///
+/// What gets registered is the executable that is running. From a dev build
+/// that is the one under `target/`, which is why this is tried with the
+/// installed app.
+#[tauri::command]
+fn set_autostart<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let changed = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    if let Err(err) = changed {
+        tracing::error!(error = %err, enabled, "changing the login item failed");
+        return Err(err.to_string());
+    }
+    manager.is_enabled().map_err(|err| err.to_string())
+}
+
 /// Asks the platform to draw attention to this window.
 ///
 /// The window it was called from, not "the main window": a detached group
@@ -710,6 +748,15 @@ pub(crate) fn start_session<R: Runtime>(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // A LaunchAgent rather than an AppleScript login item on macOS: the
+        // latter has to drive System Events and asks for an Automation
+        // permission first, which is a dialog nobody setting up a show
+        // expects. The agent is announced once by the system ("background
+        // item added") and listed under Login Items like any other.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let state = AppState::default();
             // A missing configuration directory is not a reason to refuse to
@@ -805,6 +852,8 @@ pub fn run() {
             commands::command,
             // What only a window can do.
             pick_model_file,
+            autostart_enabled,
+            set_autostart,
             request_attention,
             open_group_window,
             close_group_windows,

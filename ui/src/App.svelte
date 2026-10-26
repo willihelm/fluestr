@@ -311,6 +311,7 @@
       language?: string;
       gainDb?: number;
       muted?: boolean;
+      preview?: boolean;
     },
   ) => {
     // The stream id is a position in the channel list the session was started
@@ -1346,16 +1347,6 @@
         </select>
       {/if}
 
-      <!-- Beside the button it decides the fate of, rather than a page away
-           in Settings: what it sets is exactly "what happens the next time
-           this button would otherwise have to be pressed", and that is a
-           question answered by looking at the button, not by opening a
-           different page to guess at it. -->
-      <label class="auto-start" title="Start automatically the next time the app opens">
-        <input type="checkbox" bind:checked={autoStart} />
-        <span>Auto-start</span>
-      </label>
-
       {#if running}
         <!-- Red, unlike Start: it is the one button in the header that
              ends what is running, and during a show it is pressed by
@@ -1503,6 +1494,7 @@
       bind:remote
       bind:sort={chatSort}
       bind:tuning
+      bind:autoStart
       {deviceChannels}
       locked={busy || restarting}
       {running}
@@ -1712,16 +1704,6 @@
     cursor: default;
   }
 
-  .auto-start {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
   .primary:disabled {
     opacity: 0.5;
     cursor: default;
@@ -1742,7 +1724,7 @@
 
      The same 45 rem as `layout.ts` matches on, written out because a media
      query cannot read a constant. The header is the bar that has to give: it
-     carries a title, the profile picker, Auto-start and Start, and on a phone in
+     carries a title, the profile picker and Start, and on a phone in
      portrait that is two lines of furniture above a chat.
 
      The header stays one line: the mark, the name with the view under it,
@@ -1795,14 +1777,6 @@
 
     .profile {
       max-width: 6.5rem;
-    }
-
-    /* Gone entirely, label and box. It is set once, between shows, and the
-       header on a phone is already the profile picker and Start on one line —
-       the one control here the session turns on. Auto-start keeps whatever it
-       was given on the desk; it is not changed by being unreachable. */
-    .auto-start {
-      display: none;
     }
   }
 

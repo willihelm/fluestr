@@ -84,6 +84,10 @@ absent: boolean,
  */
 muted: boolean, 
 /**
+ * Gets a live draft. See [`StreamConfig::preview`].
+ */
+preview: boolean, 
+/**
  * The trim actually in force, which is the configured one clamped into
  * range. Echoed back for the same reason the channel is: this is the
  * authority on what the session is doing, and a knob that shows a value
@@ -288,7 +292,16 @@ gainDb: number,
  * `default` — unmuted — for a configuration written before mute existed,
  * which is exactly what every channel in it did.
  */
-muted: boolean, };
+muted: boolean, 
+/**
+ * Whether this channel gets a live draft while somebody talks on it
+ * (P28). Off excludes it from the preview alone: its lines are decoded
+ * as before, they only arrive without a draft ahead of them.
+ *
+ * `default = "enabled"` — drafted — for a configuration written before
+ * it existed, in which every channel was.
+ */
+preview: boolean, };
 
 /**
  * Level and health of one stream.
@@ -336,7 +349,11 @@ gainDb?: number | null,
  * Whether the channel is muted — the M beside the meter, pressed during
  * a show, which is the only time it is ever pressed.
  */
-muted?: boolean | null, };
+muted?: boolean | null, 
+/**
+ * Whether the channel gets a live draft. See [`StreamConfig::preview`].
+ */
+preview?: boolean | null, };
 
 /**
  * A finished transcript on its way to the chat view.

@@ -99,6 +99,16 @@ pub struct StoredChannel {
     /// existed describes channels that were all unmuted.
     #[serde(default)]
     pub muted: bool,
+    /// Whether the channel gets a live draft while somebody talks on it
+    /// (P28), as the D beside its M sets it. Off for a channel whose drafts
+    /// are not worth the GPU — a position that talks at length and is read
+    /// afterwards, if at all. Carried into the session as
+    /// [`crate::session::StreamConfig::preview`].
+    ///
+    /// `default = "enabled"`: a file written before it existed drafted every
+    /// channel.
+    #[serde(default = "enabled")]
+    pub preview: bool,
 }
 
 /// A named view onto some of the channels.
@@ -718,6 +728,24 @@ pub struct Tuning {
     /// `default = "enabled"` for `carry_context`'s reason.
     #[serde(default = "enabled")]
     pub live_preview: bool,
+    /// How much more has to have been said before the next live preview of
+    /// the same segment is asked for, in milliseconds (P28).
+    ///
+    /// The cost control of the preview: every draft decodes the whole open
+    /// segment again, so a long monologue at a short step keeps the GPU busy
+    /// for as long as it lasts. Longer is cheaper and updates the draft less
+    /// often.
+    ///
+    /// `default` so that a file written before this existed gets the step the
+    /// app had compiled in.
+    #[serde(default = "default_preview_step_ms")]
+    pub preview_step_ms: u64,
+}
+
+/// The step between two previews the app had compiled in before it was a
+/// setting.
+fn default_preview_step_ms() -> u64 {
+    800
 }
 
 impl Default for Tuning {
@@ -732,6 +760,7 @@ impl Default for Tuning {
             speech_threshold_percent: (audio_core::silero::DEFAULT_ONSET * 100.0).round() as u8,
             carry_context: true,
             live_preview: true,
+            preview_step_ms: default_preview_step_ms(),
         }
     }
 }
@@ -752,6 +781,14 @@ impl Tuning {
     /// that wants whole paragraphs is not stopped by this.
     pub const MAX_SEGMENT_MS: std::ops::RangeInclusive<u64> = 2_000..=15_000;
 
+    /// The shortest step between two live previews, and the longest.
+    ///
+    /// Below 300 ms a draft would be asked for before the last one is back
+    /// on any real model, which buys nothing but a fuller queue. Above five
+    /// seconds a draft arrives about once per segment and the line is
+    /// usually there first.
+    pub const PREVIEW_STEP_MS: std::ops::RangeInclusive<u64> = 300..=5_000;
+
     /// Silence that ends a segment, in range.
     pub fn silence_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(
@@ -768,6 +805,14 @@ impl Tuning {
         )
     }
 
+    /// The step between two live previews, in range.
+    pub fn preview_step(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.preview_step_ms
+                .clamp(*Self::PREVIEW_STEP_MS.start(), *Self::PREVIEW_STEP_MS.end()),
+        )
+    }
+
     /// The detector's onset threshold as a probability.
     pub fn speech_threshold(&self) -> f32 {
         self.speech_threshold_percent.min(100) as f32 / 100.0
@@ -779,6 +824,7 @@ impl Tuning {
         self.silence_timeout_ms = self.silence_timeout().as_millis() as u64;
         self.max_segment_ms = self.max_segment().as_millis() as u64;
         self.speech_threshold_percent = self.speech_threshold_percent.min(100);
+        self.preview_step_ms = self.preview_step().as_millis() as u64;
     }
 }
 
@@ -1350,6 +1396,7 @@ mod tests {
                 speech_threshold_percent: 60,
                 carry_context: false,
                 live_preview: false,
+                preview_step_ms: 1_500,
             },
             auto_start: true,
             setup_done: true,
@@ -1366,6 +1413,7 @@ mod tests {
                         color: "#6ea8fe".into(),
                         gain_db: 0,
                         muted: false,
+                        preview: true,
                     }],
                     groups: vec![],
                     all_channels_flash: false,
@@ -1385,6 +1433,7 @@ mod tests {
                             color: "#6ea8fe".into(),
                             gain_db: 0,
                             muted: false,
+                            preview: true,
                         },
                         StoredChannel {
                             channel: 3,
@@ -1399,6 +1448,8 @@ mod tests {
                             // patched but nobody sits on it, and it would
                             // otherwise fill the chat with the room it is in.
                             muted: true,
+                            // Talks at length, read afterwards: no drafts.
+                            preview: false,
                         },
                     ],
                     groups: vec![StoredGroup {
@@ -1854,6 +1905,7 @@ mod tests {
                 "carryContext",
                 "livePreview",
                 "maxSegmentMs",
+                "previewStepMs",
                 "silenceTimeoutMs",
                 "speechThresholdPercent"
             ]
@@ -1880,7 +1932,7 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
-            ["channel", "color", "gainDb", "label", "language", "muted"]
+            ["channel", "color", "gainDb", "label", "language", "muted", "preview"]
         );
         // The second profile, because it is the one with groups in it.
         assert_eq!(

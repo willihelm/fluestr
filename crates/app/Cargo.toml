@@ -30,6 +30,10 @@ tauri = { version = "2", features = [] }
 # than through its JavaScript package: the picker is one command like every
 # other one here, and the frontend keeps a single way of talking to the backend.
 tauri-plugin-dialog = "2"
+# Starting with the computer: the login item on macOS, the Run key on Windows.
+# Driven from Rust for the dialog's reason — one more command, not a second way
+# of talking to the backend.
+tauri-plugin-autostart = "2"
 sysinfo = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }

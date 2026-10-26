@@ -30,6 +30,8 @@ import {
   MAX_SEGMENT_MS_MAX,
   MAX_SEGMENT_MS_MIN,
   MAX_WORKERS,
+  PREVIEW_STEP_MS_MAX,
+  PREVIEW_STEP_MS_MIN,
   REMOTE_DEFAULT_PORT,
   SILENCE_MS_MAX,
   SILENCE_MS_MIN,
@@ -117,6 +119,14 @@ export const clampTuning = (tuning: Tuning): Tuning => ({
   livePreview: typeof tuning.livePreview === "boolean"
     ? tuning.livePreview
     : GENERATED_TUNING.livePreview,
+  // A file written before the step existed gets the one the app had
+  // compiled in.
+  previewStepMs: clampMs(
+    tuning.previewStepMs,
+    PREVIEW_STEP_MS_MIN,
+    PREVIEW_STEP_MS_MAX,
+    GENERATED_TUNING.previewStepMs,
+  ),
 });
 
 const clampMs = (value: number, min: number, max: number, fallback: number): number =>
@@ -231,6 +241,7 @@ export const toStored = (profile: Profile): StoredProfile => {
       color: c.color,
       gainDb: clampGain(c.gainDb),
       muted: c.muted,
+      preview: c.preview,
     })),
     groups: profile.groups.map((g) => ({
       name: g.name,

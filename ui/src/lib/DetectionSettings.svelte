@@ -23,6 +23,10 @@
   // spoken and shown in its placeholder (P28). Here because it is paid for in
   // decodes like the rest of the page, and because whether text that rewrites
   // itself helps or distracts is judged by ear during a show, like the others.
+  // With it, what the preview costs: how often the draft is redone — each one
+  // decodes the whole open segment again, so a long monologue at a short step
+  // keeps the GPU busy for as long as it lasts. Which channels are drafted
+  // is decided per channel, with the D beside its M in the channel list.
   //
   // **Every change reaches the session that is already running**, on the next
   // segment rather than at the next Start. That is the whole point of the
@@ -32,6 +36,8 @@
   import {
     MAX_SEGMENT_MS_MAX,
     MAX_SEGMENT_MS_MIN,
+    PREVIEW_STEP_MS_MAX,
+    PREVIEW_STEP_MS_MIN,
     SILENCE_MS_MAX,
     SILENCE_MS_MIN,
     type Tuning,
@@ -53,7 +59,8 @@
       tuning.maxSegmentMs === DEFAULT_TUNING.maxSegmentMs &&
       tuning.speechThresholdPercent === DEFAULT_TUNING.speechThresholdPercent &&
       tuning.carryContext === DEFAULT_TUNING.carryContext &&
-      tuning.livePreview === DEFAULT_TUNING.livePreview,
+      tuning.livePreview === DEFAULT_TUNING.livePreview &&
+      tuning.previewStepMs === DEFAULT_TUNING.previewStepMs,
   );
 
   const reset = () => (tuning = { ...DEFAULT_TUNING });
@@ -144,6 +151,30 @@
     </p>
   </div>
 
+  <div class="control">
+    <label for="preview-step">
+      Update the draft every
+      <output for="preview-step">{ms(tuning.previewStepMs)}</output>
+    </label>
+    <input
+      id="preview-step"
+      type="range"
+      min={PREVIEW_STEP_MS_MIN}
+      max={PREVIEW_STEP_MS_MAX}
+      step="100"
+      bind:value={tuning.previewStepMs}
+      disabled={!tuning.livePreview}
+    />
+    <p class="note">
+      Every update decodes everything said so far again. Longer takes load off the GPU when
+      somebody talks for a long time.
+    </p>
+  </div>
+
+  <p class="note">
+    A single channel is taken out of the drafts with the D beside its M in the channel list.
+  </p>
+
   <p class="budget">Worst case until a line appears: <strong>{worstCase}</strong></p>
 </section>
 
@@ -210,6 +241,10 @@
   .switch input {
     margin: 0;
     accent-color: var(--accent);
+  }
+
+  input:disabled {
+    opacity: 0.45;
   }
 
   input[type="range"] {

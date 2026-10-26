@@ -59,7 +59,18 @@ gainDb: number,
  * `#[serde(default)]` for the trim's reason: a file written before mute
  * existed describes channels that were all unmuted.
  */
-muted: boolean, };
+muted: boolean, 
+/**
+ * Whether the channel gets a live draft while somebody talks on it
+ * (P28), as the D beside its M sets it. Off for a channel whose drafts
+ * are not worth the GPU — a position that talks at length and is read
+ * afterwards, if at all. Carried into the session as
+ * [`crate::session::StreamConfig::preview`].
+ *
+ * `default = "enabled"`: a file written before it existed drafted every
+ * channel.
+ */
+preview: boolean, };
 
 /**
  * The whole configuration file.
@@ -675,4 +686,17 @@ carryContext: boolean,
  *
  * `default = "enabled"` for `carry_context`'s reason.
  */
-livePreview: boolean, };
+livePreview: boolean, 
+/**
+ * How much more has to have been said before the next live preview of
+ * the same segment is asked for, in milliseconds (P28).
+ *
+ * The cost control of the preview: every draft decodes the whole open
+ * segment again, so a long monologue at a short step keeps the GPU busy
+ * for as long as it lasts. Longer is cheaper and updates the draft less
+ * often.
+ *
+ * `default` so that a file written before this existed gets the step the
+ * app had compiled in.
+ */
+previewStepMs: number, };

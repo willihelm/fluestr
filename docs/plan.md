@@ -2705,6 +2705,12 @@ because a segment is never longer than the ceiling.
   no room.
 - A switch on the Detection page, **on by default**, that reaches a running
   session with the rest of the tuning. Off is the app exactly as before.
+- **Cost controls (2026-10-26)**, after a long monologue was seen to keep
+  the GPU saturated: every draft decodes the whole open segment again, so
+  the step is now `tuning.previewStepMs` (300 ms–5 s, default 800 ms) on the
+  Detection page, and a D beside each channel's M (`StoredChannel::preview`,
+  default on) takes that channel out of the drafts. Both reach a running
+  session; a channel taken out loses its waiting draft at once.
 
 **Deliberately not:** rules, alerts, webhooks, history, replay and search
 never see a draft. The last word is not trimmed, although it is the one most
