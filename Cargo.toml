@@ -82,10 +82,8 @@ getrandom = "0.3"
 unicode-normalization = { version = "0.1", default-features = false }
 
 # Resource usage (P8)
-# Default features off: this reads processes and nothing else, and the disk,
-# network and component probes are work per sample that nothing here looks at.
-# `multithread` stays off too — the sampler must not put a thread pool next to
-# the audio threads once a second.
+# Tests only: the pool tests walk the process table to find leftover workers.
+# Default features off: that reads processes and nothing else.
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 # The GPU share, which sysinfo does not report on any platform. Read straight
 # out of the IO registry — see `app::gpu`. Both crates are already in the tree

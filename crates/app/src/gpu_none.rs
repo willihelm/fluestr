@@ -2,8 +2,8 @@
 //!
 //! Same surface as the IOKit reader in `gpu.rs`, which is macOS-only. Windows
 //! has the figure behind a PDH counter, and until that is read here the
-//! resource meter shows memory alone — the degradation it already has for a
-//! Mac that presents no GPU in the registry.
+//! resource meter stays hidden — the degradation it already has for a Mac that
+//! presents no GPU in the registry.
 
 /// A reader that never finds a GPU.
 pub struct Gpu {

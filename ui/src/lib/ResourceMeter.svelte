@@ -5,8 +5,7 @@
   // answers — "is this machine going to keep up?" — is asked while the show
   // runs, and a figure somebody has to change pages to find is a figure nobody
   // looks at. It is shown whether or not a session runs, because the load
-  // before Start is what decides how many channels are sensible, and the fall
-  // after Stop is how the memory a session held is seen to come back.
+  // before Start is what decides how many channels are sensible.
   //
   // The GPU rather than the CPU, which this used to show: decoding runs on
   // Metal and eight workers contend for one queue, so the GPU is what actually
@@ -14,7 +13,7 @@
   // the thresholds that would have meant anything.
 
   import type { ResourceUsage } from "./bridge";
-  import { detail, formatGpu, formatMemory, pressure } from "./resources";
+  import { detail, formatGpu, pressure } from "./resources";
 
   interface Props {
     /// `null` until the first sample arrives — a second after the window
@@ -24,40 +23,24 @@
 
   let { usage }: Props = $props();
 
-  // A machine that does not report a GPU shows the memory half alone rather
-  // than an empty bar; see `summary` in `resources.ts` for why not a dash.
+  // Nothing at all until the counter has a reading, rather than an empty bar:
+  // a placeholder where a live figure belongs reads as zero.
   let gpu = $derived(
     usage && usage.gpu !== null ? Math.min(100, Math.max(0, usage.gpu)) : null,
   );
   let level = $derived(pressure(gpu ?? 0));
-  // Memory as a share of the machine, which is the only way a bar can mean
-  // anything. A machine that will not say how much it has gets no bar rather
-  // than a full one.
-  let memoryShare = $derived(
-    usage && usage.totalMemory > 0 ? (usage.memory / usage.totalMemory) * 100 : null,
-  );
 </script>
 
-{#if usage}
+{#if usage && gpu !== null}
   <div class="usage" title={detail(usage)}>
-    {#if gpu !== null}
-      <span class="label">GPU</span>
-      <div class="bar" class:busy={level === "busy"} class:critical={level === "critical"}>
-        <div class="fill" style="width: {gpu}%"></div>
-      </div>
-      <!-- Tabular figures: without them the whole row shifts sideways every
-           second as the digits change width, which is what makes a live number
-           unreadable. -->
-      <span class="value">{formatGpu(gpu)}</span>
-    {/if}
-
-    <span class="label">RAM</span>
-    {#if memoryShare !== null}
-      <div class="bar">
-        <div class="fill" style="width: {Math.min(100, memoryShare)}%"></div>
-      </div>
-    {/if}
-    <span class="value">{formatMemory(usage.memory)}</span>
+    <span class="label">GPU</span>
+    <div class="bar" class:busy={level === "busy"} class:critical={level === "critical"}>
+      <div class="fill" style="width: {gpu}%"></div>
+    </div>
+    <!-- Tabular figures: without them the whole row shifts sideways every
+         second as the digits change width, which is what makes a live number
+         unreadable. -->
+    <span class="value">{formatGpu(gpu)}</span>
   </div>
 {/if}
 
@@ -109,12 +92,11 @@
 
   /* --- A window the width of a hand --------------------------------------
 
-     Same breakpoint as everywhere else; see `layout.ts`. Two figures and no
-     bars: the question this answers — "is this machine going to keep up?" —
-     is answered by the numbers, and the bars are what makes them quick to
-     read on a screen that has room for both. On a phone the same strip is
-     competing with the session line for one row, and a bar nobody can size
-     against anything is the half to drop.
+     Same breakpoint as everywhere else; see `layout.ts`. The figure and no
+     bar: the question this answers — "is this machine going to keep up?" —
+     is answered by the number, and the bar is what makes it quick to read on
+     a screen that has room for both. On a phone the same strip is competing
+     with the session line for one row, and the bar is the half to drop.
 
      The colour the bar carried is not lost: it moves to the figure, so a
      machine in trouble still says so on the small screen. */
@@ -131,9 +113,8 @@
       gap: 0.25rem;
     }
 
-    /* The GPU figure, which is the one with a pressure to report. The hidden
-       bar is still in the document and still carries the class, so the figure
-       after it is reached the same way it always was. */
+    /* The hidden bar is still in the document and still carries the class,
+       so the figure after it is reached the same way it always was. */
     .bar.busy + .value {
       color: #e8c36a;
     }

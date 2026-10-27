@@ -34,7 +34,7 @@
   // in it. Same rows, same markup — what changes is whether it takes space
   // from the chat or covers it for a moment.
 
-  import { untrack } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import { openGroupWindow, openTickerWindow } from "./bridge";
   import { shortcut } from "./shortcut";
   import type { Group } from "./groups";
@@ -54,6 +54,10 @@
     open?: boolean;
     /// Opens the Settings dialog, from the button at the foot of the list.
     opensettings: () => void;
+    /// What the header carries on the desk — the shoutbox, the GPU meter,
+    /// Clear all — handed down on a phone, where the header has no room
+    /// for it. Shown at the foot, above Settings.
+    tools?: Snippet;
   }
 
   let {
@@ -62,6 +66,7 @@
     selected = $bindable(),
     open = $bindable(false),
     opensettings,
+    tools,
   }: Props = $props();
 
   /// Whether this window is too narrow for a column beside the chat.
@@ -300,6 +305,11 @@
        not a view. On a phone it also closes the drawer it was pressed in:
        what it opens is about to stand over that drawer anyway. -->
   <div class="foot">
+    {#if tools}
+      <div class="tools">
+        {@render tools()}
+      </div>
+    {/if}
     <button
       class="settings"
       onclick={() => {
@@ -540,6 +550,18 @@
     margin-top: auto;
     padding-top: 0.4rem;
     border-top: 1px solid var(--border);
+  }
+
+  /* One row, ruled off from Settings below it: readings at the left, the
+     bin at the right edge where it cannot be pressed on the way to a view. */
+  .tools {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding: 0.2rem 0.5rem 0.5rem;
+    margin-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
   }
 
   /* A row in the shape of the views above it, in the dim colour the app uses

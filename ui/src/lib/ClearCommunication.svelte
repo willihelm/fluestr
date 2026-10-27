@@ -1,10 +1,10 @@
 <script lang="ts">
   // Clear all: the one action that empties the chat.
   //
-  // Labelled with the two words and not with the whole sentence it is named
-  // after. It sits in a bar that already has to fit the session line beside
-  // it, and "all" has exactly one meaning in a window that only holds
-  // transcripts.
+  // A bin and no words, in the header beside the meters: the status bar it
+  // used to share with the session line is gone, and the header has room for
+  // a glyph where it has none for a label. The words come back when it is
+  // armed, because a question has to be read.
   //
   // Start and Stop deliberately never clear anything, so this is the only way
   // transcripts go away — which is why it is confirmed. It is offered at all
@@ -19,7 +19,7 @@
   // asks — and a second within five seconds does it. Not `window.confirm`,
   // because a modal the WebView owns blocks the event loop the live meters
   // are drawn from; and no longer a panel beside it, because the panel
-  // wrapped the status bar onto a second row on a phone and moved everything
+  // wrapped the bar it sat in onto a second row on a phone and moved everything
   // under it at the moment the operator was reading a question. Two presses
   // in the same place is the same protection in none of the space.
   //
@@ -78,35 +78,49 @@
     ? "Confirm: delete every transcript, in every group and from every session"
     : "Clear all communication"}
 >
-  {armed ? "Sure?" : "Clear all"}
+  {#if armed}
+    Sure?
+  {:else}
+    <!-- Drawn, for the reason the burger and the cog are: it takes its
+         weight and colour from the row it is in at every font size. -->
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 4h11M6 4V2.6h4V4M3.8 4l.7 9.4h7l.7-9.4M6.6 6.6v4.4M9.4 6.6v4.4" />
+      </g>
+    </svg>
+  {/if}
 </button>
 
 <style>
   button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 1.75rem;
+    min-width: 1.75rem;
     border: none;
     border-radius: 0.3rem;
-    padding: 0.3rem 0.7rem;
+    padding: 0 0.4rem;
     font: inherit;
     font-size: 0.8rem;
     font-weight: 600;
+    line-height: 1;
     cursor: pointer;
     white-space: nowrap;
-    /* The armed state changes the width of the label as well as its colour.
-       Held at the wider of the two so the bar beside it does not shift under
-       the second press — which would be a press landing on something that
-       moved. */
-    min-width: 5.5rem;
-    text-align: center;
   }
 
+  /* Armed it grows leftwards only: its right edge is held by what sits
+     after it, so the second press lands where the first did. */
   .quiet {
     background: transparent;
     color: var(--text-dim);
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
   }
 
   .quiet:hover:not(:disabled) {
     color: var(--text);
+    border-color: var(--border);
+    background: var(--bg);
   }
 
   .quiet:disabled {

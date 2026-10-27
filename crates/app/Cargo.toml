@@ -34,7 +34,6 @@ tauri-plugin-dialog = "2"
 # Driven from Rust for the dialog's reason — one more command, not a second way
 # of talking to the backend.
 tauri-plugin-autostart = "2"
-sysinfo = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
 sha2 = { workspace = true }
@@ -63,3 +62,5 @@ tokio = { workspace = true, features = ["macros"] }
 tauri = { version = "2", features = ["test"] }
 # A WebSocket client for that test. Already in the tree behind axum's `ws`.
 tokio-tungstenite = "0.29"
+# Leftover workers, found by walking the process table (`tests/pool.rs`).
+sysinfo = { workspace = true }

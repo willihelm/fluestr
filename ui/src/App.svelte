@@ -8,6 +8,8 @@
   import SetupGuide from "./lib/SetupGuide.svelte";
   import ResourceMeter from "./lib/ResourceMeter.svelte";
   import ShoutboxBadge from "./lib/ShoutboxBadge.svelte";
+  import StatusDot, { type Tone } from "./lib/StatusDot.svelte";
+  import Notices, { type Notice } from "./lib/Notices.svelte";
   import { toConfig, validate, absentChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
   import { forget as forgetInRules } from "./lib/rules";
@@ -268,8 +270,7 @@
   let sessionStarts = $state(new Map<number, number>());
   let levels = $state(new Map<number, StreamLevel>());
   // Whether the machine is going to keep up (P8): the GPU's share, which is
-  // what decoding runs out of, and what this app and its workers hold in
-  // memory. `null` until the first sample, a second after the window opens —
+  // what decoding runs out of. `null` until the first sample, a second after the window opens —
   // showing 0 % in the meantime would be a lie told at exactly the moment the
   // model is being loaded.
   let usage = $state<ResourceUsage | null>(null);
@@ -480,7 +481,7 @@
       ? new Set(status.streams.filter((s) => s.absent).map((s) => s.streamId))
       : new Set(absentChannels(channels, deviceChannels)),
   );
-  // How many channels the operator has silenced, for the status bar. From the
+  // How many channels the operator has silenced, for the status dot. From the
   // session's own answer for `absent`'s reason, and excluding the channels
   // that are not on the device anyway — counting those would say "2 muted"
   // about an interface with too few inputs, which points the operator at the
@@ -491,21 +492,8 @@
       : 0,
   );
 
-  /// The status bar's one line: device, channel count, rate, model.
-  ///
-  /// Four short facts and nothing else. What used to be here as well — the
-  /// absent and muted counts, CPU or GPU, how long the model took to load —
-  /// wrapped onto a second row on a phone and is anyway read better
-  /// elsewhere: an absent or muted channel is marked on its own meter, and
-  /// the model's origin is on the Settings page. It is kept as the bar's
-  /// title, where a problem being reported can still be read off it.
-  let statusLine = $derived.by(() => {
-    if (status.state !== "running") return "";
-    const count = status.streams.length - absent.size;
-    const model = status.model.split("/").pop();
-    return `${status.device} · ${count} ch. · ${status.sampleRate / 1000}kHz · ${model}`;
-  });
-
+  /// The running session in one sentence, for the status dot's tooltip:
+  /// device, channels, rate, model, and where and how fast it loaded.
   let statusDetail = $derived.by(() => {
     if (status.state !== "running") return "";
     const count = status.streams.length - absent.size;
@@ -516,6 +504,66 @@
     const where = status.gpu ? "GPU" : "CPU";
     const load = (status.loadMs / 1000).toFixed(1);
     return `${status.device} · ${channels}${missing}${muted} · ${status.sampleRate} Hz · ${model} · ${where}, loaded in ${load} s`;
+  });
+
+  /// What the dot beside the app's name says. The lost remote connection
+  /// first: while it lasts, the session's own state on this page is only
+  /// what it was when the socket went.
+  let indicator = $derived.by((): { tone: Tone; label: string; detail: string } => {
+    if (isRemote && connection !== "connected") {
+      return {
+        tone: "error",
+        label: "Not connected",
+        detail: "Not connected to Fluestr — it is being retried.",
+      };
+    }
+    switch (status.state) {
+      case "running":
+        return { tone: "ok", label: "Running", detail: statusDetail };
+      case "starting":
+        return {
+          tone: "busy",
+          label: "Starting",
+          detail: "Loading the model … the first ever start compiles Metal shaders (~8 s).",
+        };
+      case "failed":
+        return { tone: "error", label: "Failed", detail: status.message };
+      case "stopped":
+        return { tone: "idle", label: "Session ended", detail: "Press Start to begin a new one." };
+    }
+    if (problem) return { tone: "warn", label: "Not ready", detail: problem };
+    return {
+      tone: "idle",
+      label: "Not running",
+      detail: "Press Start to transcribe all configured channels.",
+    };
+  });
+
+  /// The failure the operator closed, so it stays closed until a different
+  /// one arrives. Forgotten on every Start: the same message twice is two
+  /// failures.
+  let dismissedFailure = $state<string | null>(null);
+
+  /// Errors, and only errors, over the top of the chat — see `Notices`.
+  let notices = $derived.by((): Notice[] => {
+    const out: Notice[] = [];
+    // A remote page that has lost the socket is a picture of a chat, not a
+    // chat: nothing new arrives and nothing pressed here reaches the session.
+    // Said rather than left to be inferred from silence, which on an
+    // intercom is also what a quiet room looks like (P16). Never in the app,
+    // where there is no connection to lose — and not dismissible, because it
+    // is still true.
+    if (isRemote && connection !== "connected") {
+      out.push({
+        key: "offline",
+        text: "Not connected to Fluestr. What is on screen is what arrived before the connection went; it is being retried.",
+      });
+    }
+    if (status.state === "failed" && status.message !== dismissedFailure) {
+      const message = status.message;
+      out.push({ key: `failed:${message}`, text: message, dismiss: () => (dismissedFailure = message) });
+    }
+    return out;
   });
 
   let group = $derived(groups.find((g) => g.key === selectedGroup) ?? null);
@@ -1174,6 +1222,7 @@
   /// Starts the session. `stay` is a restart from the Settings page, which
   /// leaves the page open: the operator is in the middle of editing it.
   const launch = async ({ stay }: { stay: boolean }) => {
+    dismissedFailure = null;
     if (problem) {
       status = { state: "failed", message: problem };
       settings = true;
@@ -1274,6 +1323,23 @@
 
 <svelte:window onkeydown={shortcut} />
 
+<!-- The readings and the one destructive action that used to share the
+     status bar with the session line. In the header on the desk; in the
+     sidebar's drawer on a phone, where the header holds the name, the
+     profile and Start and has no room for a fourth thing. -->
+{#snippet tools()}
+  {#if active}
+    <ShoutboxBadge bind:shoutbox={active.outputs.shoutbox} />
+  {/if}
+  <!-- The meter before the bin: the bin is reached for, the meter glanced
+       at, and with the bin last its right edge does not move as the figures
+       change width. -->
+  <ResourceMeter {usage} />
+  <span class="bin">
+    <ClearCommunication empty={messages.length === 0} clear={clearCommunication} />
+  </span>
+{/snippet}
+
 <main>
   <header class="bar">
     <!-- On a narrow window the burger and the name of the view come up here,
@@ -1319,9 +1385,20 @@
           <span class="where">{group ? group.name : "All channels"}</span>
         {/if}
       </div>
+      <!-- The session's state, beside the name rather than in a bar of its
+           own: green for the three hours it says "running", and the sentence
+           behind it for whoever asks. -->
+      <StatusDot {...indicator} />
     </div>
 
     <div class="right">
+      {#if !narrow}
+        <div class="tools">
+          {@render tools()}
+        </div>
+        <span class="divider" aria-hidden="true"></span>
+      {/if}
+
       <!-- Which setup Start would start, beside the button that starts it.
            The name lives in Settings, three clicks away, and an operator who
            has two houses in the list can otherwise only tell them apart by
@@ -1357,7 +1434,7 @@
           class="primary"
           onclick={start}
           disabled={busy || device === "" || problem !== null}
-          title="Start ({keyLabel('T')})"
+          title={problem ?? `Start (${keyLabel("T")})`}
         >
           {busy ? "Starting …" : "Start"}
         </button>
@@ -1365,59 +1442,16 @@
     </div>
   </header>
 
-  <!-- A remote page that has lost the socket is a picture of a chat, not a
-       chat: nothing new arrives and nothing pressed here reaches the session.
-       Said at the top of the window rather than left to be inferred from
-       silence, which on an intercom is also what a quiet room looks like
-       (P16). Never shown in the app, where there is no connection to lose. -->
-  {#if isRemote && connection !== "connected"}
-    <div class="bar offline">
-      <span class="error">●</span>
-      <span>
-        Not connected to Fluestr. What is on screen is what arrived
-        before the connection went; it is being retried.
-      </span>
-    </div>
-  {/if}
-
-  <div class="bar status">
-    {#if status.state === "running"}
-      <span class="ok">●</span>
-      <!-- Four short facts, in the width of one bar — see `statusLine`. -->
-      <span title={statusDetail}>{statusLine}</span>
-    {:else if status.state === "starting"}
-      <span class="dim">Loading the model … the first ever start compiles Metal shaders (~8 s).</span>
-    {:else if status.state === "failed"}
-      <span class="error">{status.message}</span>
-    {:else if status.state === "stopped"}
-      <span class="dim">Session ended.</span>
-    {:else if problem}
-      <span class="dim">{problem}</span>
-    {:else}
-      <span class="dim">Press Start to transcribe all configured channels.</span>
-    {/if}
-
-    <!-- Clear first, then the meters. The button is a control and the
-         meters are a reading, and the two are not looked for in the same
-         way: a control is reached for, a number is glanced at. Putting the
-         reading at the very end of the bar also stops the button moving
-         sideways as the numbers in it change width. -->
-    <div class="right">
-      {#if active}
-        <ShoutboxBadge bind:shoutbox={active.outputs.shoutbox} />
-      {/if}
-      <ClearCommunication empty={messages.length === 0} clear={clearCommunication} />
-      <ResourceMeter {usage} />
-    </div>
-  </div>
-
   <div class="chat">
+    <Notices {notices} />
+
     <GroupSidebar
       {groups}
       {channels}
       bind:selected={selectedGroup}
       bind:open={sidebarOpen}
       opensettings={() => (settings = true)}
+      tools={narrow ? tools : undefined}
     />
 
     <div class="stream">
@@ -1470,9 +1504,10 @@
           direction={chatSort}
           {running}
           reveal={revealing}
-          startHint={isRemote
-            ? "Press Start above to begin transcribing."
-            : `Press ${keyLabel("T")}, or Start above, to begin transcribing.`}
+          startHint={problem ??
+            (isRemote
+              ? "Press Start above to begin transcribing."
+              : `Press ${keyLabel("T")}, or Start above, to begin transcribing.`)}
         />
       {/if}
     </div>
@@ -1554,7 +1589,8 @@
     flex-wrap: wrap;
   }
 
-  /* The topmost bar is the one that clears the status bar and the camera. */
+  /* The header is the only bar, and the one that clears the phone's status
+     bar and the camera. */
   header.bar {
     padding-top: max(0.6rem, var(--safe-top));
   }
@@ -1651,15 +1687,25 @@
     margin-left: auto;
   }
 
-  .status {
-    font-size: 0.85rem;
-    gap: 0.5rem;
+  /* The readings and the bin, as one group in the header: closer together
+     than the session controls, and ruled off from them, so the profile and
+     Start read as their own pair. */
+  .tools {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
   }
 
-  .offline {
-    font-size: 0.85rem;
-    gap: 0.5rem;
-    background: #3a1f1f;
+  .divider {
+    width: 1px;
+    height: 1.25rem;
+    background: var(--border);
+  }
+
+  /* Last in its row wherever the row is — the header or the drawer's foot. */
+  .bin {
+    display: flex;
+    margin-left: auto;
   }
 
   .empty {
@@ -1716,20 +1762,13 @@
     background: #ff6b6b;
   }
 
-  .dim {
-    color: var(--text-dim);
-  }
-
   /* --- A window the width of a hand --------------------------------------
 
      The same 45 rem as `layout.ts` matches on, written out because a media
-     query cannot read a constant. The header is the bar that has to give: it
-     carries a title, the profile picker and Start, and on a phone in
-     portrait that is two lines of furniture above a chat.
-
-     The header stays one line: the mark, the name with the view under it,
-     the profile picker and Start. The burger moves up into it, so the view
-     bar the desk does not need is not a bar on the phone either. */
+     query cannot read a constant. The header is the one bar above the chat,
+     and on a phone in portrait it has to stay one line: the burger, the
+     mark, the name with the view under it, the status dot, the profile
+     picker and Start. The readings and the bin move into the drawer. */
   @media (max-width: 45rem) {
     .bar {
       gap: 0.5rem;
@@ -1757,34 +1796,8 @@
       padding: 0.3rem 0.9rem;
     }
 
-    /* The status line is a sentence — the device, the channel count, the
-       sample rate, the model — and on a phone it is the one thing here that
-       may take a second line rather than push the meters off the end of the
-       first. */
-    .status {
-      flex-wrap: wrap;
-      row-gap: 0.15rem;
-      font-size: 0.8rem;
-    }
-
-    /* Beneath the sentence rather than at the end of it, and pushed to the
-       right the way it is on the desk: `margin-left: auto` on a wrapped line
-       keeps the resource meter and Clear communication together at the edge
-       instead of stranding them mid-row. */
-    .status .right {
-      gap: 0.5rem;
-    }
-
     .profile {
       max-width: 6.5rem;
     }
-  }
-
-  .ok {
-    color: #5fd38d;
-  }
-
-  .error {
-    color: #ff6b6b;
   }
 </style>

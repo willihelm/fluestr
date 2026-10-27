@@ -21,7 +21,7 @@ mod bindings;
 pub mod commands;
 pub mod config;
 // The IOKit reader on macOS; elsewhere a reader that never finds a GPU, which
-// the resource meter already answers with "memory only" (P18).
+// the resource meter already answers by staying hidden (P18).
 #[cfg_attr(not(target_os = "macos"), path = "gpu_none.rs")]
 pub mod gpu;
 pub mod history;
@@ -837,8 +837,7 @@ pub fn run() {
             // The resource indicator runs for as long as the window does, not
             // only while a session does: an operator opening the app on a
             // machine that is already loaded should see that before they press
-            // Start, and the figures after Stop are how the memory a session
-            // held is seen to come back.
+            // Start.
             let handle = app.handle().clone();
             resources::spawn(move |usage| {
                 broadcast(&handle, EVENT_RESOURCES, usage);

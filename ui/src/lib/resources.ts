@@ -1,7 +1,7 @@
-// Formatting for the GPU and memory indicator (P8).
+// Formatting for the GPU indicator (P8).
 //
 // Separate from the component because this is the part with decisions in it —
-// how much precision a figure deserves, and where "busy" turns into "about to
+// how much precision the figure deserves, and where "busy" turns into "about to
 // fall behind" — and those are worth pinning down in tests rather than reading
 // out of a template.
 
@@ -40,53 +40,16 @@ export const pressure = (percent: number): Pressure => {
 export const formatGpu = (percent: number): string =>
   `${Math.round(Math.max(0, percent))} %`;
 
-/// Bytes as gigabytes, or as megabytes while that would be a leading zero.
+/// What the tooltip says: where the figure comes from, which is not obvious.
 ///
-/// GB rather than GiB, and 1000 rather than 1024: this number is read next to
-/// what macOS itself reports, and being consistent with Activity Monitor
-/// matters more here than being consistent with the page size.
-export const formatMemory = (bytes: number): string => {
-  const mb = bytes / 1e6;
-  if (mb < 1000) return `${Math.round(mb)} MB`;
-  return `${(mb / 1000).toFixed(1)} GB`;
-};
-
-/// The whole line, e.g. `GPU 42 % · RAM 2.1 GB`.
-///
-/// A machine that does not report its GPU drops that half rather than showing
-/// a dash: half a strip is honest, and a placeholder where a live figure
-/// belongs is the kind of thing an operator learns to read as zero.
-export const summary = (usage: ResourceUsage): string => {
-  const memory = `RAM ${formatMemory(usage.memory)}`;
-  return usage.gpu === null
-    ? memory
-    : `GPU ${formatGpu(usage.gpu)} · ${memory}`;
-};
-
-/// What the tooltip says: where the figures come from, which is not obvious.
-///
-/// Two things have to be said, and neither is guessable from the strip. The
-/// GPU figure is the *whole machine* — macOS reports no per-process share, so
-/// a browser left open is in that number, and an operator who read it as the
-/// app's own would go looking for a bug that is not there. The memory figure
-/// is the opposite: only this app, but including its sidecars, so somebody
-/// comparing it with one row in Activity Monitor has to know why it is larger.
+/// The GPU figure is the *whole machine* — macOS reports no per-process share,
+/// so a browser left open is in that number, and an operator who read it as
+/// the app's own would go looking for a bug that is not there.
 export const detail = (usage: ResourceUsage): string => {
-  const processes =
-    usage.processes === 1 ? "1 process" : `${usage.processes} processes`;
-  const share =
-    usage.totalMemory > 0 ? ` of ${formatMemory(usage.totalMemory)}` : "";
-  const memory =
-    `Memory is Fluestr and its whisper workers — ${processes} — ` +
-    `resident${share}.`;
-
-  if (usage.gpu === null) return memory;
-
   const cores = usage.gpuCores === null ? "" : ` (${usage.gpuCores} cores)`;
   return (
     `GPU is the whole machine${cores}, not just this app: macOS reports no ` +
     `per-process share, so anything else using the GPU is in this figure. ` +
-    `Decoding runs on it, so it is what runs out first. ` +
-    memory
+    `Decoding runs on it, so it is what runs out first.`
   );
 };
