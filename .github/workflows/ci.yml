@@ -29,6 +29,30 @@ jobs:
           # whisper-rs-sys builds whisper.cpp through cmake — that build output
           # has to be cached, otherwise every run takes several minutes.
           cache-all-crates: true
+          # Save what was built even when a later step fails, so the next run
+          # does not start from scratch.
+          cache-on-failure: true
+
+      # sherpa-onnx-sys downloads its prebuilt libraries into
+      # target/sherpa-onnx-prebuilt and points the linker there. rust-cache
+      # prunes that folder but keeps the build script's output, so the script
+      # does not run again and the link fails on `sherpa-onnx-c-api`. Put the
+      # archive back where the cached output expects it.
+      - name: sherpa-onnx prebuilt libraries
+        shell: bash
+        env:
+          SHERPA_PLATFORM: osx-arm64-static-lib
+        run: |
+          version=$(awk '/^name = "sherpa-onnx-sys"$/ { getline; gsub(/"/, "", $3); print $3 }' Cargo.lock)
+          stem="sherpa-onnx-v$version-$SHERPA_PLATFORM"
+          mkdir -p target/sherpa-onnx-prebuilt
+          cd target/sherpa-onnx-prebuilt
+          if [ ! -d "$stem/lib" ]; then
+            curl -fsSL --retry 3 -o "$stem.tar.bz2" \
+              "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$stem.tar.bz2"
+            tar -xjf "$stem.tar.bz2"
+          fi
+          ls "$stem/lib"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -93,7 +117,11 @@ jobs:
     # `cfg(windows)` code paths, the tests on Windows, and the installer, which
     # is uploaded so it can be tried on a real machine.
     runs-on: windows-latest
-    timeout-minutes: 60
+    # A cold run (debug build, clippy, tests, then the release build for the
+    # installer) takes well over an hour. At 60 minutes it was cancelled in
+    # the installer step — and a cancelled job never saves its cache, so every
+    # run started cold again.
+    timeout-minutes: 150
 
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +133,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
+          cache-on-failure: true
+
+      # sherpa-onnx-sys downloads its prebuilt libraries into
+      # target/sherpa-onnx-prebuilt and points the linker there. rust-cache
+      # prunes that folder but keeps the build script's output, so the script
+      # does not run again and the link fails on `sherpa-onnx-c-api`. Put the
+      # archive back where the cached output expects it.
+      - name: sherpa-onnx prebuilt libraries
+        shell: bash
+        env:
+          SHERPA_PLATFORM: win-x64-static-MT-Release-lib
+        run: |
+          version=$(awk '/^name = "sherpa-onnx-sys"$/ { getline; gsub(/"/, "", $3); print $3 }' Cargo.lock)
+          stem="sherpa-onnx-v$version-$SHERPA_PLATFORM"
+          mkdir -p target/sherpa-onnx-prebuilt
+          cd target/sherpa-onnx-prebuilt
+          if [ ! -d "$stem/lib" ]; then
+            curl -fsSL --retry 3 -o "$stem.tar.bz2" \
+              "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$stem.tar.bz2"
+            tar -xjf "$stem.tar.bz2"
+          fi
+          ls "$stem/lib"
 
       - uses: pnpm/action-setup@v4
         with:
