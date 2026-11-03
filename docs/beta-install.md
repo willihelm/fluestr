@@ -15,7 +15,7 @@ the steps below are the whole of it. Everything else is a normal install.
 
 ## Install
 
-1. Open `Fluestr_0.1.0_aarch64.dmg` and drag **Fluestr** onto the
+1. Open `Fluestr_<version>_aarch64.dmg` and drag **Fluestr** onto the
    **Applications** folder.
 2. Eject the disk image, then open Fluestr from Applications.
 3. macOS refuses it: *"Apple could not verify 'Fluestr' is free of malware …"*.
@@ -25,8 +25,13 @@ the steps below are the whole of it. Everything else is a normal install.
    Mac."* — click **Open Anyway** and authenticate.
 5. Open Fluestr again and confirm **Open** in the last dialog.
 
-That is once per build. Do not bother trying to Control-click the app and
+That is once per install. Do not bother trying to Control-click the app and
 choose Open — macOS removed that shortcut, it no longer works.
+
+From version 0.2.0 on, Fluestr updates itself: when a newer release is out, a
+button appears next to the status dot in the header, and installing from there
+needs none of the steps above. macOS may ask for microphone access again after
+an update — allow it as on the first start.
 
 <details>
 <summary>If you would rather use the Terminal</summary>

@@ -34,6 +34,10 @@ tauri-plugin-dialog = "2"
 # Driven from Rust for the dialog's reason — one more command, not a second way
 # of talking to the backend.
 tauri-plugin-autostart = "2"
+# Updating from the GitHub releases: checks `latest.json`, verifies the
+# signature against the key in `tauri.conf.json`, swaps the bundle. Driven from
+# Rust for the dialog's reason as well — see `updater.rs`.
+tauri-plugin-updater = "2"
 reqwest = { workspace = true }
 futures-util = { workspace = true }
 sha2 = { workspace = true }

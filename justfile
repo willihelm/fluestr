@@ -106,8 +106,14 @@ test-ui:
 # and the entitlements next to the config. Hardened Runtime is on by default in
 # Tauri 2, and it is what makes the microphone entitlement necessary rather
 # than decorative.
-build: (_sidecar "release" "--release")
-    APPLE_SIGNING_IDENTITY={{quote(identity)}} {{tauri}} build
+#
+# Extra arguments go to `tauri build`. The release workflow passes
+# `--config crates/app/tauri.release.conf.json`, which adds the signed update
+# bundle (`Fluestr.app.tar.gz` and its `.sig`) — and needs the updater's
+# private key in `TAURI_SIGNING_PRIVATE_KEY`, which is why a plain build here
+# leaves it out.
+build *args: (_sidecar "release" "--release")
+    APPLE_SIGNING_IDENTITY={{quote(identity)}} {{tauri}} build {{args}}
 
 # What the signature actually says, on the bundle and on the sidecar. Read this
 # rather than trusting that the build printed no errors: an unsigned sidecar

@@ -9,6 +9,7 @@
   import ResourceMeter from "./lib/ResourceMeter.svelte";
   import ShoutboxBadge from "./lib/ShoutboxBadge.svelte";
   import StatusDot, { type Tone } from "./lib/StatusDot.svelte";
+  import UpdateButton from "./lib/UpdateButton.svelte";
   import Notices, { type Notice } from "./lib/Notices.svelte";
   import { toConfig, validate, absentChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
@@ -38,6 +39,8 @@
   import { watchNarrow } from "./lib/layout";
   import { shortcut as keyLabel } from "./lib/shortcut";
   import {
+    canUpdate,
+    checkForUpdate,
     clearCommunication as clearOnBackend,
     closeGroupWindows,
     connectionState,
@@ -73,6 +76,7 @@
     webhookStatus,
     type ClipKey,
     type DeviceOption,
+    type AvailableUpdate,
     type ResourceUsage,
     type SessionState,
     type Connection,
@@ -1081,6 +1085,18 @@
     }
   });
 
+  /// A newer release, if the check as the window opened found one.
+  let update = $state<AvailableUpdate | null>(null);
+
+  // Once per start of the app, from its main window only: a group window or a
+  // ticker is the same app and would only ask again. No retry — offline at a
+  // venue is normal, and the next start asks anyway.
+  if (canUpdate) {
+    checkForUpdate()
+      .then((found) => (update = found))
+      .catch(() => {});
+  }
+
   $effect(() => {
     const subscriptions = [
       onTranscript((event) => {
@@ -1389,6 +1405,9 @@
            own: green for the three hours it says "running", and the sentence
            behind it for whoever asks. -->
       <StatusDot {...indicator} />
+      {#if update}
+        <UpdateButton {update} {running} />
+      {/if}
     </div>
 
     <div class="right">

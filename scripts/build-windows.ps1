@@ -7,6 +7,9 @@
 # Usage (from any directory):
 #   scripts\build-windows.ps1           unsigned NSIS installer, release build
 #   scripts\build-windows.ps1 -Dev      development mode, hot reload
+#   scripts\build-windows.ps1 -Updater  also the signed update bundle, as the
+#                                       release workflow builds it; needs the
+#                                       updater key in TAURI_SIGNING_PRIVATE_KEY
 #
 # Needs: Rust (rustup, MSVC toolchain), Visual Studio Build Tools with the
 # "Desktop development with C++" workload, CMake, LLVM (libclang, for the
@@ -15,7 +18,7 @@
 # Keep this file ASCII: Windows PowerShell 5.1 reads a BOM-less script as
 # Windows-1252, and the last byte of an em dash is a closing quote there.
 
-param([switch]$Dev)
+param([switch]$Dev, [switch]$Updater)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -97,7 +100,7 @@ if ($Dev) {
 }
 
 Step "Building the installer - this takes a few minutes"
-Run $tauri build
+if ($Updater) { Run $tauri build --config crates\app\tauri.release.conf.json } else { Run $tauri build }
 
 $installer = Get-ChildItem "target\release\bundle\nsis\*.exe" | Select-Object -First 1
 if (-not $installer) { throw "the build finished but no installer is in target\release\bundle\nsis" }

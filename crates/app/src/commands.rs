@@ -698,7 +698,7 @@ fn clear_communication<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-fn stop_session<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+pub(crate) fn stop_session<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let session = state(app)?
         .session
         .lock()
@@ -757,7 +757,7 @@ fn start_monitor<R: Runtime>(app: &AppHandle<R>, config: SessionConfig) -> Resul
     }
 }
 
-fn stop_monitor<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+pub(crate) fn stop_monitor<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let monitor = state(app)?
         .monitor
         .lock()

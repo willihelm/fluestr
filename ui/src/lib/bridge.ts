@@ -20,7 +20,7 @@
 // Regenerating is part of `just check` — see `just types`.
 
 import { invoke } from "@tauri-apps/api/core";
-import { type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { call, emit, isRemote, on } from "./transport";
 import { flashPage, floodWindow } from "./flash";
 import type { Ask } from "./attention";
@@ -88,6 +88,7 @@ import type { Interface, RemoteStatus } from "./generated/remote";
 import type { WebhookStatus } from "./generated/webhook";
 import type { Action, CompiledRule } from "./generated/rules";
 import type { ResourceUsage } from "./generated/resources";
+import type { AvailableUpdate, UpdateProgress } from "./generated/updater";
 
 // Re-exported so the rest of the frontend imports "the backend" from one place
 // rather than reaching into `generated/` by hand — and so that moving a type
@@ -95,6 +96,7 @@ import type { ResourceUsage } from "./generated/resources";
 export type {
   Action,
   AlertMatch,
+  AvailableUpdate,
   SpeechActivity,
   CompiledRule,
   DeviceOption,
@@ -129,6 +131,7 @@ export type {
   StreamUpdate,
   TranscriptEvent,
   Tuning,
+  UpdateProgress,
   StoredOutputs,
   StoredOutputRoute,
   StoredInputRoute,
@@ -218,6 +221,21 @@ export const setAutostart = (enabled: boolean) =>
 /// would start, and a browser on another machine has no business deciding
 /// what that machine does when it is switched on.
 export const canAutostart = !isRemote;
+
+/// Asks GitHub whether a newer release is out, and remembers it on the
+/// backend so that installing installs what was offered. `null` is up to date
+/// — and what a development build always answers. Rejects when GitHub cannot
+/// be reached, which at a venue without internet is the normal case.
+export const checkForUpdate = () => invoke<AvailableUpdate | null>("check_for_update");
+/// Downloads the update the last check found, stops a running session, installs
+/// it and restarts the app. Only ever resolves by failing.
+export const installUpdate = () => invoke<void>("install_update");
+export const onUpdateProgress = (fn: (e: UpdateProgress) => void): Promise<UnlistenFn> =>
+  listen<UpdateProgress>("update-progress", (event) => fn(event.payload));
+
+/// Whether this page may update the app. Desktop only, for the login item's
+/// reason: a browser on the LAN does not decide what runs on the host.
+export const canUpdate = !isRemote;
 
 /// The catalogue and what a session would start with.
 ///

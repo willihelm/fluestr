@@ -1,0 +1,243 @@
+name: Release
+
+# A tag `v1.2.3` builds the macOS and Windows bundles, attaches them to a
+# GitHub release of that name, and attaches the `latest.json` the app's updater
+# reads (see `crates/app/src/updater.rs`). The release stays a draft until
+# every file is there, so an app checking for updates in the middle of a run
+# never sees a version whose bundle is missing.
+#
+# The updater asks `releases/latest/download/latest.json`, and GitHub's
+# "latest" skips pre-releases. A tag with a suffix (`v1.2.3-beta.1`) is
+# therefore published as a pre-release that installed apps do *not* update to
+# — for trying a build by hand first.
+#
+# Needs the repository secret `TAURI_SIGNING_PRIVATE_KEY`: the private half of
+# the key whose public half is `plugins.updater.pubkey` in `tauri.conf.json`.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  GH_TOKEN: ${{ github.token }}
+  TAG: ${{ github.ref_name }}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The updater compares the version in `latest.json` with the one the
+      # running app was built with. A tag that disagrees with the
+      # configuration would ship an app that reports the old version — and
+      # offers the same update again on every start.
+      - name: Tag matches the app's version
+        id: version
+        run: |
+          version="${TAG#v}"
+          conf=$(jq -r .version crates/app/tauri.conf.json)
+          cargo=$(awk -F'"' '/^\[workspace.package\]/ { p = 1 } p && /^version/ { print $2; exit }' Cargo.toml)
+          echo "tag $version, tauri.conf.json $conf, Cargo.toml $cargo"
+          if [ "$version" != "$conf" ] || [ "$version" != "$cargo" ]; then
+            echo "::error::the tag says $version, but tauri.conf.json says $conf and Cargo.toml says $cargo"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Draft release
+        run: |
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --draft --verify-tag --generate-notes \
+            --title "Fluestr ${TAG#v}" "${prerelease[@]}" \
+            docs/beta-install.md
+
+  macos:
+    needs: draft
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.draft.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          cache-on-failure: true
+
+      # As in ci.yml: rust-cache prunes the prebuilt sherpa-onnx libraries but
+      # keeps the build script's output that points at them.
+      - name: sherpa-onnx prebuilt libraries
+        shell: bash
+        env:
+          SHERPA_PLATFORM: osx-arm64-static-lib
+        run: |
+          version=$(awk '/^name = "sherpa-onnx-sys"$/ { getline; gsub(/"/, "", $3); print $3 }' Cargo.lock)
+          stem="sherpa-onnx-v$version-$SHERPA_PLATFORM"
+          mkdir -p target/sherpa-onnx-prebuilt
+          cd target/sherpa-onnx-prebuilt
+          if [ ! -d "$stem/lib" ]; then
+            curl -fsSL --retry 3 -o "$stem.tar.bz2" \
+              "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$stem.tar.bz2"
+            tar -xjf "$stem.tar.bz2"
+          fi
+          ls "$stem/lib"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ui
+
+      - uses: taiki-e/install-action@just
+
+      # `just build` rather than the steps written out again: it stages the
+      # sidecar against the right deployment target and signs ad-hoc, exactly
+      # as a local build does.
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: just build --config crates/app/tauri.release.conf.json
+
+      - name: Upload
+        run: |
+          bundle=target/release/bundle
+          # The update bundle is named after the app only; versioned here so
+          # releases do not all carry a file of the same name.
+          update="Fluestr_${VERSION}_aarch64.app.tar.gz"
+          cp "$bundle/macos/Fluestr.app.tar.gz" "$update"
+          cp "$bundle/macos/Fluestr.app.tar.gz.sig" "$update.sig"
+          gh release upload "$TAG" --clobber \
+            "$bundle/dmg/Fluestr_${VERSION}_aarch64.dmg" "$update" "$update.sig"
+
+  windows:
+    needs: draft
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      VERSION: ${{ needs.draft.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          cache-on-failure: true
+
+      - name: sherpa-onnx prebuilt libraries
+        shell: bash
+        env:
+          SHERPA_PLATFORM: win-x64-static-MT-Release-lib
+        run: |
+          version=$(awk '/^name = "sherpa-onnx-sys"$/ { getline; gsub(/"/, "", $3); print $3 }' Cargo.lock)
+          stem="sherpa-onnx-v$version-$SHERPA_PLATFORM"
+          mkdir -p target/sherpa-onnx-prebuilt
+          cd target/sherpa-onnx-prebuilt
+          if [ ! -d "$stem/lib" ]; then
+            curl -fsSL --retry 3 -o "$stem.tar.bz2" \
+              "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$stem.tar.bz2"
+            tar -xjf "$stem.tar.bz2"
+          fi
+          ls "$stem/lib"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ui
+
+      - name: Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: scripts\build-windows.ps1 -Updater
+        shell: pwsh
+
+      # On Windows the installer is the update: the updater runs it with
+      # `/UPDATE` and the same signature check.
+      - name: Upload
+        shell: bash
+        run: |
+          installer="target/release/bundle/nsis/Fluestr_${VERSION}_x64-setup.exe"
+          gh release upload "$TAG" --clobber "$installer" "$installer.sig"
+
+  publish:
+    needs: [draft, macos, windows]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.draft.outputs.version }}
+    steps:
+      # The file the installed apps read. The signatures are the contents of
+      # the `.sig` files, not links to them; the URLs point at this release's
+      # own assets.
+      - name: latest.json
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir sigs
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          mac="Fluestr_${VERSION}_aarch64.app.tar.gz"
+          win="Fluestr_${VERSION}_x64-setup.exe"
+          notes=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$notes" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg mac_url "$base/$mac" \
+            --arg mac_sig "$(cat "sigs/$mac.sig")" \
+            --arg win_url "$base/$win" \
+            --arg win_sig "$(cat "sigs/$win.sig")" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $date,
+              platforms: {
+                "darwin-aarch64": { url: $mac_url, signature: $mac_sig },
+                "windows-x86_64": { url: $win_url, signature: $win_sig }
+              }
+            }' > latest.json
+          cat latest.json
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest.json
+
+      - name: Publish
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

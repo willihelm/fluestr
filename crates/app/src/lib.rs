@@ -37,6 +37,7 @@ pub mod rules;
 pub mod session;
 pub mod solo;
 pub mod ticker;
+pub mod updater;
 pub mod webhook;
 pub mod worker;
 
@@ -757,6 +758,10 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Updates from the GitHub releases. The endpoint and the key the
+        // bundles are checked against are in `tauri.conf.json`.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::Pending::default())
         .setup(|app| {
             let state = AppState::default();
             // A missing configuration directory is not a reason to refuse to
@@ -853,6 +858,8 @@ pub fn run() {
             pick_model_file,
             autostart_enabled,
             set_autostart,
+            updater::check_for_update,
+            updater::install_update,
             request_attention,
             open_group_window,
             close_group_windows,
