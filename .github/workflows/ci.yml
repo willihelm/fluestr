@@ -37,7 +37,9 @@ jobs:
       # target/sherpa-onnx-prebuilt and points the linker there. rust-cache
       # prunes that folder but keeps the build script's output, so the script
       # does not run again and the link fails on `sherpa-onnx-c-api`. Put the
-      # archive back where the cached output expects it.
+      # archive back where the cached output expects it. The pruning deletes
+      # the files but can leave the empty `lib/` behind, so look for the
+      # library itself rather than the folder.
       - name: sherpa-onnx prebuilt libraries
         shell: bash
         env:
@@ -47,12 +49,13 @@ jobs:
           stem="sherpa-onnx-v$version-$SHERPA_PLATFORM"
           mkdir -p target/sherpa-onnx-prebuilt
           cd target/sherpa-onnx-prebuilt
-          if [ ! -d "$stem/lib" ]; then
+          if ! compgen -G "$stem/lib/*sherpa-onnx-c-api*" > /dev/null; then
+            rm -rf "$stem"
             curl -fsSL --retry 3 -o "$stem.tar.bz2" \
               "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$stem.tar.bz2"
             tar -xjf "$stem.tar.bz2"
           fi
-          ls "$stem/lib"
+          ls "$stem/lib"/*sherpa-onnx-c-api*
 
       - uses: pnpm/action-setup@v4
         with:
@@ -139,7 +142,9 @@ jobs:
       # target/sherpa-onnx-prebuilt and points the linker there. rust-cache
       # prunes that folder but keeps the build script's output, so the script
       # does not run again and the link fails on `sherpa-onnx-c-api`. Put the
-      # archive back where the cached output expects it.
+      # archive back where the cached output expects it. The pruning deletes
+      # the files but can leave the empty `lib/` behind, so look for the
+      # library itself rather than the folder.
       - name: sherpa-onnx prebuilt libraries
         shell: bash
         env:
@@ -149,12 +154,13 @@ jobs:
           stem="sherpa-onnx-v$version-$SHERPA_PLATFORM"
           mkdir -p target/sherpa-onnx-prebuilt
           cd target/sherpa-onnx-prebuilt
-          if [ ! -d "$stem/lib" ]; then
+          if ! compgen -G "$stem/lib/*sherpa-onnx-c-api*" > /dev/null; then
+            rm -rf "$stem"
             curl -fsSL --retry 3 -o "$stem.tar.bz2" \
               "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$stem.tar.bz2"
             tar -xjf "$stem.tar.bz2"
           fi
-          ls "$stem/lib"
+          ls "$stem/lib"/*sherpa-onnx-c-api*
 
       - uses: pnpm/action-setup@v4
         with:
