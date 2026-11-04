@@ -17,6 +17,16 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # By hand, for a tag that is already pushed: GitHub drops a tag's push
+  # event now and then (during an Actions outage, say), and pushing the same
+  # tag again does not bring it back. Run from `main` with the tag as input:
+  #
+  #     gh workflow run release.yml -f tag=v1.2.3
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to release, e.g. v1.2.3"
+        required: true
 
 permissions:
   contents: write
@@ -24,10 +34,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   GH_TOKEN: ${{ github.token }}
-  TAG: ${{ github.ref_name }}
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ inputs.tag || github.ref_name }}
 
 jobs:
   draft:
@@ -37,6 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The tag, also when the run was started by hand from `main`.
+          ref: ${{ env.TAG }}
           # The whole history and the tags: the notes are the commits since
           # the previous tag.
           fetch-depth: 0
@@ -76,6 +88,8 @@ jobs:
       VERSION: ${{ needs.draft.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Rust toolchain
         run: rustup show
@@ -148,6 +162,8 @@ jobs:
       VERSION: ${{ needs.draft.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Rust toolchain
         run: rustup show
