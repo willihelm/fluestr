@@ -762,7 +762,15 @@ pub fn run() {
         // bundles are checked against are in `tauri.conf.json`.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updater::Pending::default())
+        .on_menu_event(|app, event| {
+            if event.id() == updater::MENU_CHECK {
+                updater::check_from_menu(app.clone());
+            }
+        })
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            updater::install_menu(app.handle())?;
+
             let state = AppState::default();
             // A missing configuration directory is not a reason to refuse to
             // start: the app transcribes perfectly well without ever saving a

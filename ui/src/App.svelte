@@ -10,6 +10,7 @@
   import ShoutboxBadge from "./lib/ShoutboxBadge.svelte";
   import StatusDot, { type Tone } from "./lib/StatusDot.svelte";
   import UpdateButton from "./lib/UpdateButton.svelte";
+  import { alreadySeen } from "./lib/changelog";
   import Notices, { type Notice } from "./lib/Notices.svelte";
   import { toConfig, validate, absentChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
@@ -41,6 +42,7 @@
   import {
     canUpdate,
     checkForUpdate,
+    onUpdateFound,
     clearCommunication as clearOnBackend,
     closeGroupWindows,
     connectionState,
@@ -1085,16 +1087,33 @@
     }
   });
 
-  /// A newer release, if the check as the window opened found one.
+  /// A newer release, if the check as the window opened found one, or the
+  /// app menu's "Check for Updates…" did.
   let update = $state<AvailableUpdate | null>(null);
+  /// Whether its changelog is open.
+  let changelog = $state(false);
 
   // Once per start of the app, from its main window only: a group window or a
   // ticker is the same app and would only ask again. No retry — offline at a
-  // venue is normal, and the next start asks anyway.
+  // venue is normal, and the menu is there to ask again by hand.
+  //
+  // The changelog opens by itself the first time a release is found, unless a
+  // session is already running: a dialog over the chat during a show is the
+  // one place it must not appear. Decided once, here — not again when the
+  // session stops, which would put it up at the end of the show.
   if (canUpdate) {
     checkForUpdate()
-      .then((found) => (update = found))
+      .then((found) => {
+        update = found;
+        changelog = found !== null && !running && !alreadySeen(found.version);
+      })
       .catch(() => {});
+    // Asked for by hand, so it opens whatever is running and whatever was
+    // seen before.
+    onUpdateFound((found) => {
+      update = found;
+      changelog = true;
+    });
   }
 
   $effect(() => {
@@ -1406,7 +1425,7 @@
            behind it for whoever asks. -->
       <StatusDot {...indicator} />
       {#if update}
-        <UpdateButton {update} {running} />
+        <UpdateButton {update} {running} bind:open={changelog} />
       {/if}
     </div>
 

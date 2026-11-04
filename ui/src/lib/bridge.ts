@@ -232,6 +232,11 @@ export const checkForUpdate = () => invoke<AvailableUpdate | null>("check_for_up
 export const installUpdate = () => invoke<void>("install_update");
 export const onUpdateProgress = (fn: (e: UpdateProgress) => void): Promise<UnlistenFn> =>
   listen<UpdateProgress>("update-progress", (event) => fn(event.payload));
+/// "Check for Updates…" in the app menu found a release. Sent to the main
+/// window only; when the menu's check finds nothing, the backend says so in a
+/// message of its own.
+export const onUpdateFound = (fn: (e: AvailableUpdate) => void): Promise<UnlistenFn> =>
+  listen<AvailableUpdate>("update-found", (event) => fn(event.payload));
 
 /// Whether this page may update the app. Desktop only, for the login item's
 /// reason: a browser on the LAN does not decide what runs on the host.

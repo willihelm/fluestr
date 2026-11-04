@@ -9,6 +9,10 @@ export type AvailableUpdate = {
  */
 version: string, 
 /**
+ * The version running now, for the dialog's "you have …" line.
+ */
+current: string, 
+/**
  * The release notes, as written on GitHub. Absent when the release has
  * none.
  */

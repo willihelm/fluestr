@@ -28,6 +28,8 @@ pub const EVENT_UPDATE_PROGRESS: &str = "update-progress";
 pub struct AvailableUpdate {
     /// The release's version, without the `v` of its tag.
     pub version: String,
+    /// The version running now, for the dialog's "you have …" line.
+    pub current: String,
     /// The release notes, as written on GitHub. Absent when the release has
     /// none.
     pub notes: Option<String>,
@@ -57,6 +59,10 @@ pub struct Pending(Mutex<Option<Update>>);
 pub async fn check_for_update<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<Option<AvailableUpdate>, String> {
+    check(&app).await
+}
+
+async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<Option<AvailableUpdate>, String> {
     if cfg!(debug_assertions) {
         return Ok(None);
     }
@@ -75,6 +81,7 @@ pub async fn check_for_update<R: Runtime>(
 
     let available = update.as_ref().map(|update| AvailableUpdate {
         version: update.version.clone(),
+        current: update.current_version.clone(),
         notes: update.body.clone().filter(|notes| !notes.trim().is_empty()),
     });
     if let Some(available) = &available {
@@ -85,6 +92,72 @@ pub async fn check_for_update<R: Runtime>(
         .lock()
         .map_err(|_| "update state poisoned")? = update;
     Ok(available)
+}
+
+/// The id of "Check for Updates…" in the app menu.
+pub const MENU_CHECK: &str = "check-for-updates";
+
+/// A check asked for from the menu found a newer release: the main window
+/// opens its changelog. Only the main window listens — it is the one with the
+/// header the update button sits in.
+pub const EVENT_UPDATE_FOUND: &str = "update-found";
+
+/// The app menu with "Check for Updates…" under "About Fluestr", where the
+/// version already is. macOS only: there the default menu is the app's menu
+/// bar, while on Windows the app has no menu at all, and one added for this
+/// alone would sit in every window above the chat.
+#[cfg(target_os = "macos")]
+pub fn install_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+
+    let menu = Menu::default(app)?;
+    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
+        let item = MenuItem::with_id(app, MENU_CHECK, "Check for Updates…", true, None::<&str>)?;
+        // Right below "About Fluestr", the first item.
+        app_menu.insert(&item, 1)?;
+    }
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+/// What "Check for Updates…" does: the same check as at startup, but one that
+/// always answers. Found, the main window opens the changelog; not found or
+/// not reachable, a message says so — asked for by hand, silence would read as
+/// a menu item that does nothing.
+pub fn check_from_menu<R: Runtime>(app: AppHandle<R>) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    tauri::async_runtime::spawn(async move {
+        let (title, message, kind) = match check(&app).await {
+            Ok(Some(update)) => {
+                let _ = app.emit_to("main", EVENT_UPDATE_FOUND, update);
+                return;
+            }
+            Ok(None) if cfg!(debug_assertions) => (
+                "Updates are off",
+                "This is a development build; it is not updated from GitHub.".to_string(),
+                MessageDialogKind::Info,
+            ),
+            Ok(None) => (
+                "Fluestr is up to date",
+                format!(
+                    "Version {} is the newest release.",
+                    app.package_info().version
+                ),
+                MessageDialogKind::Info,
+            ),
+            Err(err) => (
+                "Could not check for updates",
+                format!("GitHub could not be reached: {err}"),
+                MessageDialogKind::Warning,
+            ),
+        };
+        app.dialog()
+            .message(message)
+            .title(title)
+            .kind(kind)
+            .show(|_| {});
+    });
 }
 
 /// Downloads the update the last check found, installs it and restarts.

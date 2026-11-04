@@ -36,6 +36,10 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history and the tags: the notes are the commits since
+          # the previous tag.
+          fetch-depth: 0
 
       # The updater compares the version in `latest.json` with the one the
       # running app was built with. A tag that disagrees with the
@@ -58,7 +62,9 @@ jobs:
         run: |
           prerelease=()
           case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
-          gh release create "$TAG" --draft --verify-tag --generate-notes \
+          scripts/release-notes.sh "$TAG" > notes.md
+          cat notes.md
+          gh release create "$TAG" --draft --verify-tag --notes-file notes.md \
             --title "Fluestr ${TAG#v}" "${prerelease[@]}" \
             docs/beta-install.md
 
