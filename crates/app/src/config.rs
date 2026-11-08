@@ -63,6 +63,35 @@ pub const FILE_NAME: &str = "config.json";
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "config.ts")]
 pub struct StoredChannel {
+    /// What this channel is called where a name is not enough: in the feed
+    /// another instance subscribes to, and in a channel of that instance which
+    /// shows this one (P29).
+    ///
+    /// Random and never shown. A position changes when a channel above it is
+    /// deleted and a label changes when somebody fixes a typo, and either
+    /// would silently re-point every subscriber at a different talkback.
+    /// Unique within its profile; a duplicated profile keeps its ids, so a
+    /// subscriber follows a production into its copy.
+    ///
+    /// `#[serde(default)]` — empty — because a file written before ids
+    /// existed has none. [`Config::sanitise`] hands one out on the way in.
+    #[serde(default)]
+    pub id: String,
+    /// Where this channel's lines come from when it is not an input of this
+    /// machine at all, but a channel another instance transcribes (P29).
+    ///
+    /// Such a channel is a row like any other — it has a label and a colour,
+    /// it can be in groups and named by rules — and that is the point: the
+    /// chat, the views and the rules all work by row, and a second kind of
+    /// channel next to the rows would need a second implementation of each.
+    /// What it does not have is audio here. The session carries it as a
+    /// channel the device does not have, and its lines arrive from the
+    /// subscription instead — see [`crate::sources`].
+    ///
+    /// `#[serde(default)]` — none — because every channel written before this
+    /// existed was an input.
+    #[serde(default)]
+    pub source: Option<ChannelSource>,
     /// Zero-based channel index on the multichannel device, as the audio API
     /// counts them. The UI shows it one-based and converts at its own
     /// boundary.
@@ -109,6 +138,50 @@ pub struct StoredChannel {
     /// channel.
     #[serde(default = "enabled")]
     pub preview: bool,
+}
+
+/// A channel of another instance, shown here (P29).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts")]
+pub struct ChannelSource {
+    /// The instance, by the id it announces — see [`StoredSource::id`].
+    pub server: String,
+    /// Its channel, by [`StoredChannel::id`] in that instance's active
+    /// profile.
+    pub channel: String,
+}
+
+/// Another instance this one reads along with (P29).
+///
+/// Beside the profiles rather than in one, for the LAN remote's reason: which
+/// machines are on this network is a property of the house, not of the
+/// production. Which of their channels are shown is the profile's business,
+/// and is written there as channels with a [`ChannelSource`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts")]
+pub struct StoredSource {
+    /// The id the instance announces — stable across restarts and address
+    /// changes, which is what lets a laptop that was given a new lease be
+    /// found again.
+    pub id: String,
+    /// The name it announced, kept so the list can say what it is while it
+    /// cannot be reached.
+    pub name: String,
+    /// Where it was last reached. Updated from discovery when it moves.
+    pub address: String,
+    pub port: u16,
+    /// The key its LAN remote asks for, or empty for none.
+    ///
+    /// Stored as typed, like [`crate::remote::RemoteConfig::key`] and for its
+    /// reason. Never shown to a browser — see [`Config::for_remote`].
+    #[serde(default)]
+    pub key: String,
+    /// Whether it is being read now. Off keeps it in the list, and its
+    /// channels in the profiles, without a connection.
+    #[serde(default = "enabled")]
+    pub enabled: bool,
 }
 
 /// A named view onto some of the channels.
@@ -913,6 +986,13 @@ pub struct Config {
     /// listener must not be read as having asked for one.
     #[serde(default)]
     pub remote: crate::remote::RemoteConfig,
+    /// The other instances this one reads along with (P29). Machine-level, like
+    /// the remote above.
+    ///
+    /// `#[serde(default)]` — none — because a file written before this existed
+    /// read nobody.
+    #[serde(default)]
+    pub sources: Vec<StoredSource>,
     /// Which end of the chat new lines arrive at, for every window that has
     /// not been turned over (P7).
     ///
@@ -993,6 +1073,7 @@ impl Default for Config {
             workers: None,
             alerts: Vec::new(),
             remote: crate::remote::RemoteConfig::default(),
+            sources: Vec::new(),
             chat_sort: SortDirection::default(),
             tuning: Tuning::default(),
             auto_start: false,
@@ -1019,6 +1100,17 @@ impl Config {
     /// version into a state the rest of the app can rely on.
     fn sanitise(&mut self) {
         for profile in &mut self.profiles {
+            // Every channel has an id, and no two in one profile share one: a
+            // file from before ids, a hand-edited one, or a channel pasted
+            // twice. The first keeps it, so whoever already subscribed to it
+            // keeps reading the channel they chose.
+            let mut seen = std::collections::HashSet::new();
+            for channel in &mut profile.channels {
+                if channel.id.trim().is_empty() || !seen.insert(channel.id.clone()) {
+                    channel.id = new_channel_id();
+                    seen.insert(channel.id.clone());
+                }
+            }
             let channels = profile.channels.len();
             let groups = profile.groups.len();
             for group in &mut profile.groups {
@@ -1065,6 +1157,16 @@ impl Config {
             self.remote.key = self.remote.key.trim().to_string();
         }
 
+        // One entry per instance, keys trimmed for the remote key's reason.
+        let mut seen = std::collections::HashSet::new();
+        self.sources
+            .retain(|source| !source.id.trim().is_empty() && seen.insert(source.id.clone()));
+        for source in &mut self.sources {
+            if source.key.trim().len() != source.key.len() {
+                source.key = source.key.trim().to_string();
+            }
+        }
+
         self.version = VERSION;
     }
 
@@ -1080,6 +1182,9 @@ impl Config {
         let mut shown = self.clone();
         shown.remote.key = String::new();
         shown.model_path = None;
+        for source in &mut shown.sources {
+            source.key = String::new();
+        }
         for rule in shown.profiles.iter_mut().flat_map(|p| p.rules.iter_mut()) {
             rule.webhook = rule.webhook.as_ref().map(|hook| hook.redacted(secret));
         }
@@ -1099,6 +1204,10 @@ impl Config {
     pub fn from_remote(mut self, stored: &Config, secret: &[u8; 32]) -> Config {
         self.remote = stored.remote.clone();
         self.model_path = stored.model_path.clone();
+        // Whom this machine connects to, and with which keys, is the
+        // machine's: a browser was never shown the keys and must not be able
+        // to point the machine at a host of its choosing.
+        self.sources = stored.sources.clone();
 
         // The listen output is the host's headphones (P22): a remote hears a
         // replay in its own browser, so it has no business routing the host's.
@@ -1235,6 +1344,24 @@ impl Config {
             profile.rules = rules;
         }
     }
+}
+
+/// A fresh channel id: twelve hex digits from the operating system.
+///
+/// Random rather than counted, because ids from two machines meet in one
+/// subscriber and a counter starts at the same place everywhere.
+pub fn new_channel_id() -> String {
+    let mut bytes = [0u8; 6];
+    if getrandom::fill(&mut bytes).is_err() {
+        // Not worth refusing to load a configuration over: uniqueness within
+        // one profile is all that is asked, and the clock gives that too.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        bytes.copy_from_slice(&nanos.to_le_bytes()[..6]);
+    }
+    hex::encode(bytes)
 }
 
 /// Reads the configuration, or returns the default one.
@@ -1389,6 +1516,14 @@ mod tests {
                 port: 8787,
                 key: "k7p4m2rq".into(),
             },
+            sources: vec![StoredSource {
+                id: "a1b2c3d4e5f6".into(),
+                name: "Regiepult".into(),
+                address: "192.168.1.30".into(),
+                port: 8787,
+                key: "x9y8z7w6".into(),
+                enabled: true,
+            }],
             chat_sort: SortDirection::NewestTop,
             tuning: Tuning {
                 silence_timeout_ms: 350,
@@ -1407,6 +1542,8 @@ mod tests {
                     device_id: "AppleUSBAudioEngine:Focusrite:Scarlett 2i2:1".into(),
                     language: "de".into(),
                     channels: vec![StoredChannel {
+                        id: "c1".into(),
+                        source: None,
                         channel: 0,
                         label: "Regie".into(),
                         language: "de".into(),
@@ -1427,6 +1564,8 @@ mod tests {
                     language: "en".into(),
                     channels: vec![
                         StoredChannel {
+                            id: "c2".into(),
+                            source: None,
                             channel: 0,
                             label: "Regie".into(),
                             language: "de".into(),
@@ -1436,6 +1575,8 @@ mod tests {
                             preview: true,
                         },
                         StoredChannel {
+                            id: "c3".into(),
+                            source: None,
                             channel: 3,
                             label: "Licht".into(),
                             language: "en".into(),
@@ -1892,6 +2033,7 @@ mod tests {
                 "profiles",
                 "remote",
                 "setupDone",
+                "sources",
                 "tuning",
                 "vadModel",
                 "version",
@@ -1915,6 +2057,10 @@ mod tests {
             ["channels", "device", "deviceId", "groups", "language", "name", "outputs", "rules"]
         );
         assert_eq!(
+            keys(&json["sources"][0]),
+            ["address", "enabled", "id", "key", "name", "port"]
+        );
+        assert_eq!(
             keys(&json["profiles"][1]["outputs"]),
             ["listen", "shoutbox"]
         );
@@ -1932,7 +2078,10 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
-            ["channel", "color", "gainDb", "label", "language", "muted", "preview"]
+            [
+                "channel", "color", "gainDb", "id", "label", "language", "muted", "preview",
+                "source"
+            ]
         );
         // The second profile, because it is the one with groups in it.
         assert_eq!(
@@ -1979,6 +2128,49 @@ mod tests {
     fn tidying_a_tidy_configuration_changes_nothing() {
         let once = a_config().sanitised();
         assert_eq!(once.clone().sanitised(), once);
+    }
+
+    /// A file from before channel ids comes out with one per channel, and a
+    /// duplicated id is replaced on the second channel only — the first one
+    /// is what somebody may already be reading along with (P29).
+    #[test]
+    fn every_channel_has_an_id_of_its_own() {
+        let mut config = a_config();
+        config.profiles[1].channels[0].id = String::new();
+        config.profiles[1].channels[1].id = "c1".into();
+        config.profiles[0].channels[0].id = "c1".into();
+        let tidy = config.sanitised();
+
+        let ids: Vec<&str> = tidy.profiles[1]
+            .channels
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(!ids[0].is_empty() && ids[0] != ids[1]);
+        assert_eq!(ids[1], "c1", "the first holder keeps its id");
+        // Another profile may share it: a copy of a production keeps its ids.
+        assert_eq!(tidy.profiles[0].channels[0].id, "c1");
+        assert_eq!(
+            tidy.clone().sanitised(),
+            tidy,
+            "and handing them out is done once"
+        );
+    }
+
+    /// The keys of the instances read along with are the machine's: a browser
+    /// is not shown them, and cannot replace the list with one of its own.
+    #[test]
+    fn the_sources_are_the_machine_s() {
+        let stored = a_config().sanitised();
+        let secret = [7u8; 32];
+        let shown = stored.for_remote(&secret);
+        assert!(shown.sources.iter().all(|s| s.key.is_empty()));
+
+        let mut sent = shown.clone();
+        sent.sources[0].address = "10.0.0.66".into();
+        let saved = sent.from_remote(&stored, &secret).sanitised();
+        assert_eq!(saved.sources, stored.sources);
     }
 
     /// A configuration that only differs by what the tidy would remove is not

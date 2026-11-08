@@ -40,6 +40,7 @@ import {
   type StoredOutputs,
   type StoredProfile,
   type StoredRemote,
+  type StoredSource,
   type Tuning,
 } from "./bridge";
 
@@ -235,6 +236,8 @@ export const toStored = (profile: Profile): StoredProfile => {
     deviceId: profile.deviceId,
     language: profile.language,
     channels: profile.channels.map((c) => ({
+      id: c.id,
+      source: c.source,
       channel: c.channel,
       label: c.label,
       language: c.language,
@@ -434,6 +437,10 @@ export const toStoredConfig = (
   /// whether the person in front of it has been shown the way through — and
   /// not about any production carried to it.
   setupDone: boolean = false,
+  /// The instances this machine reads along with (P29). Beside the profiles
+  /// for the remote's reason; which of their channels are shown is the
+  /// profiles' business.
+  sources: StoredSource[] = [],
 ): StoredConfig => ({
   version: CONFIG_VERSION,
   // Stored as a position, like group membership and for the same reason: the
@@ -468,6 +475,7 @@ export const toStoredConfig = (
   tuning: clampTuning(tuning),
   autoStart,
   setupDone,
+  sources: sources.map((s) => ({ ...s, key: (s.key ?? "").trim() })),
   profiles: profiles.map(toStored),
 });
 
@@ -504,6 +512,7 @@ export const fromStoredConfig = (
   tuning: Tuning;
   autoStart: boolean;
   setupDone: boolean;
+  sources: StoredSource[];
 } => {
   const profiles = stored.profiles.map(fromStored);
   const active = profiles[stored.active] ?? profiles[0];
@@ -539,6 +548,8 @@ export const fromStoredConfig = (
     // startup rather than greeting a working installation with a welcome
     // screen — see `App.svelte`.
     setupDone: stored.setupDone ?? false,
+    // A file written before P29 reads nobody.
+    sources: stored.sources ?? [],
   };
 };
 

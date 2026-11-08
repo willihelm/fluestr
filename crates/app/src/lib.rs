@@ -20,6 +20,8 @@ pub mod alerts;
 mod bindings;
 pub mod commands;
 pub mod config;
+pub mod discovery;
+pub mod feed;
 // The IOKit reader on macOS; elsewhere a reader that never finds a GPU, which
 // the resource meter already answers by staying hidden (P18).
 #[cfg_attr(not(target_os = "macos"), path = "gpu_none.rs")]
@@ -36,6 +38,7 @@ pub mod resources;
 pub mod rules;
 pub mod session;
 pub mod solo;
+pub mod sources;
 pub mod ticker;
 pub mod updater;
 pub mod webhook;
@@ -197,8 +200,13 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
                 // Queued, never awaited: an unreachable host is the normal
                 // case in a venue with no route out, and a request made here
                 // would stall every transcript for the length of its timeout.
-                for request in outcome.webhooks {
-                    self.webhooks.send(request);
+                // Not for a line read from another instance (P29): that
+                // instance runs its own rules, and a cue fired from both
+                // machines is a cue fired twice.
+                if !sources::is_remote_session(event.session_id) {
+                    for request in outcome.webhooks {
+                        self.webhooks.send(request);
+                    }
                 }
             }
             Ok(_) => {}
@@ -210,6 +218,11 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
         match self.history.lock() {
             Ok(mut history) => history.push(event.clone()),
             Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
+        }
+        // Offered to the instances reading along (P29) — only if it was
+        // transcribed here, which the feed's own table decides.
+        if let Some(state) = self.app.try_state::<AppState>() {
+            state.remote.feed_transcript(&event);
         }
         broadcast(&self.app, EVENT_TRANSCRIPT, event);
     }
@@ -227,6 +240,23 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
             Ok(mut history) => history.note_state(&event),
             Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
         }
+        if let SessionState::Running {
+            session_id,
+            started_at_ms,
+            ..
+        } = &event
+        {
+            if let Some(state) = self.app.try_state::<AppState>() {
+                if state.remote.streams.offered(*session_id) {
+                    state
+                        .remote
+                        .publish_feed(&feed::Frame::Session(history::SessionStart {
+                            session_id: *session_id,
+                            started_at_ms: *started_at_ms,
+                        }));
+                }
+            }
+        }
         broadcast(&self.app, EVENT_SESSION_STATE, event);
     }
 
@@ -241,6 +271,9 @@ impl<R: Runtime> EventSink for TauriEvents<R> {
         match self.history.lock() {
             Ok(mut history) => history.note_activity(&event),
             Err(err) => tracing::error!(error = %err, "the chat history is unreadable"),
+        }
+        if let Some(state) = self.app.try_state::<AppState>() {
+            state.remote.feed_activity(&event);
         }
         broadcast(&self.app, EVENT_SPEECH_ACTIVITY, event);
     }
@@ -340,6 +373,10 @@ pub struct AppState {
     /// Where audio leaves the app: the listen output and the shoutbox (P22,
     /// P26). Independent of any session.
     pub(crate) outputs: outputs::Engine,
+    /// mDNS: announcing this instance, and finding the others (P29).
+    pub(crate) discovery: Arc<discovery::Discovery>,
+    /// The other instances this one reads along with (P29).
+    pub(crate) sources: Arc<sources::Sources>,
 }
 
 impl AppState {
@@ -710,6 +747,9 @@ pub(crate) fn start_session<R: Runtime>(
     };
 
     let events = events(app)?;
+    // Which channel each stream is, for the feed (P29). Kept before the
+    // configuration moves into the session; noted once the id is known.
+    let streams = config.streams.clone();
     match Session::start(
         config,
         events.clone(),
@@ -720,6 +760,9 @@ pub(crate) fn start_session<R: Runtime>(
     ) {
         Ok((session, running)) => {
             *slot = Some(session);
+            if let SessionState::Running { session_id, .. } = &running {
+                state.remote.streams.started(*session_id, &streams);
+            }
             // Announced as well as returned. The view that pressed Start
             // learns from the answer, but it is not the only view any more: a
             // detached group window (P7) and a browser (P16) have nothing but
@@ -784,6 +827,9 @@ pub fn run() {
                     // Before anything is served: the listener below keys its
                     // cookies with it.
                     state.remote.keep_secret_in(&dir.join(remote::SECRET_FILE));
+                    // So that this instance does not list itself among the
+                    // ones it finds (P29).
+                    state.discovery.set_own_id(&state.remote.instance_id());
                     *state.config_path.lock().expect("fresh state") = Some(path);
                 }
                 Err(err) => {
@@ -824,6 +870,15 @@ pub fn run() {
                         // window opens.
                         tauri::async_runtime::block_on(remote::apply(&handle, &wanted));
                     }
+                }
+            }
+
+            // The instances this one reads along with (P29), for the remote's
+            // reason: a subscription left on last night is read this morning.
+            let handle = app.handle().clone();
+            if let Some(state) = handle.try_state::<AppState>() {
+                if let Ok(path) = state.config_path() {
+                    sources::apply(&handle, &config::load(&path));
                 }
             }
 

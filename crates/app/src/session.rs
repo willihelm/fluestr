@@ -152,6 +152,23 @@ pub struct StreamConfig {
     /// it existed, in which every channel was.
     #[serde(default = "enabled")]
     pub preview: bool,
+    /// The channel's id in the configuration — see
+    /// [`crate::config::StoredChannel::id`]. What the feed names this stream
+    /// by, for instances reading along (P29).
+    ///
+    /// `default` — empty — for a caller that has no configuration to speak
+    /// of; such a stream is simply not offered to anyone.
+    #[serde(default)]
+    #[ts(optional)]
+    pub id: Option<String>,
+    /// A channel another instance transcribes (P29). It is carried like a
+    /// channel the device does not have — its position, and with it every
+    /// stream id after it, has to stay where the configuration put it — and
+    /// it is never offered on this instance's own feed, which is what keeps
+    /// two instances reading each other from passing lines back and forth.
+    #[serde(default)]
+    #[ts(optional)]
+    pub remote: Option<bool>,
 }
 
 fn enabled() -> bool {

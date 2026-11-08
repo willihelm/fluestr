@@ -64,6 +64,13 @@ export const MAX_WORKERS = {max_workers};
 export const REMOTE_DEFAULT_PORT = {remote_port};
 
 /**
+ * Where the session ids of other instances begin, as this machine calls them
+ * (P29). Mirrors `sources::REMOTE_SESSION_BASE`: a line from another instance
+ * has a session id at or above it, and lives by that instance's audio.
+ */
+export const REMOTE_SESSION_BASE = {remote_session_base};
+
+/**
  * The quietest an input trim goes, in decibels. Mirrors
  * `audio_core::gain::MIN_DB`, which clamps again on the way into a session —
  * the knob is not the only caller.
@@ -170,6 +177,7 @@ export const SHOUTBOX_ESTIMATED_CALIBRATION_DB = {shout_estimated};
         default_workers = crate::pool::DEFAULT_WORKERS,
         max_workers = crate::pool::MAX_WORKERS,
         remote_port = crate::remote::DEFAULT_PORT,
+        remote_session_base = crate::sources::REMOTE_SESSION_BASE,
         gain_min = audio_core::gain::MIN_DB,
         gain_max = audio_core::gain::MAX_DB,
         silence_min = crate::config::Tuning::SILENCE_MS.start(),

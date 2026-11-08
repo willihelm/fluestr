@@ -247,6 +247,81 @@ pub fn wav(samples: &[f32], rate: u32) -> Vec<u8> {
     out
 }
 
+/// The samples of a WAV [`wav`] wrote, back at the pipeline's rate — what an
+/// instance reading along is sent for a line it wants to hear (P29).
+///
+/// Mono 16-bit PCM and nothing else: this reads what another instance of this
+/// app writes, not WAV files in general. `None` for anything else.
+pub fn samples_of_wav(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut at = 12;
+    let mut rate = None;
+    while at + 8 <= bytes.len() {
+        let id = &bytes[at..at + 4];
+        let len = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().ok()?) as usize;
+        let body = bytes.get(at + 8..(at + 8).checked_add(len)?.min(bytes.len()))?;
+        if id == b"fmt " && body.len() >= 16 {
+            let format = u16::from_le_bytes([body[0], body[1]]);
+            let channels = u16::from_le_bytes([body[2], body[3]]);
+            let bits = u16::from_le_bytes([body[14], body[15]]);
+            if format != 1 || channels != 1 || bits != 16 {
+                return None;
+            }
+            rate = Some(u32::from_le_bytes(body[4..8].try_into().ok()?));
+        } else if id == b"data" {
+            let rate = rate?;
+            let samples: Vec<f32> = body
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| i16::from_le_bytes(*pair) as f32 / i16::MAX as f32)
+                .collect();
+            if rate == SAMPLE_RATE {
+                return Some(samples);
+            }
+            return audio_core::resample::convert(&samples, rate, SAMPLE_RATE).ok();
+        }
+        at += 8 + len + (len & 1);
+    }
+    None
+}
+
+/// The other direction of [`base64`]. `None` for anything that is not
+/// standard base64.
+pub fn unbase64(text: &str) -> Option<Vec<u8>> {
+    fn value(c: u8) -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    }
+    let text = text.trim().as_bytes();
+    if !text.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    for chunk in text.chunks(4) {
+        let pad = chunk.iter().rev().take_while(|&&c| c == b'=').count();
+        if pad > 2 {
+            return None;
+        }
+        let mut n = 0u32;
+        for &c in &chunk[..4 - pad] {
+            n = n << 6 | value(c)?;
+        }
+        n <<= 6 * pad as u32;
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&bytes[..3 - pad]);
+    }
+    Some(out)
+}
+
 /// Standard base64, for a WAV travelling inside a JSON answer. Written out
 /// rather than a dependency: it is twenty lines and one direction.
 pub fn base64(bytes: &[u8]) -> String {
@@ -367,5 +442,19 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn a_wav_survives_the_trip_to_another_instance() {
+        let samples: Vec<f32> = (0..321).map(|i| ((i as f32) / 50.0).sin() * 0.5).collect();
+        let text = base64(&wav(&samples, SAMPLE_RATE));
+        let back = samples_of_wav(&unbase64(&text).expect("base64")).expect("a wav");
+        assert_eq!(back.len(), samples.len());
+        for (a, b) in back.iter().zip(&samples) {
+            assert!((a - b).abs() < 1e-3);
+        }
+        assert_eq!(unbase64("YQ==").as_deref(), Some(&b"a"[..]));
+        assert_eq!(unbase64("YWI=").as_deref(), Some(&b"ab"[..]));
+        assert!(unbase64("Y").is_none());
     }
 }

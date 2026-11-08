@@ -75,6 +75,18 @@ if-addrs = "0.13"
 # place that needs unpredictable bytes asks the operating system for them.
 getrandom = "0.3"
 
+# The app as a client of another instance (P16). The server announces itself
+# over mDNS while its listener runs and the client browses for it, so nobody
+# has to read an address off one screen and type it into another. A pure Rust
+# responder with no async runtime of its own: it brings a thread and nothing
+# else, and Bonjour on macOS answers its queries like any other.
+mdns-sd = { version = "0.21", default-features = false }
+# The name the server is announced under — the machine's own, which is what an
+# operator recognises in the list.
+gethostname = "1.1"
+# The client's half of the socket. Already in the tree behind axum's `ws`.
+tokio-tungstenite = "0.29"
+
 # Alert terms (P17)
 # Composed and decomposed umlauts are the same word to an operator, and a term
 # typed on one keyboard has to match a transcript produced by the decoder.

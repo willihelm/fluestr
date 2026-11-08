@@ -10,6 +10,7 @@
     | "detection"
     | "vocabulary"
     | "remote"
+    | "sources"
     | "startup"
     | "view";
 
@@ -60,6 +61,7 @@
   import GroupMembership from "./GroupMembership.svelte";
   import ModelPicker from "./ModelPicker.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
+  import SourcesSettings from "./SourcesSettings.svelte";
   import StartupSettings from "./StartupSettings.svelte";
   import ViewSettings from "./ViewSettings.svelte";
   import DetectionSettings from "./DetectionSettings.svelte";
@@ -75,6 +77,7 @@
     type DeviceOption,
     type Language,
     type StoredRemote,
+    type StoredSource,
     type SpeechEngine,
     type StreamLevel,
     type Tuning,
@@ -99,6 +102,8 @@
     /// models' reason: which network this machine is on belongs to the
     /// machine, not to the production carried to it.
     remote: StoredRemote;
+    /// The instances this machine reads along with (P29).
+    sources: StoredSource[];
     /// Which end of the chat new lines arrive at (P7). With the vocabulary in
     /// scope rather than with the models: how a house reads its chat outlives
     /// any one patch, and it is not a property of the machine either — every
@@ -186,6 +191,7 @@
     vocabulary = $bindable(),
     models = $bindable(),
     remote = $bindable(),
+    sources = $bindable(),
     sort = $bindable(),
     tuning = $bindable(),
     autoStart = $bindable(),
@@ -234,6 +240,10 @@
   // `profiles` array, so writing to its fields is what makes the edit part of
   // the profile — and part of what gets saved.
   let active = $derived(profiles.find((p) => p.key === activeKey) ?? null);
+
+  /// What each instance read along with is called, for the channel rows that
+  /// show one of its channels (P29).
+  let sourceNames = $derived(new Map(sources.map((s) => [s.id, s.name])));
 
   // A stored device that is not plugged in right now. Kept and shown rather
   // than silently replaced with whatever is connected: the profile describes
@@ -313,6 +323,9 @@
     // where the address that caused it is. A dot on the rail would be pointing
     // at a setting that is off on most machines and fine on the rest.
     remote: null,
+    // Never flagged: a subscription reports its own trouble inside the
+    // section, and the chat says when one is lost.
+    sources: null,
     // Never flagged: off is the normal state for both switches, and a failure
     // to change the login item is said beside it.
     startup: null,
@@ -342,6 +355,9 @@
         // — and a browser switching off the thing serving it is a page pulling
         // the floor out from under itself.
         ...(isRemote ? [] : [{ id: "remote" as Section, title: "Remote client" }]),
+        // Only in the app, for the remote's reason: whom this machine
+        // connects to, and with which keys, is the machine's (P29).
+        ...(isRemote ? [] : [{ id: "sources" as Section, title: "Read along" }]),
         // On the remote as well, for the session's half: the login item is
         // the host machine's and is left out there — see `StartupSettings`.
         { id: "startup", title: "Startup" },
@@ -551,6 +567,7 @@
             {locked}
             {live}
             {levels}
+            {sourceNames}
           />
 
           {#if listError}
@@ -599,6 +616,9 @@
       {#if !isRemote}
         <div class="sheet" hidden={section !== "remote"}>
           <RemoteSettings bind:remote />
+        </div>
+        <div class="sheet" hidden={section !== "sources"}>
+          <SourcesSettings bind:sources profile={active} {locked} />
         </div>
       {/if}
 

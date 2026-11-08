@@ -17,6 +17,8 @@ import { GAIN_DB_MAX, GAIN_DB_MIN } from "./bridge";
 
 const channel = (device: number, label = `Channel ${device + 1}`, language = "de"): Channel => ({
   key: device,
+  id: `c${device}`,
+  source: null,
   channel: device,
   label,
   language,

@@ -24,7 +24,15 @@ import {
   type Profile,
 } from "./profiles";
 import type { StoredConfig, Tuning } from "./bridge";
-import { restoreChannel, DEFAULT_LANGUAGE } from "./streams";
+import {
+  restoreChannel,
+  remoteChannel,
+  toConfig,
+  validate,
+  absentChannels,
+  NO_INPUT,
+  DEFAULT_LANGUAGE,
+} from "./streams";
 import { restoreGroup } from "./groups";
 import { restoreRule } from "./rules";
 import type { DeviceOption, StoredProfile } from "./bridge";
@@ -45,6 +53,7 @@ const anOldFile = <T>(written: unknown): T => written as T;
 const aProfile = (): Profile => {
   const channels = [
     restoreChannel({
+      id: "regie",
       channel: 0,
       label: "Regie",
       language: "de",
@@ -55,6 +64,7 @@ const aProfile = (): Profile => {
     }),
     // Trimmed and muted, so the round trip has values to lose.
     restoreChannel({
+      id: "licht",
       channel: 3,
       label: "Licht",
       language: "en",
@@ -109,6 +119,8 @@ const stored: StoredProfile = {
   language: "de",
   channels: [
     {
+      id: "regie",
+      source: null,
       channel: 0,
       label: "Regie",
       language: "de",
@@ -118,6 +130,8 @@ const stored: StoredProfile = {
       preview: true,
     },
     {
+      id: "licht",
+      source: null,
       channel: 3,
       label: "Licht",
       language: "en",
@@ -947,5 +961,35 @@ describe("adopting a configuration", () => {
       expect(canonical(next)).toBe(canonical(stored));
       stored = next;
     }
+  });
+});
+
+describe("a channel read from another instance (P29)", () => {
+  it("keeps its id and its source through the file", () => {
+    const profile = aProfile();
+    profile.channels = [
+      ...profile.channels,
+      remoteChannel(profile.channels, { server: "abc", channel: "x1" }, "Their Regie", "#123456"),
+    ];
+    const back = fromStored(toStored(profile));
+    expect(back.channels.map((c) => c.id)).toEqual(profile.channels.map((c) => c.id));
+    expect(back.channels[2].source).toEqual({ server: "abc", channel: "x1" });
+    expect(back.channels[0].source).toBeNull();
+  });
+
+  it("is carried into a session without an input, and keeps every stream id after it", () => {
+    const profile = aProfile();
+    const remote = remoteChannel(profile.channels, { server: "abc", channel: "x1" }, "Theirs", "#123");
+    const config = toConfig([profile.channels[0], remote, profile.channels[1]]);
+    expect(config.map((s) => s.remote)).toEqual([false, true, false]);
+    expect(config[1].channel).toBe(NO_INPUT);
+    expect(config[2].channel).toBe(3);
+    expect(config.map((s) => s.id)).toEqual([profile.channels[0].id, remote.id, "licht"]);
+  });
+
+  it("needs no device: only this machine's inputs are what a Start is for", () => {
+    const remote = remoteChannel([], { server: "abc", channel: "x1" }, "Theirs", "#123");
+    expect(validate([remote], "Desk", 8)).toBe("Add at least one channel.");
+    expect(absentChannels([remote], 0)).toEqual([]);
   });
 });

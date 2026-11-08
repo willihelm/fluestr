@@ -20,7 +20,8 @@ durationMs: number,
 target: string, };
 
 /**
- * A bubble's audio as a WAV, for a browser to play itself (P16, P22).
+ * A bubble's audio as a WAV, for a browser to play itself (P16, P22) — and
+ * for an instance reading along to play on its own listen output (P29).
  */
 export type ReplayWav = { 
 /**

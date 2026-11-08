@@ -9,10 +9,21 @@
 
   P13 additionally needs the `com.apple.security.device.audio-input`
   entitlement, because Hardened Runtime gates the same access again.
+
+  P29 (reading along with another instance) talks to machines on the local
+  network and finds them over Bonjour. Since macOS 15 both are behind the
+  local network permission, which is only asked for when the app says why and
+  names the service type it browses for.
 -->
 <plist version="1.0">
   <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>Fluestr transcribes the intercom channels of your audio interface locally. Nothing is sent anywhere.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Fluestr finds other Fluestr instances on your network so you can read along with what they transcribe, and lets them read along with this one.</string>
+    <key>NSBonjourServices</key>
+    <array>
+      <string>_fluestr._tcp</string>
+    </array>
   </dict>
 </plist>

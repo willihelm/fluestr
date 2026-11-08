@@ -142,6 +142,7 @@ for now, with the reason recorded in the package.
 | P26 | Shoutbox following the room's level | **Partial** | Built on 2026-09-29 and run on a loopback device; a real mic, a real speaker and a show are missing |
 | P27 | The shoutbox as a VST3 plug-in | **Open** | An idea of 2026-10-05 — everything, beginning with whether each host passes a sidechain |
 | P28 | Live preview by re-decoding the open segment | **Partial** | Built on 2026-10-20; not yet run on a show, and the latency of the final lines under load is unmeasured |
+| P29 | Reading along with another instance | **Partial** | Built on 2026-11-08 and tested with two instances in one process; not yet run between two machines in the house |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -2728,6 +2729,91 @@ channels, is the measurement this package is owed.
 
 **Accepted when:** on a show the operators keep it on, and the final lines'
 latency with it on is within one decode of it off.
+
+---
+
+### P29 — Reading along with another instance — **Partial**
+
+*Asked for on 2026-11-08: one machine transcribes, a second one somewhere else
+in the building reads along — in the app rather than in a browser — and does
+its own shoutbox and its own listening. Built the same day.*
+
+**What it is.** Not a remote control. The LAN remote (P16) hands a browser
+the whole session to drive; this hands another *instance* the transcripts to
+read, and nothing to drive. Each instance stays a full app with its own
+configuration, its own session on its own interface (or none), its own
+listen output and its own shoutbox. Reading along is per instance and
+symmetric: the instance being read can read the other one back, and nothing
+goes round in circles because **only what an instance transcribes itself is
+ever offered** — a channel it reads from somewhere else is never passed on.
+
+**Built:**
+
+- **Stable channel ids** (`StoredChannel::id`, twelve hex digits). Handed out
+  on load to a file that has none, deduplicated within a profile, kept by a
+  duplicated profile. Positions and labels both change under an operator;
+  the id is what a subscriber holds on to.
+- **The feed** (`feed.rs`): a second WebSocket on the LAN remote's listener,
+  `/feed`, behind the same key and origin checks, plus an unauthenticated
+  `/info` that says which instance answers. It sends a greeting with the
+  instance id, the channels on offer (the active profile's inputs), session
+  starts, transcripts and speech activity — by channel id, never by stream
+  position — and answers two questions: the snapshot, and a clip's audio.
+  It accepts nothing that changes anything. Which channel each stream of a
+  session was is noted when the session starts, from the configuration it
+  started with.
+- **Discovery** (`discovery.rs`): an instance whose remote is serving on a
+  routable address announces `_fluestr._tcp` over mDNS with its id, name and
+  version, and withdraws it when the listener stops. Browsing starts only when
+  the Read along page is opened or a subscription exists — the first multicast
+  socket is what makes macOS ask for the local network permission. Adding an
+  instance by address is always possible, for networks where multicast does
+  not reach.
+- **Subscriptions** (`sources.rs`): `Config::sources`, machine-level like the
+  remote. One task per instance: the key is traded for the cookie at `/auth`
+  like a browser does, the greeting is checked against the stored id (an
+  address handed to another machine is not the instance subscribed to), the
+  snapshot comes first and live lines are held back until it has, and a
+  silent link is pinged and given up on after 25 s. A wrong key is not
+  retried until a new one is entered, because the door rate-limits guesses.
+  An instance discovery has seen at a new address is followed there.
+- **Into the chat as rows.** A channel shown from another instance is a row
+  of the active profile with a `source` — so it has a colour, can be in
+  groups and named by rules, and its lines carry its position as their stream
+  id. The session carries it like a channel the device does not have, which
+  keeps every stream id after it in place. Its session ids are renamed into a
+  range of this machine's own (`REMOTE_SESSION_BASE`), with their zero points
+  announced as `session-added`.
+- **What happens to a line here is this machine's business**: the rules and
+  alerts run on it; webhooks do not, because the instance that transcribed it
+  runs its own and a cue must not fire twice. Muted here means not shown here.
+- **Replay** of a remote line fetches the clip from its instance and plays
+  it on this machine's listen output (or in the browser, for a browser served
+  by this machine).
+- Settings › **Read along** (app only — whom this machine connects to and
+  with which keys is the machine's; a browser is never shown the keys and
+  cannot change the list): instances found and added, state and errors, the
+  key, and a tick per offered channel that adds or removes its row. A lost
+  instance is a notice over the chat.
+
+- **Unattended start (2026-11-08).** A subscription set to *connect
+  automatically* (`StoredSource::enabled`) is connected at startup and
+  reconnected on its own, so two machines that open Fluestr at login find each
+  other in whichever order they come up. Until an instance has been reached
+  once in this run it is shown as *waiting*, not as lost. On the other side, a
+  LAN remote that cannot bind — the app started before DHCP handed out its
+  address, or the port is held — is tried again every five seconds for as
+  long as it is wanted, instead of staying down until somebody opens
+  Settings.
+
+**Deliberately not:** live audio of remote channels — no solo, no shoutbox
+fed from another machine. That needs audio streamed in real time, which is a
+different feature with different problems (latency, jitter, a codec) and the
+job Dante already does. Nothing is pushed: an instance that wants to be read
+by the one it reads subscribes back.
+
+**Missing:** two machines in the house, and the local network permission
+prompt on a signed build. The transport is plain http, as for P16.
 
 ---
 

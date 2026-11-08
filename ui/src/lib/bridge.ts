@@ -64,7 +64,15 @@ import type {
   StoredInputRoute,
   StoredListen,
   StoredShoutbox,
+  StoredSource,
+  ChannelSource,
 } from "./generated/config";
+import type {
+  FeedChannel,
+  FoundServer,
+  SourceState,
+  SourceStatus,
+} from "./generated/sources";
 import type {
   OutputDeviceOption,
   ReplayStarted,
@@ -126,6 +134,12 @@ export type {
   StoredRemote,
   StoredRule,
   StoredSortDirection,
+  StoredSource,
+  ChannelSource,
+  FeedChannel,
+  FoundServer,
+  SourceState,
+  SourceStatus,
   StreamConfig,
   StreamLevel,
   StreamUpdate,
@@ -164,6 +178,7 @@ export {
   PREVIEW_STEP_MS_MAX,
   PREVIEW_STEP_MS_MIN,
   REMOTE_DEFAULT_PORT,
+  REMOTE_SESSION_BASE,
   SHOUTBOX_CEILING_DBFS_MAX,
   SHOUTBOX_CEILING_DBFS_MIN,
   SHOUTBOX_GAIN_DB_MAX,
@@ -178,6 +193,7 @@ export {
   SILENCE_MS_MAX,
   SILENCE_MS_MIN,
 } from "./generated/constants";
+import { REMOTE_SESSION_BASE } from "./generated/constants";
 
 export const appVersion = () => call<string>("app_version");
 /// The stored configuration, or an empty one. Only fails when the app cannot
@@ -625,6 +641,36 @@ export const soloStatus = () => call<SoloState>("solo_status");
 export const onSolo = (fn: (s: SoloState) => void): Promise<UnlistenFn> =>
   on<SoloState>("solo", (payload) => fn(payload));
 export type { SoloState };
+
+// --- Reading along with other instances (P29) ------------------------------
+//
+// Mirrors `crates/app/src/sources.rs`. Which instances are read is part of the
+// configuration and reaches the backend through the save, like the remote's
+// own settings; what is asked for here is what the file cannot say — who is
+// on the network, and how each subscription is doing.
+
+/// How each subscription is doing, asked for once as a view opens.
+export const sourcesStatus = () => call<SourceStatus[]>("sources_status");
+export const onSources = (fn: (s: SourceStatus[]) => void): Promise<UnlistenFn> =>
+  on<SourceStatus[]>("sources-status", (payload) => fn(payload));
+
+/// Starts looking for other instances, and answers with those found so far.
+/// More arrive through `onServersFound`.
+export const discoverServers = () => call<FoundServer[]>("discover_servers");
+export const onServersFound = (fn: (s: FoundServer[]) => void): Promise<UnlistenFn> =>
+  on<FoundServer[]>("servers-found", (payload) => fn(payload));
+
+/// Who answers at an address — for an instance discovery cannot see.
+export const probeServer = (address: string, port: number) =>
+  call<FoundServer>("probe_server", { address, port });
+
+/// A session of an instance read along with became known: what times its
+/// lines as a time of day. Not `session-state`, which is this machine's own.
+export const onSessionAdded = (fn: (s: SessionStart) => void): Promise<UnlistenFn> =>
+  on<SessionStart>("session-added", (payload) => fn(payload));
+
+/// Whether a line was read from another instance rather than transcribed here.
+export const isRemoteSession = (sessionId: number) => sessionId >= REMOTE_SESSION_BASE;
 
 export { isRemote } from "./transport";
 export { onConnection, connectionState, onReconnected, type Connection } from "./transport";

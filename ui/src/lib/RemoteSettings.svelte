@@ -241,7 +241,10 @@
     <h2>Remote client</h2>
   </header>
 
-  <p class="hint">Serves this interface to browsers on the local network.</p>
+  <p class="hint">
+    Serves this interface to browsers on the local network, and lets other Fluestr instances
+    find this one and read along with it (Settings › Read along over there).
+  </p>
 
   <label class="switch">
     <input

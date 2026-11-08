@@ -316,6 +316,9 @@ struct Listener {
     /// The one thing that makes "down before up" true rather than intended.
     /// See [`released`].
     finished: tokio::sync::oneshot::Receiver<()>,
+    /// The announcement on the network (P29), withdrawn with the listener —
+    /// an instance that stopped serving must not stay in everybody's list.
+    _advert: Option<crate::discovery::Advert>,
     /// Dropped with the listener. Every socket task and the accept loop watch
     /// it, and a closed channel is the stop signal — which is what makes
     /// disabling the remote drop the connections immediately rather than
@@ -331,6 +334,13 @@ struct Listener {
 /// at every emit site, and one of them would be forgotten.
 pub struct Hub {
     events: broadcast::Sender<Arc<str>>,
+    /// What instances reading along are sent (P29) — see [`crate::feed`].
+    /// A channel of its own rather than a filter on `events`: those frames
+    /// are written for the app's views, by stream position, and the feed
+    /// speaks in channel ids.
+    feed: broadcast::Sender<Arc<str>>,
+    /// Which channel each stream of each recent session was, for the feed.
+    pub(crate) streams: crate::feed::Streams,
     clients: Arc<AtomicUsize>,
     listener: Mutex<Option<Listener>>,
     /// Who has been offering wrong keys, and since when.
@@ -342,6 +352,11 @@ pub struct Hub {
     /// Why the last attempt to start failed, kept so the Settings page can be
     /// told about it after the fact — the save that asked is long gone.
     error: Mutex<Option<String>>,
+    /// The configuration last asked for, so a listener that could not come up
+    /// can be tried again without anybody asking twice — see [`retry`].
+    wanted: Mutex<Option<RemoteConfig>>,
+    /// Whether a retry loop is already running. One is enough.
+    retrying: std::sync::atomic::AtomicBool,
     /// What the cookie and the redacted webhooks are keyed with.
     ///
     /// Random per process until [`Hub::keep_secret_in`] swaps in the one on
@@ -353,12 +368,17 @@ pub struct Hub {
 impl Default for Hub {
     fn default() -> Self {
         let (events, _) = broadcast::channel(BACKLOG);
+        let (feed, _) = broadcast::channel(BACKLOG);
         Self {
             events,
+            feed,
+            streams: crate::feed::Streams::default(),
             clients: Arc::new(AtomicUsize::new(0)),
             listener: Mutex::new(None),
             gate: Gate::default(),
             error: Mutex::new(None),
+            wanted: Mutex::new(None),
+            retrying: std::sync::atomic::AtomicBool::new(false),
             secret: Mutex::new(fresh_secret()),
         }
     }
@@ -374,7 +394,51 @@ fn fresh_secret() -> [u8; 32] {
     secret
 }
 
+/// This instance's id, as other instances know it (P29).
+///
+/// Derived from the secret rather than stored beside it: it has to survive a
+/// restart, which the secret already does, and it must not be the secret or
+/// anything that leads back to it. Twelve hex digits are plenty to tell the
+/// machines of one house apart.
+pub fn instance_id(secret: &[u8; 32]) -> String {
+    hex::encode(&mac(secret, b"fluestr-instance-id")[..6])
+}
+
 impl Hub {
+    pub fn instance_id(&self) -> String {
+        instance_id(&self.secret())
+    }
+
+    /// Sends one frame to every instance reading along. Silent and nearly
+    /// free when there is none, like [`Hub::publish`].
+    pub fn publish_feed(&self, frame: &crate::feed::Frame) {
+        if self.feed.receiver_count() == 0 {
+            return;
+        }
+        if let Some(text) = crate::feed::text(frame) {
+            let _ = self.feed.send(text.into());
+        }
+    }
+
+    /// A transcript, if it is one this machine offers.
+    pub fn feed_transcript(&self, event: &crate::session::TranscriptEvent) {
+        if self.feed.receiver_count() == 0 {
+            return;
+        }
+        if let Some(transcript) = self.streams.transcript(event) {
+            self.publish_feed(&crate::feed::Frame::Transcript(transcript));
+        }
+    }
+
+    pub fn feed_activity(&self, event: &crate::activity::SpeechActivity) {
+        if self.feed.receiver_count() == 0 {
+            return;
+        }
+        if let Some(activity) = self.streams.activity(event) {
+            self.publish_feed(&crate::feed::Frame::Activity(activity));
+        }
+    }
+
     pub(crate) fn secret(&self) -> [u8; 32] {
         self.secret
             .lock()
@@ -553,6 +617,9 @@ pub async fn apply<R: Runtime>(app: &AppHandle<R>, config: &RemoteConfig) -> Sta
     };
     let hub = Arc::clone(&state.remote);
     let wanted = config.enabled && !config.address.trim().is_empty();
+    if let Ok(mut slot) = hub.wanted.lock() {
+        *slot = Some(config.clone());
+    }
 
     // The listener that has to be waited for before anything is bound, taken
     // out under the lock and dealt with after it. After it on both counts: a
@@ -669,8 +736,47 @@ fn bring_up<R: Runtime>(app: &AppHandle<R>, hub: &Arc<Hub>, config: &RemoteConfi
                 "the LAN remote client could not be served"
             );
             hub.fail(err);
+            retry(app, hub);
         }
     }
+}
+
+/// How long a listener that could not come up waits before it is tried again.
+const RETRY_EVERY: Duration = Duration::from_secs(5);
+
+/// Tries a listener that could not come up again, until it does or is no
+/// longer wanted (P29).
+///
+/// For the machine that is switched on before anybody arrives: the app starts
+/// at login, often before DHCP has handed out the address the remote is set
+/// to, and the bind fails with "not an address of this machine". Without this
+/// the remote stayed down until somebody opened Settings — on a machine that
+/// was meant to need nobody — and every instance reading along waited for it
+/// in vain. A port another program holds is tried again for the same reason:
+/// that program may be gone a minute later.
+fn retry<R: Runtime>(app: &AppHandle<R>, hub: &Arc<Hub>) {
+    if hub.retrying.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    let hub = Arc::clone(hub);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(RETRY_EVERY).await;
+            let wanted = hub.wanted.lock().ok().and_then(|w| w.clone());
+            let Some(wanted) = wanted.filter(|w| w.enabled && !w.address.trim().is_empty()) else {
+                break;
+            };
+            if hub.status().running {
+                break;
+            }
+            tracing::info!(address = %wanted.address, port = wanted.port, "trying the LAN remote again");
+            if apply(&app, &wanted).await.running {
+                break;
+            }
+        }
+        hub.retrying.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Tells every view what the listener is doing.
@@ -798,6 +904,12 @@ fn bind<R: Runtime>(
 
         let router = Router::new()
             .route("/ws", get(socket))
+            // The feed for instances reading along (P29), behind the same key.
+            .route("/feed", get(feed_socket))
+            // Who answers here: what a subscriber checks before it trusts an
+            // address it was given by hand. Nothing that discovery does not
+            // announce to the whole network anyway.
+            .route("/info", get(info))
             // Before the fallback, which would otherwise answer it with "not
             // part of this build" — the asset route is a catch-all.
             .route("/auth", get(lock_state).post(unlock))
@@ -843,12 +955,17 @@ fn bind<R: Runtime>(
         protected = !config.key.trim().is_empty(),
         "the LAN remote client is being served"
     );
+    let advert = app
+        .try_state::<crate::AppState>()
+        .and_then(|state| state.discovery.advertise(&hub.instance_id(), ip, port));
+
     Ok(Listener {
         address: address.to_string(),
         port,
         key,
         kick,
         finished: wait_for_it,
+        _advert: advert,
         _stop: stop,
     })
 }
@@ -1442,6 +1559,205 @@ async fn serve_client<R: Runtime>(mut socket: WebSocket, server: Server<R>) {
     let count = clients.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
     tracing::info!(clients = count, "a remote client disconnected");
     announce(&app, &hub.status());
+}
+
+// --- The feed (P29) --------------------------------------------------------
+
+/// Who answers at this address.
+async fn info<R: Runtime>(State(server): State<Server<R>>) -> Response {
+    let body = serde_json::json!({
+        "instance": server.hub.instance_id(),
+        "name": crate::discovery::machine_name(),
+        "version": env!("CARGO_PKG_VERSION"),
+    });
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+/// The feed's upgrade: the same two checks as the remote's own socket.
+async fn feed_socket<R: Runtime>(
+    upgrade: WebSocketUpgrade,
+    State(server): State<Server<R>>,
+    headers: HeaderMap,
+) -> Response {
+    if !from_this_app(&headers, &server.hosts) {
+        return (
+            StatusCode::FORBIDDEN,
+            "this socket is only served to the page this app serves",
+        )
+            .into_response();
+    }
+    let key = server.key.borrow().clone();
+    if !unlocked(&headers, &server.hub.secret(), &key) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "this instance is served with a key",
+        )
+            .into_response();
+    }
+    upgrade.on_upgrade(move |socket| serve_feed(socket, server))
+}
+
+/// The channels on offer, read from the configuration as it stands.
+fn offered<R: Runtime>(app: &AppHandle<R>) -> Vec<crate::feed::FeedChannel> {
+    app.try_state::<crate::AppState>()
+        .and_then(|state| state.config_path().ok())
+        .map(|path| crate::feed::channels(&crate::config::load(&path)))
+        .unwrap_or_default()
+}
+
+/// One instance reading along.
+///
+/// The same shape as [`serve_client`] — stop, kick, events, calls — with the
+/// feed's vocabulary on both sides. No levels to thin: the feed carries none.
+async fn serve_feed<R: Runtime>(mut socket: WebSocket, server: Server<R>) {
+    use crate::feed::{Call, Frame, Request};
+
+    let Server {
+        app,
+        hub,
+        mut stop,
+        mut kick,
+        ..
+    } = server;
+    kick.mark_unchanged();
+
+    // Subscribed before the greeting, for `serve_client`'s reason: what is
+    // said between this and the subscriber's snapshot is queued, and the
+    // subscriber drops what it already has.
+    let mut frames = hub.feed.subscribe();
+    let clients = Arc::clone(&hub.clients);
+    let count = clients.fetch_add(1, Ordering::Relaxed) + 1;
+    tracing::info!(clients = count, "an instance started reading along");
+    announce(&app, &hub.status());
+
+    let greeting = [
+        Frame::Hello {
+            instance: hub.instance_id(),
+            name: crate::discovery::machine_name(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        Frame::Channels {
+            channels: offered(&app),
+        },
+    ];
+    let mut open = true;
+    for frame in &greeting {
+        if let Some(text) = crate::feed::text(frame) {
+            if socket.send(Message::Text(text.into())).await.is_err() {
+                open = false;
+                break;
+            }
+        }
+    }
+
+    // The greeting not arriving is the connection already being gone.
+    if open {
+        loop {
+            tokio::select! {
+                biased;
+                _ = stop.changed() => {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
+                _ = kick.changed() => {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
+                frame = frames.recv() => match frame {
+                    Ok(text) => {
+                        if socket.send(Message::Text(text.as_ref().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        tracing::warn!(missed, "an instance reading along fell behind");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                incoming = socket.recv() => match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        let request: Request = match serde_json::from_str(&text) {
+                            Ok(request) => request,
+                            Err(err) => {
+                                tracing::warn!(error = %err, "an instance reading along sent something that is not a call");
+                                continue;
+                            }
+                        };
+                        let answer = match request.call {
+                            Call::Snapshot => feed_snapshot(&app),
+                            Call::Replay { segments } => feed_replay(&app, &segments),
+                        };
+                        let frame = match answer {
+                            Ok(value) => Frame::Result { id: request.id, ok: true, value: Some(value), error: None },
+                            Err(error) => Frame::Result { id: request.id, ok: false, value: None, error: Some(error) },
+                        };
+                        if let Some(text) = crate::feed::text(&frame) {
+                            if socket.send(Message::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        if socket.send(Message::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => {
+                        tracing::info!(error = %err, "an instance reading along dropped");
+                        break;
+                    }
+                },
+            }
+        }
+    }
+
+    let count = clients.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
+    tracing::info!(clients = count, "an instance stopped reading along");
+    announce(&app, &hub.status());
+}
+
+fn feed_snapshot<R: Runtime>(app: &AppHandle<R>) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<crate::AppState>()
+        .ok_or("the application state is not ready")?;
+    let snapshot = state
+        .history
+        .lock()
+        .map_err(|_| "the history is poisoned")?
+        .snapshot();
+    serde_json::to_value(state.remote.streams.snapshot(&snapshot)).map_err(|err| err.to_string())
+}
+
+fn feed_replay<R: Runtime>(
+    app: &AppHandle<R>,
+    segments: &[crate::feed::FeedClip],
+) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<crate::AppState>()
+        .ok_or("the application state is not ready")?;
+    let keys = state
+        .remote
+        .streams
+        .clips(segments)
+        .ok_or("This audio is no longer held.")?;
+    let audio = state
+        .replay
+        .assemble(&keys)
+        .ok_or("This audio is no longer held.")?;
+    serde_json::to_value(crate::outputs::ReplayWav {
+        duration_ms: (audio.len() as u64 * 1000) / audio_core::SAMPLE_RATE as u64,
+        wav: crate::replay::base64(&crate::replay::wav(&audio, audio_core::SAMPLE_RATE)),
+    })
+    .map_err(|err| err.to_string())
 }
 
 /// Whether a serialised frame is a level event.

@@ -136,8 +136,9 @@ pub struct ReplayStarted {
     pub target: String,
 }
 
-/// A bubble's audio as a WAV, for a browser to play itself (P16, P22).
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+/// A bubble's audio as a WAV, for a browser to play itself (P16, P22) — and
+/// for an instance reading along to play on its own listen output (P29).
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "outputs.ts")]
 pub struct ReplayWav {
@@ -320,6 +321,12 @@ impl Engine {
         let audio = replay
             .assemble(keys)
             .ok_or_else(|| "This audio is no longer held.".to_string())?;
+        self.play_samples(audio)
+    }
+
+    /// Plays audio at the pipeline's rate on the listen output — a bubble of
+    /// this machine's, or one fetched from an instance read along with (P29).
+    pub fn play_samples(&self, audio: Vec<f32>) -> Result<ReplayStarted, String> {
         let duration_ms = (audio.len() as u64 * 1000) / SAMPLE_RATE as u64;
         let cue = self.cues.fetch_add(1, Ordering::Relaxed) + 1;
 

@@ -12,7 +12,7 @@
   import UpdateButton from "./lib/UpdateButton.svelte";
   import { alreadySeen } from "./lib/changelog";
   import Notices, { type Notice } from "./lib/Notices.svelte";
-  import { toConfig, validate, absentChannels } from "./lib/streams";
+  import { toConfig, validate, absentChannels, isInput } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
   import { forget as forgetInRules } from "./lib/rules";
   import {
@@ -84,6 +84,12 @@
     type Connection,
     type StoredConfig,
     type StoredRemote,
+    type StoredSource,
+    type SourceStatus,
+    isRemoteSession,
+    onSessionAdded,
+    onSources,
+    sourcesStatus,
     type StreamLevel,
     type TranscriptEvent,
     type Tuning,
@@ -194,6 +200,9 @@
   // `save_config` — there is no separate command to switch it on, because the
   // configuration has one writer.
   let remote = $state<StoredRemote>({ ...NO_REMOTE });
+  // The other instances this one reads along with (P29). Beside the remote and
+  // for its reason; which of their channels are shown is in the profiles.
+  let sources = $state<StoredSource[]>([]);
   // Which end of the chat new lines arrive at (P7). The app's default: this
   // window's own chat may be turned over from the bar above it, and that is
   // the view's business and never written here.
@@ -274,6 +283,8 @@
   // the chat holds lines from several of them at once and each needs its own
   // zero point.
   let sessionStarts = $state(new Map<number, number>());
+  // How each instance read along with is doing (P29), for the notices.
+  let sourceStates = $state<SourceStatus[]>([]);
   let levels = $state(new Map<number, StreamLevel>());
   // Whether the machine is going to keep up (P8): the GPU's share, which is
   // what decoding runs out of. `null` until the first sample, a second after the window opens —
@@ -484,7 +495,13 @@
   // device is swapped under a running session.
   let absent = $derived(
     status.state === "running"
-      ? new Set(status.streams.filter((s) => s.absent).map((s) => s.streamId))
+      ? new Set(
+          status.streams
+            // A row read from another instance is carried as absent on
+            // purpose (P29); it is not a channel the device lacks.
+            .filter((s) => s.absent && isInput(channels[s.streamId] ?? { source: null }))
+            .map((s) => s.streamId),
+        )
       : new Set(absentChannels(channels, deviceChannels)),
   );
   // How many channels the operator has silenced, for the status dot. From the
@@ -494,7 +511,9 @@
   // wrong fix.
   let mutedCount = $derived(
     status.state === "running"
-      ? status.streams.filter((s) => s.muted && !s.absent).length
+      ? status.streams.filter(
+          (s) => s.muted && !s.absent && isInput(channels[s.streamId] ?? { source: null }),
+        ).length
       : 0,
   );
 
@@ -502,14 +521,17 @@
   /// device, channels, rate, model, and where and how fast it loaded.
   let statusDetail = $derived.by(() => {
     if (status.state !== "running") return "";
-    const count = status.streams.length - absent.size;
-    const channels = `${count} ${count === 1 ? "channel" : "channels"}`;
+    const inputs = status.streams.filter((s) =>
+      isInput(channels[s.streamId] ?? { source: null }),
+    ).length;
+    const count = inputs - absent.size;
+    const counted = `${count} ${count === 1 ? "channel" : "channels"}`;
     const missing = absent.size > 0 ? `, ${absent.size} not on the device` : "";
     const muted = mutedCount > 0 ? `, ${mutedCount} muted` : "";
     const model = status.model.split("/").pop();
     const where = status.gpu ? "GPU" : "CPU";
     const load = (status.loadMs / 1000).toFixed(1);
-    return `${status.device} · ${channels}${missing}${muted} · ${status.sampleRate} Hz · ${model} · ${where}, loaded in ${load} s`;
+    return `${status.device} · ${counted}${missing}${muted} · ${status.sampleRate} Hz · ${model} · ${where}, loaded in ${load} s`;
   });
 
   /// What the dot beside the app's name says. The lost remote connection
@@ -564,6 +586,26 @@
         key: "offline",
         text: "Not connected to Fluestr. What is on screen is what arrived before the connection went; it is being retried.",
       });
+    }
+    // An instance read along with that cannot be reached (P29). Said for the
+    // remote connection's reason: its channels going quiet looks exactly like
+    // nobody talking on them.
+    for (const source of sourceStates) {
+      if (source.state === "needsKey") {
+        out.push({
+          key: `source:${source.id}:key`,
+          text: `Not reading along with ${source.name}: it asks for its key — see Settings › Read along.`,
+        });
+      } else if (source.state === "lost") {
+        out.push({
+          key: `source:${source.id}:lost:${source.connectedOnce}`,
+          // Before it has ever been reached, it is most likely still starting:
+          // both machines were switched on together. Said, but not as a loss.
+          text: source.connectedOnce
+            ? `Not reading along with ${source.name}: ${source.error ?? "it is not reachable"}. Reconnecting on its own.`
+            : `Waiting for ${source.name} to come up — connecting on its own as soon as it is reachable.`,
+        });
+      }
     }
     if (status.state === "failed" && status.message !== dismissedFailure) {
       const message = status.message;
@@ -640,6 +682,7 @@
             tuning: { ...DEFAULT_TUNING },
             autoStart: false,
             setupDone: false,
+            sources: [],
           };
 
       if (restored.profiles.length === 0) {
@@ -668,6 +711,7 @@
       if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
       models = restored.models;
       remote = restored.remote;
+      sources = restored.sources;
       tuning = restored.tuning;
       autoStart = restored.autoStart;
       setupDone = restored.setupDone;
@@ -740,6 +784,8 @@
     // reason: they are cumulative, and a window opened after a cue failed has
     // to see that it did. Its own call, because it is not part of the chat.
     webhooks = await webhookStatus();
+    // Not part of the chat either, and only the app reads along (P29).
+    if (!isRemote) sourceStates = await sourcesStatus().catch(() => sourceStates);
   };
 
   // A group window is a view onto a group of the profile that is running, and
@@ -838,6 +884,7 @@
       tuning,
       autoStart,
       setupDone,
+      sources,
     );
     latest = config;
 
@@ -894,6 +941,7 @@
     if (restored.vocabulary !== null) vocabulary = restored.vocabulary;
     models = restored.models;
     remote = restored.remote;
+    sources = restored.sources;
     chatSort = restored.chatSort;
     tuning = restored.tuning;
     autoStart = restored.autoStart;
@@ -1177,6 +1225,14 @@
       // followed this all along; the main window has to as well now that it is
       // no longer the only writer.
       onConfigChanged(adopt),
+      // A session of an instance read along with (P29): its zero point, so
+      // its lines are shown as times of day like this machine's own.
+      onSessionAdded((start) => {
+        sessionStarts = new Map(sessionStarts).set(start.sessionId, start.startedAtMs);
+      }),
+      onSources((next) => {
+        sourceStates = next;
+      }),
       onSessionState((event) => {
         status = event;
         noteSession(event);
@@ -1348,10 +1404,12 @@
     // away — except the running session's, which the lines arriving from now
     // on still need. No `session-state` event is due while a session runs, so
     // dropping it here would leave the rest of that session untimed.
-    sessionStarts =
-      status.state === "running"
-        ? new Map([[status.sessionId, status.startedAtMs]])
-        : new Map();
+    // And those of the instances read along with (P29), which are running
+    // somewhere else and go on sending lines on their clocks.
+    const kept = [...sessionStarts].filter(([id]) => isRemoteSession(id));
+    sessionStarts = new Map(
+      status.state === "running" ? [[status.sessionId, status.startedAtMs], ...kept] : kept,
+    );
     overloaded = new Map();
   };
 </script>
@@ -1565,6 +1623,7 @@
       bind:vocabulary
       bind:models
       bind:remote
+      bind:sources
       bind:sort={chatSort}
       bind:tuning
       bind:autoStart

@@ -178,6 +178,18 @@ pub enum Command {
     },
     /// Which inputs are soloed, asked for once as a view opens.
     SoloStatus,
+    /// The instances this one reads along with, and how each is doing (P29).
+    SourcesStatus,
+    /// Starts looking for other instances on the network, and answers with
+    /// the ones found so far. More arrive as `servers-found`.
+    DiscoverServers,
+    /// Who answers at an address — for an instance added by hand. The app's
+    /// own windows only: a browser on the LAN has no business making this
+    /// machine knock on doors of its choosing.
+    ProbeServer {
+        address: String,
+        port: u16,
+    },
 }
 
 /// Who is asking.
@@ -306,6 +318,22 @@ pub async fn dispatch<R: Runtime>(
                 // ears.
                 return Err("a remote plays replays in the browser".into());
             }
+            // A line read from another instance (P29): its audio is over
+            // there, fetched and played here, on this machine's own output.
+            if segments
+                .first()
+                .is_some_and(|key| crate::sources::is_remote_session(key.session_id))
+            {
+                let audio = crate::sources::replay_samples(app, &segments).await?;
+                let app = app.clone();
+                return json(
+                    tauri::async_runtime::spawn_blocking(move || {
+                        state(&app)?.outputs.play_samples(audio)
+                    })
+                    .await
+                    .map_err(|err| err.to_string())??,
+                );
+            }
             let app = app.clone();
             json(
                 tauri::async_runtime::spawn_blocking(move || {
@@ -322,7 +350,15 @@ pub async fn dispatch<R: Runtime>(
             }
             json(())
         }
-        Command::ReplayWav { segments } => json(replay_wav(app, &segments)?),
+        Command::ReplayWav { segments } => {
+            if segments
+                .first()
+                .is_some_and(|key| crate::sources::is_remote_session(key.session_id))
+            {
+                return json(crate::sources::replay_wav(app, &segments).await?);
+            }
+            json(replay_wav(app, &segments)?)
+        }
         Command::ReplayHorizon => json(state(app)?.replay.horizon()),
         Command::ShoutboxStatus => json(state(app)?.outputs.current_status()),
         Command::SetShoutboxLive { trim_db, muted } => {
@@ -347,6 +383,18 @@ pub async fn dispatch<R: Runtime>(
             json(solo)
         }
         Command::SoloStatus => json(state(app)?.outputs.solo.state()),
+        Command::SourcesStatus => json(state(app)?.sources.statuses()),
+        Command::DiscoverServers => {
+            let state = state(app)?;
+            state.discovery.browse(app);
+            json(state.discovery.servers())
+        }
+        Command::ProbeServer { address, port } => {
+            if remote {
+                return Err("only the machine itself can add an instance".into());
+            }
+            json(crate::sources::probe(&address, port).await?)
+        }
     }
 }
 
@@ -444,6 +492,7 @@ async fn save_config<R: Runtime>(
         // already matches, so this costs the ordinary save nothing.
         remote::apply(app, &config.remote).await;
         crate::apply_outputs(app, &config);
+        crate::sources::apply(app, &config);
         return Ok(());
     }
 
@@ -461,6 +510,15 @@ async fn save_config<R: Runtime>(
     // The outputs follow it the same way (P22, P26): a shoutbox switched on
     // on the Settings page is switched on here, and nowhere else.
     crate::apply_outputs(app, &config);
+    // And the subscriptions (P29), with which rows show which remote channel.
+    crate::sources::apply(app, &config);
+    // The instances reading this one along learn what it offers now: a
+    // channel renamed here is renamed in their lists.
+    state(app)?
+        .remote
+        .publish_feed(&crate::feed::Frame::Channels {
+            channels: crate::feed::channels(&config),
+        });
 
     // Announced to every view, which is how a detached group window (P7)
     // learns that its group was renamed, refilled or switched to another
