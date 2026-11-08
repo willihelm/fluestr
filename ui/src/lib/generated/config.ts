@@ -3,6 +3,20 @@ import type { Action } from "./rules";
 import type { Webhook } from "./webhook";
 
 /**
+ * A channel of another instance, shown here (P29).
+ */
+export type ChannelSource = { 
+/**
+ * The instance, by the id it announces — see [`StoredSource::id`].
+ */
+server: string, 
+/**
+ * Its channel, by [`StoredChannel::id`] in that instance's active
+ * profile.
+ */
+channel: string, };
+
+/**
  * One intercom channel as it is stored.
  *
  * Close to, but not the same as, [`crate::session::StreamConfig`]: the colour
@@ -17,6 +31,37 @@ import type { Webhook } from "./webhook";
  * instead — see [`StoredGroup::members`].
  */
 export type StoredChannel = { 
+/**
+ * What this channel is called where a name is not enough: in the feed
+ * another instance subscribes to, and in a channel of that instance which
+ * shows this one (P29).
+ *
+ * Random and never shown. A position changes when a channel above it is
+ * deleted and a label changes when somebody fixes a typo, and either
+ * would silently re-point every subscriber at a different talkback.
+ * Unique within its profile; a duplicated profile keeps its ids, so a
+ * subscriber follows a production into its copy.
+ *
+ * `#[serde(default)]` — empty — because a file written before ids
+ * existed has none. [`Config::sanitise`] hands one out on the way in.
+ */
+id: string, 
+/**
+ * Where this channel's lines come from when it is not an input of this
+ * machine at all, but a channel another instance transcribes (P29).
+ *
+ * Such a channel is a row like any other — it has a label and a colour,
+ * it can be in groups and named by rules — and that is the point: the
+ * chat, the views and the rules all work by row, and a second kind of
+ * channel next to the rows would need a second implementation of each.
+ * What it does not have is audio here. The session carries it as a
+ * channel the device does not have, and its lines arrive from the
+ * subscription instead — see [`crate::sources`].
+ *
+ * `#[serde(default)]` — none — because every channel written before this
+ * existed was an input.
+ */
+source: ChannelSource | null, 
 /**
  * Zero-based channel index on the multichannel device, as the audio API
  * counts them. The UI shows it one-based and converts at its own
@@ -159,6 +204,14 @@ workers: number | null,
  * listener must not be read as having asked for one.
  */
 remote: StoredRemote, 
+/**
+ * The other instances this one reads along with (P29). Machine-level, like
+ * the remote above.
+ *
+ * `#[serde(default)]` — none — because a file written before this existed
+ * read nobody.
+ */
+sources: Array<StoredSource>, 
 /**
  * Which end of the chat new lines arrive at, for every window that has
  * not been turned over (P7).
@@ -602,6 +655,43 @@ trimDb: number, muted: boolean, };
  * caller is asking the same question about the same thing.
  */
 export type StoredSortDirection = "newest-bottom" | "newest-top";
+
+/**
+ * Another instance this one reads along with (P29).
+ *
+ * Beside the profiles rather than in one, for the LAN remote's reason: which
+ * machines are on this network is a property of the house, not of the
+ * production. Which of their channels are shown is the profile's business,
+ * and is written there as channels with a [`ChannelSource`].
+ */
+export type StoredSource = { 
+/**
+ * The id the instance announces — stable across restarts and address
+ * changes, which is what lets a laptop that was given a new lease be
+ * found again.
+ */
+id: string, 
+/**
+ * The name it announced, kept so the list can say what it is while it
+ * cannot be reached.
+ */
+name: string, 
+/**
+ * Where it was last reached. Updated from discovery when it moves.
+ */
+address: string, port: number, 
+/**
+ * The key its LAN remote asks for, or empty for none.
+ *
+ * Stored as typed, like [`crate::remote::RemoteConfig::key`] and for its
+ * reason. Never shown to a browser — see [`Config::for_remote`].
+ */
+key: string, 
+/**
+ * Whether it is being read now. Off keeps it in the list, and its
+ * channels in the profiles, without a connection.
+ */
+enabled: boolean, };
 
 /**
  * The three numbers that decide how the pipeline cuts and what it listens

@@ -36,7 +36,7 @@ pub const CAPACITY: usize = 10_000;
 /// Kept per session rather than as one value: Start is non-destructive, so the
 /// chat holds lines from every session that has run since it was last cleared,
 /// and each of them needs its own zero point to be shown as a time of day.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "session.ts")]
 pub struct SessionStart {
@@ -118,6 +118,13 @@ impl History {
     /// Records a channel's activity: kept while it is active, dropped when it
     /// ends. One session at a time, so a channel's entry is replaced rather
     /// than keyed by session too.
+    /// Notes when a session read from another instance started (P29), so
+    /// its lines can be shown as times of day. Not a state change: this
+    /// machine's own session is neither started nor stopped by it.
+    pub fn note_session(&mut self, start: SessionStart) {
+        self.sessions.insert(start.session_id, start.started_at_ms);
+    }
+
     pub fn note_activity(&mut self, event: &SpeechActivity) {
         if event.active() {
             self.activity.insert(event.stream_id, event.clone());
@@ -134,7 +141,11 @@ impl History {
     pub fn clear(&mut self) {
         self.transcripts.clear();
         let running = self.running;
-        self.sessions.retain(|id, _| Some(*id) == running);
+        // The sessions of the instances read along with are kept as well:
+        // they are still running somewhere, and the lines they send after the
+        // clear need their zero points just as this machine's do.
+        self.sessions
+            .retain(|id, _| Some(*id) == running || crate::sources::is_remote_session(*id));
     }
 
     pub fn snapshot(&self) -> Snapshot {

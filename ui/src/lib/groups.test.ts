@@ -4,6 +4,8 @@ import type { Channel } from "./streams";
 
 const channel = (key: number, label = `Channel ${key}`): Channel => ({
   key,
+  id: `c${key}`,
+  source: null,
   channel: key,
   label,
   language: "de",

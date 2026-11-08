@@ -42,6 +42,13 @@ export const MAX_WORKERS = 8;
 export const REMOTE_DEFAULT_PORT = 8787;
 
 /**
+ * Where the session ids of other instances begin, as this machine calls them
+ * (P29). Mirrors `sources::REMOTE_SESSION_BASE`: a line from another instance
+ * has a session id at or above it, and lives by that instance's audio.
+ */
+export const REMOTE_SESSION_BASE = 1099511627776;
+
+/**
  * The quietest an input trim goes, in decibels. Mirrors
  * `audio_core::gain::MIN_DB`, which clamps again on the way into a session —
  * the knob is not the only caller.

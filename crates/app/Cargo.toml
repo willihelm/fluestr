@@ -39,7 +39,7 @@ tauri-plugin-autostart = "2"
 # Rust for the dialog's reason as well — see `updater.rs`.
 tauri-plugin-updater = "2"
 reqwest = { workspace = true }
-futures-util = { workspace = true }
+futures-util = { workspace = true, features = ["sink"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
 axum = { workspace = true }
@@ -48,6 +48,9 @@ if-addrs = { workspace = true }
 getrandom = { workspace = true }
 unicode-normalization = { workspace = true }
 ts-rs = { workspace = true }
+mdns-sd = { workspace = true }
+gethostname = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 # The GPU reading (`gpu.rs`) is IOKit, which only macOS has (P18).
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -64,7 +67,5 @@ tokio = { workspace = true, features = ["macros"] }
 # a window. What the socket test needs is an `AppHandle`, which is the one
 # thing the command layer cannot be reached without.
 tauri = { version = "2", features = ["test"] }
-# A WebSocket client for that test. Already in the tree behind axum's `ws`.
-tokio-tungstenite = "0.29"
 # Leftover workers, found by walking the process table (`tests/pool.rs`).
 sysinfo = { workspace = true }

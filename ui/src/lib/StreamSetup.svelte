@@ -31,6 +31,7 @@
     absentChannels,
     applyLanguage,
     usedLanguages,
+    isInput,
     type Channel,
   } from "./streams";
   import LanguagePicker from "./LanguagePicker.svelte";
@@ -63,6 +64,9 @@
     /// and flipping to the chat to read the level of the channel being
     /// adjusted means the knob is on the page that is not on screen.
     levels?: Map<number, StreamLevel> | null;
+    /// What each instance read along with is called, by its id (P29), for the
+    /// rows that show one of its channels. Absent where nothing is read.
+    sourceNames?: Map<string, string>;
     /// Pushes a label, a language, a trim or a mute into the
     /// session that is already running, or `null` when none is. Its presence
     /// is also what unlocks those fields: there is nothing live to change
@@ -94,7 +98,10 @@
     locked,
     live,
     levels = null,
+    sourceNames = new Map(),
   }: Props = $props();
+
+  let inputs = $derived(channels.filter(isInput).length);
 
   let duplicates = $derived(duplicateChannels(channels));
   // Not an error either: a row the current device has no channel for is
@@ -132,7 +139,7 @@
 <section class="panel">
   <header>
     <h2>Channels</h2>
-    <span class="count">{channels.length} of {deviceChannels} on the device</span>
+    <span class="count">{inputs} of {deviceChannels} on the device</span>
 
     <!-- In this header rather than beside the device: it is the channels this
          governs, and it governs them the moment one is added. -->
@@ -172,6 +179,7 @@
       <div
         class="row"
         class:absent={absent.has(index)}
+        class:remote={!isInput(channel)}
         style="--channel: {channel.color}"
       >
         <!-- First in the row, and the only mark of the channel's colour: a
@@ -188,14 +196,22 @@
         <!-- Counted from 1, the way channels are numbered on an interface and
              in a patch list. The backend stays zero-based; the conversion
              happens here and nowhere else. -->
-        <input
-          type="number"
-          min="1"
-          aria-label="Device channel"
-          value={channel.channel + 1}
-          oninput={(e) => (channel.channel = Number(e.currentTarget.value) - 1)}
-          disabled={locked}
-        />
+        {#if channel.source}
+          <!-- A channel another instance transcribes (P29): it has no input
+               here, so where the device channel would be, it says where it
+               comes from. -->
+          {@const from = sourceNames.get(channel.source.server) ?? "another instance"}
+          <span class="from" title="Read from {from}">⇄</span>
+        {:else}
+          <input
+            type="number"
+            min="1"
+            aria-label="Device channel"
+            value={channel.channel + 1}
+            oninput={(e) => (channel.channel = Number(e.currentTarget.value) - 1)}
+            disabled={locked}
+          />
+        {/if}
 
         <!-- `onchange`, not `oninput`: a rename reaches the running session
              when the operator has finished typing it, not once per keystroke
@@ -234,7 +250,7 @@
               live?.(index, { muted: next });
             }}
           />
-          {#if canSolo}
+          {#if canSolo && isInput(channel)}
             <SoloButton
               streamId={index}
               label={channel.label}
@@ -243,6 +259,7 @@
           {/if}
           <!-- Live too: a channel whose drafts swamp the GPU shows itself
                by talking, during the show. -->
+          {#if isInput(channel)}
           <DraftButton
             preview={channel.preview}
             label={channel.label}
@@ -252,33 +269,42 @@
               live?.(index, { preview: next });
             }}
           />
+          {/if}
         </div>
 
         <!-- Live like the label and the language, and for a stronger reason
              than either: a channel nobody spoke on during the sound check is
              found by somebody speaking on it during the show, and the fix has
              to be possible then. -->
-        <GainKnob
-          value={channel.gainDb}
-          label={channel.label}
-          disabled={locked && live === null}
-          onchange={(db) => {
-            channel.gainDb = db;
-            live?.(index, { gainDb: db });
-          }}
-        />
+        {#if isInput(channel)}
+          <GainKnob
+            value={channel.gainDb}
+            label={channel.label}
+            disabled={locked && live === null}
+            onchange={(db) => {
+              channel.gainDb = db;
+              live?.(index, { gainDb: db });
+            }}
+          />
+        {:else}
+          <span></span>
+        {/if}
 
         <!-- Wrapped, because `LevelMeter` draws a bar and, when samples have
              been lost, a count beside it — two elements, which in a grid row
              would land in two columns. -->
         <div class="level">
-          {#if levels}
+          {#if levels && isInput(channel)}
             {@const level = levels.get(index)}
             <LevelMeter
               rms={level?.rms ?? 0}
               peak={level?.peak ?? 0}
               dropped={level?.dropped ?? 0}
             />
+          {:else if channel.source}
+            <span class="from-name" title="Read from another instance"
+              >{sourceNames.get(channel.source.server) ?? "Another instance"}</span
+            >
           {/if}
         </div>
 
@@ -332,6 +358,21 @@
 </section>
 
 <style>
+  /* A row read from another instance (P29): where the device channel and
+     the trim would be, it says where it comes from. */
+  .from {
+    text-align: center;
+    color: var(--text-dim);
+  }
+
+  .from-name {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .rows {
     display: flex;
     flex-direction: column;

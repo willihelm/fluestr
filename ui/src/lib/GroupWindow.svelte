@@ -38,6 +38,8 @@
   import {
     loadConfig,
     onCleared,
+    onSessionAdded,
+    isRemoteSession,
     onConfigChanged,
     onReconnected,
     onLevels,
@@ -216,15 +218,20 @@
           sessionStarts = new Map(sessionStarts).set(event.sessionId, event.startedAtMs);
         }
       }),
+      // A session of an instance read along with (P29).
+      onSessionAdded((start) => {
+        sessionStarts = new Map(sessionStarts).set(start.sessionId, start.startedAtMs);
+      }),
       onCleared(() => {
         // The running session's zero point survives on the backend and comes
         // back with the next snapshot; here it is simply not thrown away,
-        // because the lines arriving from now on are still on its clock.
+        // because the lines arriving from now on are still on its clock. The
+        // same for the sessions of instances read along with (P29).
         messages = [];
-        sessionStarts =
-          status.state === "running"
-            ? new Map([[status.sessionId, status.startedAtMs]])
-            : new Map();
+        const kept = [...sessionStarts].filter(([id]) => isRemoteSession(id));
+        sessionStarts = new Map(
+          status.state === "running" ? [[status.sessionId, status.startedAtMs], ...kept] : kept,
+        );
         overloaded = new Map();
       }),
       onConfigChanged(apply),
