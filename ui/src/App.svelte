@@ -594,7 +594,7 @@
       if (source.state === "needsKey") {
         out.push({
           key: `source:${source.id}:key`,
-          text: `Not reading along with ${source.name}: it asks for its key — see Settings › Read along.`,
+          text: `Not connected to ${source.name}: it asks for its key — see Settings › Connect to other Fluestr.`,
         });
       } else if (source.state === "lost") {
         out.push({

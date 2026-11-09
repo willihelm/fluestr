@@ -242,8 +242,7 @@
   </header>
 
   <p class="hint">
-    Serves this interface to browsers on the local network, and lets other Fluestr instances
-    find this one and read along with it (Settings › Read along over there).
+    Open this interface in a browser on the network, or connect to it from another Fluestr.
   </p>
 
   <label class="switch">

@@ -678,7 +678,7 @@ async fn connect<R: Runtime>(
             if response.status().as_u16() == 404 =>
         {
             return lost(
-                "It runs a version of Fluestr that cannot be read along with.".into(),
+                "It runs a version of Fluestr that cannot be connected to.".into(),
                 false,
             );
         }

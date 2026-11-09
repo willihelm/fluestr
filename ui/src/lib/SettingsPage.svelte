@@ -357,7 +357,7 @@
         ...(isRemote ? [] : [{ id: "remote" as Section, title: "Remote client" }]),
         // Only in the app, for the remote's reason: whom this machine
         // connects to, and with which keys, is the machine's (P29).
-        ...(isRemote ? [] : [{ id: "sources" as Section, title: "Read along" }]),
+        ...(isRemote ? [] : [{ id: "sources" as Section, title: "Connect to other Fluestr" }]),
         // On the remote as well, for the session's half: the login item is
         // the host machine's and is left out there — see `StartupSettings`.
         { id: "startup", title: "Startup" },

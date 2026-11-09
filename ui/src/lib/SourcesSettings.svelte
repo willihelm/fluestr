@@ -185,21 +185,10 @@
 
 <section class="panel">
   <header>
-    <h2>Read along</h2>
+    <h2>Connect to other Fluestr</h2>
   </header>
 
-  <p class="hint">
-    Shows what other Fluestr instances on the network transcribe, in this chat, beside this
-    machine's own channels. This machine's session, listen output and shoutbox stay its own.
-    An instance is found here while its <em>Remote client</em> is serving.
-  </p>
-  <p class="hint">
-    An instance set to connect automatically is connected whenever Fluestr runs here, and
-    reconnected on its own after it restarts or moves to a new address. For machines that
-    nobody attends, turn on <em>Open Fluestr when you log in</em> under Startup on both — and on
-    the one that transcribes, <em>Start the session when Fluestr opens</em> and its Remote
-    client as well.
-  </p>
+  <p class="hint">Show channels from another Fluestr on the network in this chat.</p>
 
   {#each sources as source (source.id)}
     {@const status = statusOf.get(source.id)}
@@ -212,7 +201,7 @@
         <span class="dim">{stateText[state]}</span>
         <label
           class="switch"
-          title="Connects whenever Fluestr runs and reconnects on its own whenever the instance is reachable — at startup, after a restart over there, and after a new address"
+          title="Connects whenever Fluestr runs here, and reconnects after a restart or a new address over there"
         >
           <input
             type="checkbox"
@@ -254,8 +243,8 @@
 
       {#if status && status.version && version && status.version !== version}
         <p class="warn">
-          It runs Fluestr {status.version}, this machine {version}. Reading along works
-          best between the same versions.
+          It runs Fluestr {status.version}, this machine {version}. Connecting works best
+          between the same versions.
         </p>
       {/if}
 
@@ -278,7 +267,7 @@
             </label>
           {/each}
         </div>
-        <p class="hint">Ticked channels are rows of this profile's channel list.</p>
+        <p class="hint">Ticked channels are added to this profile's channels.</p>
       {:else if state === "connected"}
         <p class="dim">It offers no channels: its active profile has none of its own.</p>
       {/if}
@@ -293,7 +282,7 @@
   {/each}
 
   {#if sources.length === 0}
-    <p class="dim">Not reading along with any instance.</p>
+    <p class="dim">Not connected to any other Fluestr.</p>
   {/if}
 
   <h3>On the network</h3>
@@ -304,7 +293,7 @@
           <strong>{server.name}</strong>
           <span class="dim">{server.address}:{server.port}</span>
           {#if server.version}<span class="dim">v{server.version}</span>{/if}
-          <button onclick={() => add(server)} disabled={locked}>Read along</button>
+          <button onclick={() => add(server)} disabled={locked}>Connect</button>
         </li>
       {/each}
     </ul>
