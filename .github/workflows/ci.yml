@@ -14,7 +14,7 @@ jobs:
   check:
     # arm64 runner: the target platform is Apple Silicon, and whisper.cpp with
     # Metal should be built on the same architecture it ships on.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
 
     steps:

@@ -82,7 +82,7 @@ jobs:
 
   macos:
     needs: draft
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       VERSION: ${{ needs.draft.outputs.version }}
