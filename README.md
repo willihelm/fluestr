@@ -1,206 +1,162 @@
 # Fluestr
 
-An offline desktop app that transcribes several intercom streams at once and
-presents them as a chat log.
+**Read your intercom instead of straining to hear it.**
 
-Audio engineers often struggle to monitor intercom channels and what was said is gone quickly. This app makes what you missed readable
-and searchable, locally and without any cloud service.
+Fluestr listens to every intercom channel on your audio interface at the same
+time and turns what is said into a live, colour-coded chat. If you miss a call
+because you were busy mixing, talking or out of the room, you can scroll back
+and read it. Everything runs on your own computer, with no cloud service and
+no account. Once the speech model is downloaded, nothing you say leaves the
+machine.
 
-**The name** — *Fluestr* is German *Flüster* / *Flüstern*, "whisper", written
-the way German spells an umlaut without one (ü → ue). It is pronounced
-[ˈflʏstɐ]. It allows you to turn down your shout box and still get what is said on coms.
+![Fluestr transcribing six intercom channels into one chat](docs/images/chat.png)
 
-**Status:** one channel runs end to end — microphone, ring buffer, resampling,
-segmentation, sidecar, chat list — at a measured **~330 ms** from the end of a
-spoken segment to the text appearing. That is a deliberately narrow vertical
-slice to make the real latency measurable, not the MVP: it handles a single
-stream with a single worker and a provisional voice detector.
-[docs/measurements.md](docs/measurements.md) lists what is provisional and
-which work package replaces it.
-
-The sixteen work packages and where each one stands are in
-[docs/plan.md](docs/plan.md) — plan and progress in one file, so they cannot
-drift apart.
+*Fluestr* comes from the German *Flüster*, "whisper", with the umlaut written
+out (ü → ue), and is pronounced [ˈflʏstɐ]. The idea behind the name: turn your
+shout box down and still know what was said on coms.
 
 ---
 
-## Requirements
+## Why it's useful
 
-macOS on Apple Silicon. **Full Xcode is not needed** — the Command Line Tools
-are enough, see [docs/measurements.md](docs/measurements.md).
+Audio engineers, stage managers and production crews often have several
+intercom channels in their ears at once, and a spoken call is gone as soon as
+it's over. Fluestr helps in three ways:
 
-```sh
-xcode-select --install
-brew install cmake pnpm just
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+- **Nothing gets lost.** Every call stays on screen with the channel it came
+  from and when it was said.
+- **You see what matters.** Cue words like *standby* or *blackout* are
+  highlighted, and a window can flash or bounce in the Dock when one comes up.
+- **You can turn the coms down.** With the chat as a backup, you don't need
+  the shout box at full volume all show long. Fluestr can also adjust the
+  shout box level to follow the room for you.
+
+It's fast: text usually appears about a third of a second after someone stops
+talking.
+
+## What it does
+
+### Every channel in one chat
+
+Choose your audio interface, choose the channels and give each one a name and
+a colour. Fluestr transcribes all of them at once, so it doesn't have to pick
+one at a time. While someone is still talking, a preview of their words shows
+at the bottom of the chat, in italics, before the final text is ready.
+
+Each channel has a level meter, mute (**M**) and solo (**S**). Solo sends that
+channel to your headphones so you can hear the original audio.
+
+### Groups and extra windows
+
+Put channels into groups such as *Show calls* or *Audio*, and the sidebar
+narrows the chat to a single group. Any group can be detached into a window of
+its own, for example on a second screen.
+
+![A detached window showing only the "Show calls" group](docs/images/group-window.png)
+
+For the least space, a **ticker** is a slim, borderless window that stays on
+top of your other apps (a DAW, a lighting console or video software) and shows
+the newest lines:
+
+![The ticker window: the newest lines in a slim strip](docs/images/ticker.png)
+
+### Search and replay
+
+Each view has its own search box, so you can find a word or narrow the chat to
+one channel. If a line looks wrong, such as a cue number or a name lost in
+noise, press ▶ on it to hear what was actually said. By default, Fluestr keeps
+the last ten minutes of audio for replay.
+
+### Rules: highlight, flash, alert, trigger
+
+Rules react to words. Choose the words, which channels they count on, and what
+happens when they're said:
+
+- highlight the words in the chat
+- flash the window
+- ask for attention, gently or urgently (by bouncing the Dock icon, for example)
+- call a webhook, for example to press a button in Bitfocus Companion or send a
+  cue to another system
+
+![The rules editor](docs/images/rules.png)
+
+### Mixed languages
+
+Fluestr is built for crews who switch languages mid-sentence, such as German
+with English technical terms ("Standby für Cue fünf, dann fade out"). Set a
+main language for each channel and add your house vocabulary (cue names,
+positions, people's names), and the model will recognise those words more
+reliably.
+
+![Channel setup: colour, input channel, label and language for each channel](docs/images/channels.png)
+
+### A shout box that follows the room
+
+Fluestr can also play program audio to a shout box speaker and adjust its level
+to follow the room, using a measurement microphone. When the room is quiet it
+stays down, and when the room gets loud it comes up. You set the curve, how
+fast it moves and a safety ceiling, and the window shows where you are on the
+curve.
+
+![Shoutbox controls with the gain curve and the current room level](docs/images/shoutbox.png)
+
+### Remote access: connect from anywhere on the network
+
+- **In a browser:** turn on *Serve on the local network*, then scan the QR code
+  with a phone or tablet. You get the same interface, live, with no install.
+  You can lock it with a key.
+- **From another Fluestr:** a second computer running Fluestr, at front of
+  house for example, can connect to this one under **Settings → Connect to
+  other Fluestr** and pick which of its channels to show. They appear in its
+  chat like local channels, and its own rules apply to them.
+
+![Remote client settings with the QR code for phones and tablets](docs/images/remote.png)
+
+### Profiles
+
+Save a setup for each venue or show, with its device, channels, groups, rules
+and outputs. Fluestr recognises your audio interface even after it has been
+renamed, and the profile comes back the next time you start the app.
 
 ## Getting started
 
-```sh
-just setup              # frontend dependencies
-just model small-q5_1   # a speech model, until the model manager exists (P11)
-just vad-model          # Silero, so noise and silence are not transcribed
-just dev                # run the app
-just check              # everything CI runs as well
-```
+1. **Download** the latest release from the
+   [Releases page](https://github.com/willihelm/fluestr/releases):
+   - **macOS** (Apple Silicon, macOS 13 or newer): `Fluestr_<version>_aarch64.dmg`
+   - **Windows** (preview): `Fluestr_<version>_x64-setup.exe`
+2. **Install it.** The macOS build isn't signed with an Apple Developer ID yet,
+   so macOS blocks it the first time you open it.
+   [docs/beta-install.md](docs/beta-install.md) shows the one-time steps to
+   allow it.
+3. **Follow the setup guide.** On first start, a short guide downloads the
+   speech model (about 190 MB, the only time Fluestr needs the internet), then
+   helps you pick your audio interface, its channels and your groups.
+4. **Press Start.**
 
-Or, in a terminal that has never seen rustup — no `just`, nothing on `PATH`:
+Fluestr checks for updates when it starts. When a new version is available, a
+button appears in the header that installs it.
 
-```sh
-./scripts/run.sh              # build and start, hot reload
-./scripts/run.sh --release    # build the bundle and start that instead
-```
+### Choosing a model
 
-The script finds the toolchain, installs the frontend dependencies if they are
-missing, builds the sidecar and opens the window. Models are downloaded in the
-app itself (P11); the two `just` lines above are the older way in and what the
-integration tests still read.
+Under **Settings → Models** you can choose the speech model. **Small** is
+recommended: it's fast and handles mixed German and English well. **Large v3
+turbo** is more accurate but needs more GPU. **Parakeet** is very fast and
+detects the language on its own. The GPU meter in the header shows whether
+your computer is keeping up with all your channels.
 
-Without the VAD model the app still runs, but whisper captions room noise and
-silence as well — as `[BREAK]`, `(music)`, or as plausible sentences that were
-never spoken. The sidecar warns when it starts without one.
+![The model manager](docs/images/models.png)
 
-In the app: the first start opens a setup guide — it downloads the speech
-model, fetches the Silero speech detector without asking, and walks the audio
-interface, its channels and the groups. It can be skipped, and it is at the
-foot of the Settings rail afterwards. Then pick a device, pick a channel, press Start.
-The first start on a machine takes about eight seconds because macOS compiles
-the Metal shaders once; afterwards it is a fraction of a second.
+## Status
 
-Two environment variables override the stand-ins for work packages that do not
-exist yet:
+Fluestr is in beta and is already used on live shows with several channels.
+Some features (replay, the ticker, the shoutbox and connecting Fluestr
+instances to each other) are new and
+haven't yet been through many shows. The Windows version is a preview.
+Feedback and bug reports are welcome in the
+[issue tracker](https://github.com/willihelm/fluestr/issues).
 
-| Variable | Replaces | Default |
-|---|---|---|
-| `FLUESTR_MODEL` | the model manager (P11) | largest non-Silero `.bin` in `.scratch/models` |
-| `FLUESTR_VAD_MODEL` | the model manager (P11) | newest `ggml-silero-*.bin` in `.scratch/models` |
-| `FLUESTR_WORKER` | the bundled sidecar (P13) | `whisper-worker` next to the app binary |
+## For developers
 
-## Building a signed app
-
-```sh
-just build     # signed Fluestr.app and a DMG in target/release/bundle
-just verify    # what the signature actually says, app and sidecar
-```
-
-The sidecar is bundled as a Tauri `externalBin`, so it lands in
-`Contents/MacOS` next to the app and is signed with the same identity and the
-same entitlements. Hardened Runtime is on, which is why
-`Entitlements.plist` carries `com.apple.security.device.audio-input`: the
-`Info.plist` key makes macOS ask for the microphone, the entitlement makes the
-answer count.
-
-Without an identity in the environment the bundle is signed **ad-hoc**. That
-runs here and satisfies Hardened Runtime, but it carries no team identity — so
-`spctl` rejects it, another Mac shows a Gatekeeper warning, and notarisation
-cannot run. All three want a Developer ID, which needs the paid Apple Developer
-Program. Once there is one, nothing here changes but the argument:
-
-```sh
-just build "Developer ID Application: Your Name (TEAMID)"
-```
-
-Notarisation is then the credentials `tauri build` already looks for and
-reports missing — `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and
-`APPLE_TEAM_ID`, or an App Store Connect key in `APPLE_API_KEY`,
-`APPLE_API_ISSUER` and `APPLE_API_KEY_PATH`.
-
-### Handing a build to testers
-
-```sh
-just beta      # target/beta: the DMG and the instructions that go with it
-```
-
-While the signature is ad-hoc, macOS blocks the app on a machine that is not
-this one and the tester has to allow it through System Settings by hand — once
-per build, and Control-click → Open is *not* a way around it on macOS 15 and
-newer. [docs/beta-install.md](docs/beta-install.md) is written for the tester
-rather than for this repository, and `just beta` copies it next to the DMG so
-the two travel together.
-
-## Layout
-
-```
-crates/
-  audio-core/        capture, ring buffers, resampling, segmentation — UI-free
-  whisper-protocol/  frame format between app and sidecar, shared by both
-  whisper-worker/    sidecar process, keeps a whisper model warm
-  app/               Tauri backend: session, worker pool, events
-ui/src/lib/          bridge types, chat list, level meter
-ui/                  Svelte + TypeScript
-docs/plan.md         the sixteen work packages and their current status
-docs/measurements.md measured evidence behind the architecture decisions
-```
-
-## Architecture in three sentences
-
-Each intercom channel is demultiplexed individually out of a multichannel
-interface, pushed through a lock-free ring buffer down to 16 kHz mono and cut
-into speech segments by a VAD.
-
-Those segments flow through **one** prioritised queue into a pool of sidecar
-processes — deliberately fewer workers than streams, because parallel whisper
-instances contend for the same Metal queue.
-
-The results travel as Tauri events into a virtualised chat view and on into
-SQLite.
-
-## Languages
-
-The app is built for **code switching**: mostly German with English technical
-terms ("Standby für Cue fünf, dann fade out").
-
-Whisper assigns exactly one language token per segment — there is no genuine
-"both at once" mode. The solution is therefore a **fixed primary language per
-stream plus a vocabulary prompt**, not auto-detection. Auto-detection actively
-makes this case worse: a segment with a high share of English flips into
-English mode and mangles the German remainder. The measurements are in
-[docs/measurements.md](docs/measurements.md).
-
-Auto-detection still exists — opt-in per stream and restricted to a candidate
-list. The language list itself comes from whisper.cpp at runtime; there is no
-`de`/`en` enum in the code. A third language is configuration, not a code
-change.
-
-## Whisper models
-
-Models are not bundled (P11: download on first start). For development:
-
-```sh
-just model small-q5_1   # into .scratch/models/
-```
-
-Recommendation for "latency first": `small-q5_1` — measured at 9-14x realtime
-on an M1 Pro with usable accuracy on mixed-language material.
-
-## Tests
-
-```sh
-just test    # unit tests, no hardware or model required
-
-# Audio hardware (P1) — needs an interface and microphone permission:
-cargo test -p audio-core --test capture_live -- --ignored --nocapture list_devices
-
-CAPTURE_DEVICE="Waves SoundGrid" CAPTURE_CHANNELS=0,1 CAPTURE_SECONDS=10 \
-  cargo test -p audio-core --test capture_live -- --ignored --nocapture record
-# writes one WAV per channel into .scratch/capture/ — speak into a single
-# input at a time and confirm only the matching file carries the signal
-
-# End-to-end against the real sidecar (needs a model and a fixture):
-just model small-q5_1
-just fixture de_mixed "Achtung Regie, Standby für Cue fünf. Auf mein Kommando dann fade out und Blackout."
-WHISPER_TEST_MODEL=.scratch/models/ggml-small-q5_1.bin \
-WHISPER_TEST_FIXTURE=.scratch/fixtures/de_mixed.wav \
-  cargo test -p whisper-worker --test sidecar -- --ignored --nocapture
-
-# Resampling throughput (P2) — a property of the machine, so not part of CI:
-cargo test -p audio-core --release -- --ignored --nocapture resampling_cost
-
-# The whole slice against a WAV file instead of a microphone:
-just slice
-```
-
-`just fixture` generates test audio through macOS text-to-speech. That is fine
-for quick regression tests but is no substitute for real recordings — the WER
-baseline in P14 needs actual intercom material.
+Building from source, the architecture, signing and tests are covered in
+[docs/development.md](docs/development.md). The project plan and its progress
+are in [docs/plan.md](docs/plan.md).
