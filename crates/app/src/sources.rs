@@ -7,14 +7,19 @@
 //! the other instance's feed (see [`crate::feed`]) is read, and its lines are
 //! fed into this machine's chat as if they had been transcribed here.
 //!
-//! **Into the chat as rows.** A channel read from another instance is a row of
-//! the active profile like any other — with a [`ChannelSource`] instead of an
-//! input — so it has a position, a label and a colour, it can be in groups and
-//! named by rules, and its lines carry that position as their stream id. The
-//! chat, the views, the rules and the history all work by stream id, and
-//! nothing in them has to learn about a second kind of channel. A remote
-//! channel that has no row is simply not shown: subscribing to an instance is
-//! not the same as wanting every one of its channels on this screen.
+//! **Into the chat by stream id.** A channel read from another instance is a
+//! [`StoredRemoteChannel`] of the active profile — a list of its own beside
+//! the inputs — with a label and a colour, it can be in groups and named by
+//! rules, and its lines carry the stream id it was given there, at or above
+//! [`REMOTE_STREAM_BASE`]. The chat, the views, the rules and the history all
+//! work by stream id, and nothing in them has to learn about a second kind of
+//! channel. Not a position among the inputs, which is what it used to be:
+//! removing an input above it then re-pointed every one of its lines on
+//! screen at the next channel down. A remote channel that is not in the list
+//! is simply not shown: subscribing to an instance is not the same as wanting
+//! every one of its channels on this screen.
+//!
+//! [`StoredRemoteChannel`]: crate::config::StoredRemoteChannel
 //!
 //! **Sessions are renamed, not shared.** Two instances count their sessions
 //! from one, so the other instance's session 3 would collide with this one's.
@@ -58,6 +63,14 @@ pub const REMOTE_SESSION_BASE: u64 = 1 << 40;
 pub fn is_remote_session(id: u64) -> bool {
     id >= REMOTE_SESSION_BASE
 }
+
+/// Where the stream ids of channels read from other instances begin.
+///
+/// Above any input a session numbers — those are positions in the channel
+/// list, and no interface has thirty-two thousand inputs — so the two kinds
+/// can never be mistaken for each other, and a remote channel's id never has
+/// to move when the inputs change.
+pub const REMOTE_STREAM_BASE: u16 = 0x8000;
 
 /// The subscriptions as they stand, sent on every change.
 pub const EVENT_SOURCES: &str = "sources-status";
@@ -122,7 +135,7 @@ pub struct SourceStatus {
     pub connected_once: bool,
 }
 
-/// Where a remote channel's lines go: a row of the active profile.
+/// Where a remote channel's lines go: a remote channel of the active profile.
 #[derive(Debug, Clone)]
 struct Route {
     stream_id: u16,
@@ -207,7 +220,7 @@ impl Sources {
             .cloned()
     }
 
-    /// The remote channel a row of the active profile shows.
+    /// The channel of `server` shown here as `stream_id`.
     fn channel_of(&self, server: &str, stream_id: u16) -> Option<String> {
         self.routes
             .lock()
@@ -228,14 +241,14 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>, config: &Config) {
     // Where each remote channel goes, from the active profile.
     let mut routes = HashMap::new();
     if let Some(profile) = config.profiles.get(config.active) {
-        for (position, channel) in profile.channels.iter().enumerate() {
-            let (Some(source), Ok(stream_id)) = (&channel.source, u16::try_from(position)) else {
-                continue;
-            };
+        for channel in &profile.remote_channels {
             routes.insert(
-                (source.server.clone(), source.channel.clone()),
+                (
+                    channel.source.server.clone(),
+                    channel.source.channel.clone(),
+                ),
                 Route {
-                    stream_id,
+                    stream_id: channel.stream,
                     label: channel.label.clone(),
                     muted: channel.muted,
                 },
@@ -1056,8 +1069,8 @@ mod tests {
         }
     }
 
-    /// A subscriber's configuration: one input of its own, then the server's
-    /// channel `ch-a` as the second row.
+    /// A subscriber's configuration: one input of its own, and the server's
+    /// channel `ch-a` shown as stream `REMOTE_STREAM_BASE + 1`.
     fn subscriber_config(server: &str, port: u16, key: &str) -> Config {
         serde_json::from_value(serde_json::json!({
             "version": crate::config::VERSION,
@@ -1071,7 +1084,10 @@ mod tests {
                 "device": "",
                 "channels": [
                     { "id": "mine", "channel": 0, "label": "Mine", "language": "de", "color": "#000" },
-                    { "id": "theirs", "channel": 0, "label": "Their Regie", "language": "de", "color": "#111",
+                ],
+                "remoteChannels": [
+                    { "id": "theirs", "label": "Their Regie", "color": "#111",
+                      "stream": REMOTE_STREAM_BASE + 1,
                       "source": { "server": server, "channel": "ch-a" } },
                 ],
                 "groups": [],
@@ -1147,7 +1163,11 @@ mod tests {
         })
         .await;
         let first = history_of(&subscriber).transcripts[0].clone();
-        assert_eq!(first.stream_id, 1, "the row the channel is shown as");
+        assert_eq!(
+            first.stream_id,
+            REMOTE_STREAM_BASE + 1,
+            "the stream the channel is shown as"
+        );
         assert_eq!(first.label, "Their Regie");
         assert_eq!(first.text, "Achtung Bühne");
         assert!(is_remote_session(first.session_id));

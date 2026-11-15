@@ -34,7 +34,7 @@
   import { adoptSpeech } from "./speech.svelte";
   import { attentionFor } from "./attention";
   import { ALL_CHANNELS_VIEW, canPin, setWindowOnTop, setWindowTitle, type GroupView } from "./windows";
-  import type { Channel } from "./streams";
+  import { shownChannels, type Channel, type ShownChannel } from "./streams";
   import {
     loadConfig,
     onCleared,
@@ -76,10 +76,13 @@
   let showsAll = $derived(group === ALL_CHANNELS_VIEW);
   const ALL_CHANNELS_NAME = "All channels";
 
-  // Every channel of the active profile, never only this group's: the stream
-  // id is the position in this list, exactly as the backend assigns it, and a
-  // pre-filtered list would point every id at the wrong channel.
+  // Every input of the active profile, never only this group's: an input's
+  // stream id is its position in this list, exactly as the backend assigns
+  // it, and a pre-filtered list would point every id at the wrong channel.
   let channels = $state<Channel[]>([]);
+  /// The inputs and the channels read from other instances (P29), with the
+  /// stream id each one's lines carry.
+  let allChannels = $state<ShownChannel[]>([]);
   let target = $state<Group | null>(null);
   // Whether a configuration has been read at all. Without it the window cannot
   // tell "this group was deleted" from "the file has not arrived yet", and it
@@ -116,16 +119,16 @@
   let webhooks = $state<WebhookStatus | null>(null);
   let status = $state<SessionState | { state: "idle" }>({ state: "idle" });
 
-  let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
+  let colors = $derived(new Map(allChannels.map((c) => [c.stream, c.color])));
   // The stream ids this window shows. Every one of them for the all-channels
   // view; an empty set for a group with no members — which is a group to fill
   // in on the Settings page, not a reason to fall back to showing everything.
   let visible = $derived(
     showsAll
-      ? new Set(channels.map((_, streamId) => streamId))
+      ? new Set(allChannels.map((c) => c.stream))
       : target === null
         ? new Set<number>()
-        : visibleStreams(target, channels)!,
+        : visibleStreams(target, allChannels)!,
   );
   let shown = $derived(messages.filter((m) => visible.has(m.streamId)));
   // While a session runs this is the backend's own answer rather than the UI's
@@ -146,7 +149,7 @@
   /// Reads the group out of a stored configuration.
   ///
   /// Always the *active* profile: the stream ids the transcripts carry are
-  /// positions in that profile's channel list, so a window showing another
+  /// that profile's, so a window showing another
   /// profile's group would be filtering the right numbers against the wrong
   /// channels. The main window closes these windows when the active profile
   /// changes, and this is the other half of that agreement.
@@ -155,6 +158,7 @@
     chatSort = sort;
     const profile = profiles.find((p) => p.key === activeKey) ?? null;
     channels = profile?.channels ?? [];
+    allChannels = profile ? shownChannels(profile.channels, profile.remoteChannels) : [];
     target = showsAll ? null : (profile?.groups[group as number] ?? null);
     known = true;
     // The backend titled this window when it opened it; a rename afterwards
@@ -306,8 +310,8 @@
   <header class="bar">
     <h1>{showsAll ? ALL_CHANNELS_NAME : (target?.name ?? "Group")}</h1>
     <span class="dots">
-      {#each channels as channel, streamId}
-        {#if visible.has(streamId)}
+      {#each allChannels as channel (channel.key)}
+        {#if visible.has(channel.stream)}
           <span class="dot" style="background: {channel.color}" title={channel.label}></span>
         {/if}
       {/each}

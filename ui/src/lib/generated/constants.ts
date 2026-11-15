@@ -11,7 +11,7 @@ import type { StoredOutputs } from "./config";
  * `config::VERSION`; the backend refuses to reinterpret a file claiming a
  * higher one.
  */
-export const CONFIG_VERSION = 3;
+export const CONFIG_VERSION = 4;
 
 /**
  * The id the custom model is selected by. Mirrors `models::CUSTOM`. Not a
@@ -47,6 +47,14 @@ export const REMOTE_DEFAULT_PORT = 8787;
  * has a session id at or above it, and lives by that instance's audio.
  */
 export const REMOTE_SESSION_BASE = 1099511627776;
+
+/**
+ * Where the stream ids of channels read from other instances begin (P29).
+ * Mirrors `sources::REMOTE_STREAM_BASE`: an input's stream id is its position
+ * in the channel list, and a remote channel keeps the one it was given, at or
+ * above this, however the inputs change.
+ */
+export const REMOTE_STREAM_BASE = 32768;
 
 /**
  * The quietest an input trim goes, in decibels. Mirrors

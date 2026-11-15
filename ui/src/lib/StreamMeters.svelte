@@ -32,7 +32,7 @@
   import { watchNarrow } from "./layout";
   import { loadCollapsed, saveCollapsed } from "./meters";
   import { currentGroup } from "./windows";
-  import { isInput, type Channel } from "./streams";
+  import type { Channel } from "./streams";
   import type { StreamLevel, WebhookStatus } from "./bridge";
 
   interface Props {
@@ -188,7 +188,7 @@
     {#each channels as channel, streamId (channel.key)}
       <!-- Not a channel read from another instance (P29): there is no audio
            of it here to meter, trim or mute at the input. -->
-      {#if (visible === null || visible.has(streamId)) && isInput(channel)}
+      {#if visible === null || visible.has(streamId)}
       {@const level = levels.get(streamId) ?? empty(streamId)}
       <div
         class="stream"

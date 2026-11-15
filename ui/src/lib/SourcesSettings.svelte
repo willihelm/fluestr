@@ -6,10 +6,11 @@
   // the profiles, like the LAN remote — and which of their channels are shown
   // is the production's, so it is stored in the active profile, as rows.
   //
-  // A channel ticked here becomes a row of the channel list: it gets a colour,
-  // it can be put in groups and named by rules, and its lines arrive in the
-  // chat like any other. Unticking it removes the row, and with it its place
-  // in the groups — exactly what removing a channel does.
+  // A channel ticked here becomes one of the profile's remote channels, listed
+  // below its inputs: it gets a colour and a stream id of its own, it can be
+  // put in groups and named by rules, and its lines arrive in the chat like
+  // any other. Unticking it removes it, and with it its place in the groups —
+  // exactly what removing a channel does.
   //
   // Nothing here changes the other instance. Reading along is reading: its
   // session, its settings and its shoutbox are its own, and this machine's
@@ -28,13 +29,13 @@
     type SourceStatus,
     type StoredSource,
   } from "./bridge";
-  import { remoteChannel, type Channel } from "./streams";
+  import { remoteChannel, type RemoteChannel } from "./streams";
   import type { Profile } from "./profiles";
   import { REMOTE_DEFAULT_PORT } from "./generated/constants";
 
   interface Props {
     sources: StoredSource[];
-    /// The active profile, whose channel list the ticked channels are rows of.
+    /// The active profile, whose remote channels the ticked channels are.
     profile: Profile | null;
     locked: boolean;
   }
@@ -98,9 +99,11 @@
 
   const remove = (id: string) => {
     sources = sources.filter((s) => s.id !== id);
-    // Its rows go with it: a row reading from an instance that is not read
-    // any more is a channel that will never say anything.
-    if (profile) profile.channels = profile.channels.filter((c) => c.source?.server !== id);
+    // Its channels go with it: a channel of an instance that is not read any
+    // more will never say anything.
+    if (profile) {
+      profile.remoteChannels = profile.remoteChannels.filter((c) => c.source.server !== id);
+    }
   };
 
   const update = (id: string, change: Partial<StoredSource>) => {
@@ -140,37 +143,36 @@
 
   // --- Channels ----------------------------------------------------------
 
-  const rowOf = (server: string, channel: string): Channel | undefined =>
-    profile?.channels.find((c) => c.source?.server === server && c.source.channel === channel);
+  const rowOf = (server: string, channel: string): RemoteChannel | undefined =>
+    profile?.remoteChannels.find((c) => c.source.server === server && c.source.channel === channel);
 
   const toggle = (server: string, channel: FeedChannel, shown: boolean) => {
     if (!profile) return;
     if (shown) {
       if (rowOf(server, channel.id)) return;
-      profile.channels = [
-        ...profile.channels,
+      profile.remoteChannels = [
+        ...profile.remoteChannels,
         remoteChannel(
-          profile.channels,
+          { channels: profile.channels, remote: profile.remoteChannels },
           { server, channel: channel.id },
           channel.label,
           channel.color,
-          profile.language,
         ),
       ];
     } else {
-      profile.channels = profile.channels.filter(
-        (c) => !(c.source?.server === server && c.source.channel === channel.id),
+      profile.remoteChannels = profile.remoteChannels.filter(
+        (c) => !(c.source.server === server && c.source.channel === channel.id),
       );
     }
   };
 
-  /// Rows of this profile that point at a channel the instance no longer
+  /// Channels of this profile that point at one the instance no longer
   /// offers — renamed is fine, deleted over there is not.
-  const orphans = (source: StoredSource, status: SourceStatus | undefined): Channel[] => {
+  const orphans = (source: StoredSource, status: SourceStatus | undefined): RemoteChannel[] => {
     if (!profile || !status || status.state !== "connected") return [];
     const offeredIds = new Set(status.channels.map((c) => c.id));
-    return profile.channels.filter(
-      (c) => c.source?.server === source.id && !offeredIds.has(c.source.channel),
+    return profile.remoteChannels.filter(
+      (c) => c.source.server === source.id && !offeredIds.has(c.source.channel),
     );
   };
 

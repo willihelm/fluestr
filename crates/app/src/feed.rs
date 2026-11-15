@@ -161,13 +161,7 @@ impl Streams {
     pub fn started(&self, session_id: u64, streams: &[StreamConfig]) {
         let ids = streams
             .iter()
-            .map(|s| {
-                if s.remote.unwrap_or(false) {
-                    None
-                } else {
-                    s.id.clone().filter(|id| !id.is_empty())
-                }
-            })
+            .map(|s| s.id.clone().filter(|id| !id.is_empty()))
             .collect();
         if let Ok(mut sessions) = self.sessions.lock() {
             sessions.insert(session_id, ids);
@@ -272,8 +266,10 @@ impl Streams {
     }
 }
 
-/// The channels this configuration offers: the active profile's inputs, and
-/// none of the channels it reads from somewhere else.
+/// The channels this configuration offers: the active profile's inputs. The
+/// channels it reads from somewhere else are a list of their own and never
+/// passed on, which is what keeps two instances reading each other from
+/// passing lines back and forth.
 pub fn channels(config: &Config) -> Vec<FeedChannel> {
     config
         .profiles
@@ -282,7 +278,7 @@ pub fn channels(config: &Config) -> Vec<FeedChannel> {
             profile
                 .channels
                 .iter()
-                .filter(|c| c.source.is_none() && !c.id.is_empty())
+                .filter(|c| !c.id.is_empty())
                 .map(|c| FeedChannel {
                     id: c.id.clone(),
                     label: c.label.clone(),
@@ -306,24 +302,20 @@ pub fn text(frame: &Frame) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn stream(id: &str, remote: bool) -> StreamConfig {
+    fn stream(id: &str) -> StreamConfig {
         serde_json::from_value(serde_json::json!({
             "channel": 0,
             "label": "x",
             "language": "de",
             "id": id,
-            "remote": remote,
         }))
         .expect("a stream")
     }
 
     #[test]
-    fn a_channel_read_from_elsewhere_is_never_passed_on() {
+    fn a_stream_without_an_id_is_never_passed_on() {
         let streams = Streams::default();
-        streams.started(
-            7,
-            &[stream("a", false), stream("b", true), stream("c", false)],
-        );
+        streams.started(7, &[stream("a"), stream(""), stream("c")]);
         assert_eq!(streams.channel(7, 0).as_deref(), Some("a"));
         assert_eq!(streams.channel(7, 1), None);
         assert_eq!(streams.channel(7, 2).as_deref(), Some("c"));

@@ -63,6 +63,7 @@
   import StreamSetup from "./StreamSetup.svelte";
   import { isMac, shortcut } from "./shortcut";
   import GroupMembership from "./GroupMembership.svelte";
+  import { shownChannels } from "./streams";
   import ListenSettings from "./ListenSettings.svelte";
   import ShoutboxSettings from "./ShoutboxSettings.svelte";
   import {
@@ -520,7 +521,10 @@
         <p class="note">Optional. Without one the chat shows every channel.</p>
 
         <div class="embedded">
-          <GroupMembership bind:groups={profile.groups} channels={profile.channels} />
+          <GroupMembership
+            bind:groups={profile.groups}
+            channels={shownChannels(profile.channels, profile.remoteChannels)}
+          />
         </div>
       {/if}
     {:else if step === "listen"}

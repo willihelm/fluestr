@@ -310,15 +310,7 @@ preview: boolean,
  * `default` — empty — for a caller that has no configuration to speak
  * of; such a stream is simply not offered to anyone.
  */
-id?: string, 
-/**
- * A channel another instance transcribes (P29). It is carried like a
- * channel the device does not have — its position, and with it every
- * stream id after it, has to stay where the configuration put it — and
- * it is never offered on this instance's own feed, which is what keeps
- * two instances reading each other from passing lines back and forth.
- */
-remote?: boolean, };
+id?: string, };
 
 /**
  * Level and health of one stream.

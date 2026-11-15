@@ -42,7 +42,10 @@ use std::path::{Path, PathBuf};
 /// 2.
 /// 3 put the shoutbox's room levels in dB SPL throughout (P26) — see
 /// [`Shoutbox::lift_to_spl`].
-pub const VERSION: u32 = 3;
+/// 4 moved the channels read from other instances out of the channel list
+/// into a list of their own, and made groups and rules name channels by id
+/// rather than by position — see [`Profile::split_remote_channels`].
+pub const VERSION: u32 = 4;
 
 /// The file inside the app's configuration directory.
 pub const FILE_NAME: &str = "config.json";
@@ -64,33 +67,31 @@ pub const FILE_NAME: &str = "config.json";
 #[ts(export, export_to = "config.ts")]
 pub struct StoredChannel {
     /// What this channel is called where a name is not enough: in the feed
-    /// another instance subscribes to, and in a channel of that instance which
-    /// shows this one (P29).
+    /// another instance subscribes to, in a channel of that instance which
+    /// shows this one (P29), and in the groups and rules of this profile.
     ///
     /// Random and never shown. A position changes when a channel above it is
     /// deleted and a label changes when somebody fixes a typo, and either
     /// would silently re-point every subscriber at a different talkback.
-    /// Unique within its profile; a duplicated profile keeps its ids, so a
-    /// subscriber follows a production into its copy.
+    /// Unique within its profile — across [`Profile::remote_channels`] too —
+    /// and a duplicated profile keeps its ids, so a subscriber follows a
+    /// production into its copy.
     ///
     /// `#[serde(default)]` — empty — because a file written before ids
     /// existed has none. [`Config::sanitise`] hands one out on the way in.
     #[serde(default)]
     pub id: String,
-    /// Where this channel's lines come from when it is not an input of this
-    /// machine at all, but a channel another instance transcribes (P29).
+    /// **Version 3 and before.** Where this channel's lines came from when it
+    /// was not an input of this machine but a channel another instance
+    /// transcribes (P29).
     ///
-    /// Such a channel is a row like any other — it has a label and a colour,
-    /// it can be in groups and named by rules — and that is the point: the
-    /// chat, the views and the rules all work by row, and a second kind of
-    /// channel next to the rows would need a second implementation of each.
-    /// What it does not have is audio here. The session carries it as a
-    /// channel the device does not have, and its lines arrive from the
-    /// subscription instead — see [`crate::sources`].
-    ///
-    /// `#[serde(default)]` — none — because every channel written before this
-    /// existed was an input.
-    #[serde(default)]
+    /// Read, never written: such a row now lives in
+    /// [`Profile::remote_channels`], and [`Config::migrate`] moves it there.
+    /// In the one list its stream id was its position, so removing an input
+    /// above it re-pointed every line already on screen at its neighbour —
+    /// colour and all.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
     pub source: Option<ChannelSource>,
     /// Zero-based channel index on the multichannel device, as the audio API
     /// counts them. The UI shows it one-based and converts at its own
@@ -152,6 +153,40 @@ pub struct ChannelSource {
     pub channel: String,
 }
 
+/// A channel of another instance, shown in this profile (P29).
+///
+/// Its own list beside [`Profile::channels`] rather than a row in it. It has
+/// a label and a colour, it can be in groups and named by rules, and its
+/// lines arrive in the chat like any other — but it has no input here, and
+/// above all its stream id is not a position. The inputs' stream ids are
+/// their positions, because that is how a session numbers its streams; a
+/// channel read from somewhere else is not in a session at all, so it keeps
+/// the id it was given in [`StoredRemoteChannel::stream`], and editing the
+/// inputs above it can never re-point its lines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "config.ts")]
+pub struct StoredRemoteChannel {
+    /// Its id in this profile, for the groups and rules that name it. Shares
+    /// one namespace with [`StoredChannel::id`].
+    #[serde(default)]
+    pub id: String,
+    pub source: ChannelSource,
+    /// The stream id its lines carry here, at or above
+    /// [`crate::sources::REMOTE_STREAM_BASE`] so it can never be mistaken
+    /// for an input's. Handed out once, when the channel is ticked, and never
+    /// changed afterwards; [`Config::sanitise`] fills in one that is missing
+    /// or taken.
+    #[serde(default)]
+    pub stream: u16,
+    pub label: String,
+    pub color: String,
+    /// Muted here: its lines are not shown on this machine. The instance
+    /// that transcribes it is not told.
+    #[serde(default)]
+    pub muted: bool,
+}
+
 /// Another instance this one reads along with (P29).
 ///
 /// Beside the profiles rather than in one, for the LAN remote's reason: which
@@ -190,20 +225,20 @@ pub struct StoredSource {
 #[ts(export, export_to = "config.ts")]
 pub struct StoredGroup {
     pub name: String,
-    /// Positions in [`Profile::channels`], not the UI's channel keys and not
-    /// stream ids.
+    /// Channel ids — [`StoredChannel::id`] or [`StoredRemoteChannel::id`] —
+    /// not the UI's channel keys and not stream ids.
     ///
-    /// At runtime membership is keyed on the channel's own key, precisely so
-    /// that deleting a channel does not re-point every group below it. That
-    /// argument is about a list being *edited*; a saved file is a snapshot in
-    /// which positions and keys say the same thing, and positions are the one
-    /// of the two that still means something after a restart. The translation
-    /// happens in the UI, in one place, on the way in and on the way out.
+    /// Ids rather than positions since version 4, because there are two
+    /// lists of channels and a position only means something in one of them.
+    /// A version 3 file holds positions in the one list it had, and
+    /// [`Config::migrate`] turns them into ids.
     ///
-    /// A position past the end of the channel list is dropped on load rather
-    /// than refused: a hand-edited file should cost a group its member, not
-    /// the operator their whole setup.
-    pub members: Vec<usize>,
+    /// An id that names no channel is dropped on load rather than refused: a
+    /// hand-edited file should cost a group its member, not the operator
+    /// their whole setup.
+    #[serde(with = "ids_or_positions")]
+    #[ts(as = "Vec<String>")]
+    pub members: Vec<String>,
     /// **Version 1 only.** Whether a view of this group flooded its window on
     /// every message (P17).
     ///
@@ -266,12 +301,11 @@ pub struct StoredRule {
     /// NFC-normalised — P17's matcher, unchanged. Empty is no word condition.
     #[serde(default)]
     pub words: Vec<String>,
-    /// Positions in [`Profile::channels`], like [`StoredGroup::members`] and
-    /// for the same reason: a saved file is a snapshot, and a position is the
-    /// one of position and key that still means something after a restart. Out
-    /// of range is dropped on load.
-    #[serde(default)]
-    pub channels: Vec<usize>,
+    /// Channel ids, like [`StoredGroup::members`] and for the same reason.
+    /// One that names no channel is dropped on load.
+    #[serde(default, with = "ids_or_positions")]
+    #[ts(as = "Vec<String>")]
+    pub channels: Vec<String>,
     /// Positions in [`Profile::groups`]: the windows the *flash* is for.
     ///
     /// A group is a view, so naming one here does not narrow *when* the rule
@@ -309,6 +343,39 @@ pub struct StoredRule {
 /// field that says so.
 fn enabled() -> bool {
     true
+}
+
+/// A list of channel references as any version wrote it: ids since version
+/// 4, positions before it. Written as ids.
+///
+/// A position is read as its decimal text and stays that until
+/// [`Profile::split_remote_channels`] — which only runs on a file older than
+/// version 4 — turns it into the id of the channel at that position. In a
+/// current file it is simply an id that names nothing, and dropped.
+mod ids_or_positions {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(ids: &[String], serializer: S) -> Result<S::Ok, S::Error> {
+        ids.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<String>, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Reference {
+            Id(String),
+            Position(u64),
+        }
+        Ok(Vec::<Reference>::deserialize(deserializer)?
+            .into_iter()
+            .map(|r| match r {
+                Reference::Id(id) => id,
+                Reference::Position(p) => p.to_string(),
+            })
+            .collect())
+    }
 }
 
 /// One production's setup: which interface, which channels, which views.
@@ -354,7 +421,16 @@ pub struct Profile {
     /// such field, and its profiles must keep loading.
     #[serde(default = "default_language")]
     pub language: String,
+    /// This machine's inputs, in stream order: a channel's position here is
+    /// the stream id a session gives it.
     pub channels: Vec<StoredChannel>,
+    /// The channels of other instances shown here (P29). See
+    /// [`StoredRemoteChannel`] for why they are a list of their own.
+    ///
+    /// `#[serde(default)]` because a file written before version 4 kept them
+    /// among the inputs — see [`Profile::split_remote_channels`].
+    #[serde(default)]
+    pub remote_channels: Vec<StoredRemoteChannel>,
     pub groups: Vec<StoredGroup>,
     /// **Version 1 only.** Whether the all-channels view flooded its window on
     /// every message (P17).
@@ -1103,18 +1179,34 @@ impl Config {
             // Every channel has an id, and no two in one profile share one: a
             // file from before ids, a hand-edited one, or a channel pasted
             // twice. The first keeps it, so whoever already subscribed to it
-            // keeps reading the channel they chose.
+            // keeps reading the channel they chose. One namespace for both
+            // lists, because groups and rules name either kind by it.
             let mut seen = std::collections::HashSet::new();
             for channel in &mut profile.channels {
-                if channel.id.trim().is_empty() || !seen.insert(channel.id.clone()) {
-                    channel.id = new_channel_id();
-                    seen.insert(channel.id.clone());
+                unique_id(&mut channel.id, &mut seen);
+            }
+            // One row per channel of another instance: two would be one
+            // line shown twice, and its lines can only go to one of them.
+            let mut shown = std::collections::HashSet::new();
+            profile.remote_channels.retain(|c| {
+                !c.source.server.is_empty()
+                    && shown.insert((c.source.server.clone(), c.source.channel.clone()))
+            });
+            let mut streams = std::collections::HashSet::new();
+            for channel in &mut profile.remote_channels {
+                unique_id(&mut channel.id, &mut seen);
+                if channel.stream < crate::sources::REMOTE_STREAM_BASE
+                    || !streams.insert(channel.stream)
+                {
+                    channel.stream = (crate::sources::REMOTE_STREAM_BASE..=u16::MAX)
+                        .find(|s| !streams.contains(s))
+                        .unwrap_or(u16::MAX);
+                    streams.insert(channel.stream);
                 }
             }
-            let channels = profile.channels.len();
             let groups = profile.groups.len();
             for group in &mut profile.groups {
-                group.members.retain(|&m| m < channels);
+                group.members.retain(|m| seen.contains(m));
             }
             profile.outputs.shoutbox.clamp();
             profile.outputs.listen.keep_minutes = profile.outputs.listen.keep_minutes.min(120);
@@ -1128,7 +1220,7 @@ impl Config {
             for rule in &mut profile.rules {
                 let located = !rule.channels.is_empty();
                 let addressed = !rule.views.is_empty();
-                rule.channels.retain(|&c| c < channels);
+                rule.channels.retain(|c| seen.contains(c));
                 rule.views.retain(|&v| v < groups);
                 // Everything it named is gone. Left in the file, so the
                 // operator can see what it said and re-point it, but switched
@@ -1343,6 +1435,80 @@ impl Config {
             rules.extend(std::mem::take(&mut profile.rules));
             profile.rules = rules;
         }
+
+        // Last, because the rules the steps above wrote name channels by
+        // position too.
+        if self.version < 4 {
+            for profile in &mut self.profiles {
+                profile.split_remote_channels();
+            }
+        }
+    }
+}
+
+impl Profile {
+    /// Turns a version 3 profile into a version 4 one: the rows read from
+    /// other instances leave the channel list for [`Profile::remote_channels`],
+    /// and groups and rules name channels by id instead of by position.
+    ///
+    /// In that order of thought, though not of work: the positions are
+    /// resolved against the one list they were written for, before it is
+    /// split. Each channel read from elsewhere gets a stream id of its own,
+    /// in the order the rows were in.
+    fn split_remote_channels(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        for channel in &mut self.channels {
+            unique_id(&mut channel.id, &mut seen);
+        }
+        let ids: Vec<String> = self.channels.iter().map(|c| c.id.clone()).collect();
+        let resolve = |references: &mut Vec<String>| {
+            *references = references
+                .iter()
+                .filter_map(|r| r.parse::<usize>().ok())
+                .filter_map(|p| ids.get(p).cloned())
+                .collect();
+        };
+        for group in &mut self.groups {
+            resolve(&mut group.members);
+        }
+        for rule in &mut self.rules {
+            let located = !rule.channels.is_empty();
+            resolve(&mut rule.channels);
+            // A rule whose every channel was out of range must not come out
+            // of this as a rule on every channel — see `sanitise`.
+            if located && rule.channels.is_empty() {
+                rule.enabled = false;
+            }
+        }
+
+        let (remote, inputs): (Vec<_>, Vec<_>) = std::mem::take(&mut self.channels)
+            .into_iter()
+            .partition(|c| c.source.is_some());
+        self.channels = inputs;
+        let mut stream = crate::sources::REMOTE_STREAM_BASE;
+        for channel in remote {
+            let Some(source) = channel.source else {
+                continue;
+            };
+            self.remote_channels.push(StoredRemoteChannel {
+                id: channel.id,
+                source,
+                stream,
+                label: channel.label,
+                color: channel.color,
+                muted: channel.muted,
+            });
+            stream = stream.saturating_add(1);
+        }
+    }
+}
+
+/// Keeps an id that is set and not taken yet, and hands out a fresh one
+/// otherwise.
+fn unique_id(id: &mut String, seen: &mut std::collections::HashSet<String>) {
+    if id.trim().is_empty() || !seen.insert(id.clone()) {
+        *id = new_channel_id();
+        seen.insert(id.clone());
     }
 }
 
@@ -1552,6 +1718,7 @@ mod tests {
                         muted: false,
                         preview: true,
                     }],
+                    remote_channels: vec![],
                     groups: vec![],
                     all_channels_flash: false,
                     rules: vec![],
@@ -1593,9 +1760,22 @@ mod tests {
                             preview: false,
                         },
                     ],
+                    // Read from the desk in the next room, and in the stage
+                    // group beside this machine's own Licht.
+                    remote_channels: vec![StoredRemoteChannel {
+                        id: "r1".into(),
+                        source: ChannelSource {
+                            server: "a1b2c3d4e5f6".into(),
+                            channel: "x1".into(),
+                        },
+                        stream: crate::sources::REMOTE_STREAM_BASE,
+                        label: "Inspizienz".into(),
+                        color: "#e879a6".into(),
+                        muted: false,
+                    }],
                     groups: vec![StoredGroup {
                         name: "Bühne".into(),
-                        members: vec![1],
+                        members: vec!["c3".into(), "r1".into()],
                         flash: false,
                         on_top: true,
                     }],
@@ -1615,7 +1795,7 @@ mod tests {
                             name: "Go bei der Inspizienz".into(),
                             enabled: true,
                             words: vec!["Go".into()],
-                            channels: vec![1],
+                            channels: vec!["r1".into()],
                             views: vec![0],
                             actions: vec![rules::Action::Flash],
                             webhook: None,
@@ -1744,7 +1924,11 @@ mod tests {
         assert!(config.profiles[0].rules.is_empty());
         // And it decodes with the default worker count rather than none.
         assert_eq!(config.workers, None);
-        assert_eq!(config.profiles[0].groups[0].members, vec![0]);
+        assert_eq!(
+            config.profiles[0].groups[0].members,
+            [config.profiles[0].channels[0].id.clone()],
+            "a position becomes the id of the channel that was there"
+        );
         // And its window opens like any other one: a setup that suddenly put
         // windows in front of everything is not what a missing field meant.
         assert!(!config.profiles[0].groups[0].on_top);
@@ -1804,7 +1988,10 @@ mod tests {
         // The group that flashed, as the two halves it always was: its
         // channels are when it fires, its window is who is told.
         assert_eq!(rules[2].views, [0]);
-        assert_eq!(rules[2].channels, [1]);
+        assert_eq!(
+            rules[2].channels,
+            [config.profiles[0].channels[1].id.clone()]
+        );
         assert!(rules[2].words.is_empty());
         assert_eq!(rules[2].actions, [rules::Action::Flash]);
 
@@ -1827,12 +2014,12 @@ mod tests {
     fn a_rule_pointing_past_the_channels_loses_the_channel_and_not_its_narrowing() {
         let path = temp_dir().join(FILE_NAME);
         let mut config = a_config();
-        config.profiles[1].rules[1].channels = vec![1, 9];
+        config.profiles[1].rules[1].channels = vec!["c3".into(), "gone".into()];
         config.profiles[1].rules.push(StoredRule {
             name: "nur auf Kanal 9".into(),
             enabled: true,
             words: vec!["Go".into()],
-            channels: vec![9],
+            channels: vec!["gone".into()],
             views: vec![],
             actions: vec![rules::Action::Flash],
             webhook: None,
@@ -1842,7 +2029,11 @@ mod tests {
 
         let loaded = load(&path);
         let rules = &loaded.profiles[1].rules;
-        assert_eq!(rules[1].channels, [1], "the channel that is there survives");
+        assert_eq!(
+            rules[1].channels,
+            ["c3"],
+            "the channel that is there survives"
+        );
         assert!(rules[1].enabled);
 
         assert!(
@@ -1855,12 +2046,108 @@ mod tests {
     fn membership_pointing_past_the_channels_costs_the_member_not_the_setup() {
         let path = temp_dir().join(FILE_NAME);
         let mut config = a_config();
-        config.profiles[1].groups[0].members = vec![0, 9];
+        config.profiles[1].groups[0].members = vec!["c2".into(), "gone".into()];
         save(&path, &config).expect("saving");
 
         let loaded = load(&path);
-        assert_eq!(loaded.profiles[1].groups[0].members, vec![0]);
+        assert_eq!(loaded.profiles[1].groups[0].members, ["c2"]);
         assert_eq!(loaded.profiles[1].channels.len(), 2, "nothing else is lost");
+    }
+
+    /// The bug version 4 exists for: in one list, a channel read from
+    /// another instance had its position as its stream id, so removing an
+    /// input above it re-pointed every line it had on screen — colour and all.
+    #[test]
+    fn a_version_three_file_moves_its_remote_rows_out_and_keeps_its_groups() {
+        let path = temp_dir().join(FILE_NAME);
+        fs::write(
+            &path,
+            r##"{
+              "version": 3,
+              "active": 0,
+              "vocabulary": null,
+              "profiles": [
+                {
+                  "name": "Grosses Haus",
+                  "device": "MADIface",
+                  "channels": [
+                    { "id": "a", "channel": 0, "label": "Regie", "language": "de", "color": "#111" },
+                    { "id": "r", "channel": 65535, "label": "Inspizienz", "language": "de",
+                      "color": "#222", "muted": true,
+                      "source": { "server": "desk", "channel": "x1" } },
+                    { "id": "b", "channel": 3, "label": "Licht", "language": "de", "color": "#333" }
+                  ],
+                  "groups": [{ "name": "Bühne", "members": [1, 2] }],
+                  "rules": [
+                    { "name": "Go", "words": ["Go"], "channels": [1], "actions": ["flash"] },
+                    { "name": "weg", "words": ["Go"], "channels": [7], "actions": ["flash"] }
+                  ]
+                }
+              ]
+            }"##,
+        )
+        .expect("writing the version 3 file");
+
+        let config = load(&path);
+        let profile = &config.profiles[0];
+        assert_eq!(config.version, VERSION);
+
+        let inputs: Vec<&str> = profile.channels.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            inputs,
+            ["a", "b"],
+            "only the inputs are left, in their order"
+        );
+        assert_eq!(
+            profile.remote_channels,
+            [StoredRemoteChannel {
+                id: "r".into(),
+                source: ChannelSource {
+                    server: "desk".into(),
+                    channel: "x1".into(),
+                },
+                stream: crate::sources::REMOTE_STREAM_BASE,
+                label: "Inspizienz".into(),
+                color: "#222".into(),
+                muted: true,
+            }]
+        );
+        assert_eq!(profile.groups[0].members, ["r", "b"]);
+        assert_eq!(profile.rules[0].channels, ["r"]);
+        assert!(profile.rules[0].enabled);
+        assert!(
+            profile.rules[1].channels.is_empty() && !profile.rules[1].enabled,
+            "a rule on a channel that was never there is switched off, not widened"
+        );
+    }
+
+    #[test]
+    fn remote_channels_keep_their_stream_and_never_share_one() {
+        let mut config = a_config();
+        let mut second = config.profiles[1].remote_channels[0].clone();
+        second.id = "r2".into();
+        second.source.channel = "x2".into();
+        // Taken by the first one, and below the range: both are handed a new
+        // one, the first keeps its own.
+        let mut third = second.clone();
+        third.id = "r3".into();
+        third.source.channel = "x3".into();
+        third.stream = 3;
+        config.profiles[1].remote_channels.push(second);
+        config.profiles[1].remote_channels.push(third);
+        // The same channel of the same instance twice is one row.
+        let mut again = config.profiles[1].remote_channels[0].clone();
+        again.id = "r4".into();
+        config.profiles[1].remote_channels.push(again);
+
+        let tidy = config.sanitised();
+        let streams: Vec<u16> = tidy.profiles[1]
+            .remote_channels
+            .iter()
+            .map(|c| c.stream)
+            .collect();
+        let base = crate::sources::REMOTE_STREAM_BASE;
+        assert_eq!(streams, [base, base + 1, base + 2]);
     }
 
     #[test]
@@ -2054,7 +2341,17 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]),
-            ["channels", "device", "deviceId", "groups", "language", "name", "outputs", "rules"]
+            [
+                "channels",
+                "device",
+                "deviceId",
+                "groups",
+                "language",
+                "name",
+                "outputs",
+                "remoteChannels",
+                "rules"
+            ]
         );
         assert_eq!(
             keys(&json["sources"][0]),
@@ -2078,10 +2375,11 @@ mod tests {
         );
         assert_eq!(
             keys(&json["profiles"][0]["channels"][0]),
-            [
-                "channel", "color", "gainDb", "id", "label", "language", "muted", "preview",
-                "source"
-            ]
+            ["channel", "color", "gainDb", "id", "label", "language", "muted", "preview"]
+        );
+        assert_eq!(
+            keys(&json["profiles"][1]["remoteChannels"][0]),
+            ["color", "id", "label", "muted", "source", "stream"]
         );
         // The second profile, because it is the one with groups in it.
         assert_eq!(
@@ -2183,7 +2481,7 @@ mod tests {
         let mut sent = stored.clone();
         // A member position the channel list does not reach. The tidy drops
         // it, here and on the way in, so the two agree.
-        sent.profiles[1].groups[0].members.push(99);
+        sent.profiles[1].groups[0].members.push("gone".into());
 
         assert_eq!(sent.sanitised(), stored);
     }

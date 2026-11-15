@@ -31,8 +31,8 @@
     absentChannels,
     applyLanguage,
     usedLanguages,
-    isInput,
     type Channel,
+    type RemoteChannel,
   } from "./streams";
   import LanguagePicker from "./LanguagePicker.svelte";
   import GainKnob from "./GainKnob.svelte";
@@ -45,6 +45,10 @@
 
   interface Props {
     channels: Channel[];
+    /// The channels read from other instances (P29), listed below the inputs.
+    /// Ticked on the "Connect to other Fluestr" page; here they are named,
+    /// coloured, muted and removed like the inputs, and have nothing else.
+    remoteChannels?: RemoteChannel[];
     deviceChannels: number;
     /// The profile's default language: what a channel added here starts on.
     /// Bound, because the picker that sets it lives in this header — it is
@@ -92,6 +96,7 @@
 
   let {
     channels = $bindable(),
+    remoteChannels = $bindable([]),
     deviceChannels,
     language = $bindable(),
     languages,
@@ -101,7 +106,7 @@
     sourceNames = new Map(),
   }: Props = $props();
 
-  let inputs = $derived(channels.filter(isInput).length);
+  let inputs = $derived(channels.length);
 
   let duplicates = $derived(duplicateChannels(channels));
   // Not an error either: a row the current device has no channel for is
@@ -134,6 +139,10 @@
   const remove = (key: number) => {
     channels = channels.filter((c) => c.key !== key);
   };
+
+  const removeRemote = (key: number) => {
+    remoteChannels = remoteChannels.filter((c) => c.key !== key);
+  };
 </script>
 
 <section class="panel">
@@ -162,7 +171,7 @@
          the section is scanned for: which label sits on which channel. The
          inputs keep the names as `aria-label`, so nothing is lost to a screen
          reader. -->
-    {#if channels.length > 0}
+    {#if channels.length + remoteChannels.length > 0}
       <div class="head" aria-hidden="true">
         <span>Colour</span>
         <span>Ch</span>
@@ -179,7 +188,6 @@
       <div
         class="row"
         class:absent={absent.has(index)}
-        class:remote={!isInput(channel)}
         style="--channel: {channel.color}"
       >
         <!-- First in the row, and the only mark of the channel's colour: a
@@ -196,22 +204,14 @@
         <!-- Counted from 1, the way channels are numbered on an interface and
              in a patch list. The backend stays zero-based; the conversion
              happens here and nowhere else. -->
-        {#if channel.source}
-          <!-- A channel another instance transcribes (P29): it has no input
-               here, so where the device channel would be, it says where it
-               comes from. -->
-          {@const from = sourceNames.get(channel.source.server) ?? "another instance"}
-          <span class="from" title="Read from {from}">⇄</span>
-        {:else}
-          <input
-            type="number"
-            min="1"
-            aria-label="Device channel"
-            value={channel.channel + 1}
-            oninput={(e) => (channel.channel = Number(e.currentTarget.value) - 1)}
-            disabled={locked}
-          />
-        {/if}
+        <input
+          type="number"
+          min="1"
+          aria-label="Device channel"
+          value={channel.channel + 1}
+          oninput={(e) => (channel.channel = Number(e.currentTarget.value) - 1)}
+          disabled={locked}
+        />
 
         <!-- `onchange`, not `oninput`: a rename reaches the running session
              when the operator has finished typing it, not once per keystroke
@@ -250,7 +250,7 @@
               live?.(index, { muted: next });
             }}
           />
-          {#if canSolo && isInput(channel)}
+          {#if canSolo}
             <SoloButton
               streamId={index}
               label={channel.label}
@@ -259,7 +259,6 @@
           {/if}
           <!-- Live too: a channel whose drafts swamp the GPU shows itself
                by talking, during the show. -->
-          {#if isInput(channel)}
           <DraftButton
             preview={channel.preview}
             label={channel.label}
@@ -269,48 +268,70 @@
               live?.(index, { preview: next });
             }}
           />
-          {/if}
         </div>
 
         <!-- Live like the label and the language, and for a stronger reason
              than either: a channel nobody spoke on during the sound check is
              found by somebody speaking on it during the show, and the fix has
              to be possible then. -->
-        {#if isInput(channel)}
-          <GainKnob
-            value={channel.gainDb}
-            label={channel.label}
-            disabled={locked && live === null}
-            onchange={(db) => {
-              channel.gainDb = db;
-              live?.(index, { gainDb: db });
-            }}
-          />
-        {:else}
-          <span></span>
-        {/if}
+        <GainKnob
+          value={channel.gainDb}
+          label={channel.label}
+          disabled={locked && live === null}
+          onchange={(db) => {
+            channel.gainDb = db;
+            live?.(index, { gainDb: db });
+          }}
+        />
 
         <!-- Wrapped, because `LevelMeter` draws a bar and, when samples have
              been lost, a count beside it — two elements, which in a grid row
              would land in two columns. -->
         <div class="level">
-          {#if levels && isInput(channel)}
+          {#if levels}
             {@const level = levels.get(index)}
             <LevelMeter
               rms={level?.rms ?? 0}
               peak={level?.peak ?? 0}
               dropped={level?.dropped ?? 0}
             />
-          {:else if channel.source}
-            <span class="from-name" title="Read from another instance"
-              >{sourceNames.get(channel.source.server) ?? "Another instance"}</span
-            >
           {/if}
         </div>
 
         <div class="end">
           <button class="remove" onclick={() => remove(channel.key)} disabled={locked}
             title="Remove this channel">×</button>
+        </div>
+      </div>
+    {/each}
+
+    <!-- The channels another instance transcribes (P29), after this
+         machine's own. They have no input here — no device channel, no
+         language, no trim, no draft — and they are not in the session: their
+         lines arrive from the subscription, and the label, the colour and the
+         mute take effect with the save. -->
+    {#each remoteChannels as channel (channel.key)}
+      {@const from = sourceNames.get(channel.source.server) ?? "another instance"}
+      <div class="row" style="--channel: {channel.color}">
+        <input type="color" aria-label="Colour" bind:value={channel.color} disabled={locked} />
+        <span class="from" title="Read from {from}">⇄</span>
+        <input type="text" aria-label="Label" bind:value={channel.label} disabled={locked} />
+        <span></span>
+        <div class="keys">
+          <MuteButton
+            muted={channel.muted}
+            label={channel.label}
+            disabled={locked}
+            onchange={(next) => (channel.muted = next)}
+          />
+        </div>
+        <span></span>
+        <div class="level">
+          <span class="from-name" title="Read from {from}">{from}</span>
+        </div>
+        <div class="end">
+          <button class="remove" onclick={() => removeRemote(channel.key)} disabled={locked}
+            title="Stop showing this channel">×</button>
         </div>
       </div>
     {/each}
