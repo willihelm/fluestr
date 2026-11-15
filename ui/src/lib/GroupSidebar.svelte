@@ -40,7 +40,7 @@
   import type { Group } from "./groups";
   import { watchNarrow } from "./layout";
   import { clampWidth, DEFAULT_WIDTH, loadWidth, maxWidth, MIN_WIDTH, saveWidth } from "./sidebar";
-  import type { Channel } from "./streams";
+  import type { ShownChannel as Channel } from "./streams";
   import { ALL_CHANNELS_VIEW, canPin, type GroupView } from "./windows";
 
   interface Props {

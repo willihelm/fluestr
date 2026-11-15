@@ -14,12 +14,21 @@
 //
 // This module owns exactly one conversion, and owns it alone: group membership
 // is a set of **channel keys** while the setup is being edited and a set of
-// **positions** in the file. Both are right where they are. The key is stable
-// while a row is edited, which is what stops deleting a channel from
-// re-pointing every group below it; the position is what still means something
-// after a restart, when every key is a number this window has never issued.
+// **channel ids** in the file. Both are right where they are. The key is
+// stable while a row is edited and costs nothing to compare; the id is what
+// still means something after a restart, when every key is a number this
+// window has never issued — and, unlike a position, it means the same thing
+// for an input and for a channel read from another instance.
 
-import { clampGain, newChannel, restoreChannel, DEFAULT_LANGUAGE, type Channel } from "./streams";
+import {
+  clampGain,
+  newChannel,
+  restoreChannel,
+  restoreRemoteChannel,
+  DEFAULT_LANGUAGE,
+  type Channel,
+  type RemoteChannel,
+} from "./streams";
 import { restoreGroup, type Group } from "./groups";
 import { restoreRule, type Rule } from "./rules";
 import { DEFAULT_DIRECTION, type SortDirection } from "./sort";
@@ -173,7 +182,11 @@ export interface Profile {
   /// the channel list shows. Every channel keeps its own language; this only
   /// decides what a new one is born with.
   language: string;
+  /// This machine's inputs, in stream order.
   channels: Channel[];
+  /// The channels of other instances shown here (P29). A list of their own,
+  /// so that editing the inputs never moves their stream ids.
+  remoteChannels: RemoteChannel[];
   groups: Group[];
   /// What fires on this profile's channels, and what it does (P19).
   ///
@@ -213,6 +226,7 @@ export const newProfile = (
   deviceId: device.id,
   language,
   channels: [newChannel([], language)],
+  remoteChannels: [],
   groups: [],
   // Quiet to begin with, for the reason a new group is: an app that starts by
   // flashing at everything gets its attention requests ignored.
@@ -221,13 +235,19 @@ export const newProfile = (
 });
 
 /// A profile as the file holds it. Membership translated from channel keys to
-/// positions; a key that is not in the channel list is dropped, which is the
-/// same thing `forgetChannels` does live.
+/// ids; a key that is in neither channel list is dropped, which is the same
+/// thing `forgetChannels` does live.
 export const toStored = (profile: Profile): StoredProfile => {
-  const position = new Map(profile.channels.map((c, index) => [c.key, index]));
-  // Groups are stored by position too, for the same reason membership is: a
-  // rule that names a group has to still name it after a restart, and the key
-  // is a counter this window handed out.
+  const idOf = new Map(
+    [...profile.channels, ...profile.remoteChannels].map((c) => [c.key, c.id]),
+  );
+  const ids = (keys: number[]): string[] =>
+    keys.flatMap((key) => {
+      const id = idOf.get(key);
+      return id === undefined ? [] : [id];
+    });
+  // Groups are stored by position: a rule that names a group has to still
+  // name it after a restart, and the key is a counter this window handed out.
   const groupPosition = new Map(profile.groups.map((g, index) => [g.key, index]));
 
   return {
@@ -237,7 +257,6 @@ export const toStored = (profile: Profile): StoredProfile => {
     language: profile.language,
     channels: profile.channels.map((c) => ({
       id: c.id,
-      source: c.source,
       channel: c.channel,
       label: c.label,
       language: c.language,
@@ -246,27 +265,28 @@ export const toStored = (profile: Profile): StoredProfile => {
       muted: c.muted,
       preview: c.preview,
     })),
+    remoteChannels: profile.remoteChannels.map((c) => ({
+      id: c.id,
+      source: { ...c.source },
+      stream: c.stream,
+      label: c.label,
+      color: c.color,
+      muted: c.muted,
+    })),
     groups: profile.groups.map((g) => ({
       name: g.name,
       onTop: g.onTop,
-      // `flatMap` rather than a filter: a key with no position is a channel
-      // that is no longer there, and dropping it is what `forgetChannels`
-      // already does live.
-      members: g.members.flatMap((key) => {
-        const index = position.get(key);
-        return index === undefined ? [] : [index];
-      }),
+      // A key with no id is a channel that is no longer there, and dropping
+      // it is what `forgetChannels` already does live.
+      members: ids(g.members),
     })),
     rules: profile.rules.map((rule) => ({
       name: rule.name,
       enabled: rule.enabled,
       words: rule.words,
-      // `flatMap` for the members' reason: a key with no position names
-      // something that is no longer there, and `forget` already drops it live.
-      channels: rule.channels.flatMap((key) => {
-        const index = position.get(key);
-        return index === undefined ? [] : [index];
-      }),
+      // For the members' reason: a key with no id names something that is
+      // no longer there, and `forget` already drops it live.
+      channels: ids(rule.channels),
       // The windows the flash is for, by the same positions the group
       // windows are named by.
       views: rule.views.flatMap((key) => {
@@ -291,16 +311,23 @@ export const toStored = (profile: Profile): StoredProfile => {
 
 /// A profile read back from the file, with fresh keys.
 ///
-/// A member position past the end of the channel list is dropped rather than
-/// refused — the backend already does this on load, and doing it here too
-/// means a file written by hand costs a group its member and not the operator
-/// their setup.
+/// A member id that names no channel is dropped rather than refused — the
+/// backend already does this on load, and doing it here too means a file
+/// written by hand costs a group its member and not the operator their setup.
 export const fromStored = (stored: StoredProfile): Profile => {
   const channels = stored.channels.map(restoreChannel);
+  // A file written before P29 has none.
+  const remoteChannels = (stored.remoteChannels ?? []).map(restoreRemoteChannel);
+  const keyOf = new Map([...channels, ...remoteChannels].map((c) => [c.id, c.key]));
+  const keys = (ids: string[]): number[] =>
+    ids.flatMap((id) => {
+      const key = keyOf.get(id);
+      return key === undefined ? [] : [key];
+    });
   const groups = stored.groups.map((g) =>
     restoreGroup(
       g.name,
-      g.members.filter((p) => p >= 0 && p < channels.length).map((p) => channels[p].key),
+      keys(g.members),
       // A file that predates the window setting opens its group windows like
       // any other window.
       g.onTop ?? false,
@@ -319,6 +346,7 @@ export const fromStored = (stored: StoredProfile): Profile => {
     // "" would make every channel added afterwards languageless.
     language: stored.language ?? DEFAULT_LANGUAGE,
     channels,
+    remoteChannels,
     groups,
     // A file written before P19 has no rules; the backend's migration is what
     // fills them in from the alert terms and the flash flags, so by the time
@@ -329,9 +357,7 @@ export const fromStored = (stored: StoredProfile): Profile => {
         name: rule.name,
         enabled: rule.enabled ?? true,
         words: rule.words ?? [],
-        channels: (rule.channels ?? [])
-          .filter((p) => p >= 0 && p < channels.length)
-          .map((p) => channels[p].key),
+        channels: keys(rule.channels ?? []),
         views: (rule.views ?? [])
           .filter((p) => p >= 0 && p < groups.length)
           .map((p) => groups[p].key),
@@ -443,8 +469,8 @@ export const toStoredConfig = (
   sources: StoredSource[] = [],
 ): StoredConfig => ({
   version: CONFIG_VERSION,
-  // Stored as a position, like group membership and for the same reason: the
-  // key means nothing to the next window.
+  // Stored as a position, like the groups a rule names and for the same
+  // reason: the key means nothing to the next window.
   active: Math.max(
     0,
     profiles.findIndex((p) => p.key === activeKey),
@@ -566,8 +592,8 @@ export const fromStoredConfig = (
 /// down and rebuilt — which takes the focus out of the field being typed in,
 /// on every save, which is every keystroke.
 ///
-/// By **position**, which is what the file stores membership and the active
-/// profile by anyway. A rename or a channel edit keeps every position and
+/// By **position** — in each of the two channel lists, in the groups and in
+/// the profiles. A rename or a channel edit keeps every position and
 /// therefore every key, so the page is updated in place and the cursor stays
 /// where it was; adding, deleting or reordering shifts them, and the view
 /// treats that as the setup change it is.
@@ -584,9 +610,16 @@ export const reuseKeys = (fresh: Profile[], previous: Profile[]): Profile[] =>
       const same = before.channels[position];
       return same ? { ...channel, key: same.key } : channel;
     });
+    const remoteChannels = profile.remoteChannels.map((channel, position) => {
+      const same = before.remoteChannels[position];
+      return same ? { ...channel, key: same.key } : channel;
+    });
     // Fresh key to carried-over key. A channel with no counterpart keeps the
     // key it was read with, and maps to itself.
-    const carried = new Map(profile.channels.map((c, i) => [c.key, channels[i].key]));
+    const carried = new Map([
+      ...profile.channels.map((c, i): [number, number] => [c.key, channels[i].key]),
+      ...profile.remoteChannels.map((c, i): [number, number] => [c.key, remoteChannels[i].key]),
+    ]);
 
     const groups = profile.groups.map((group, position) => {
       const same = before.groups[position];
@@ -606,6 +639,7 @@ export const reuseKeys = (fresh: Profile[], previous: Profile[]): Profile[] =>
       ...profile,
       key: before.key,
       channels,
+      remoteChannels,
       groups,
       rules: profile.rules.map((rule) => ({
         ...rule,

@@ -65,6 +65,7 @@ import type {
   StoredListen,
   StoredShoutbox,
   StoredSource,
+  StoredRemoteChannel,
   ChannelSource,
 } from "./generated/config";
 import type {
@@ -135,6 +136,7 @@ export type {
   StoredRule,
   StoredSortDirection,
   StoredSource,
+  StoredRemoteChannel,
   ChannelSource,
   FeedChannel,
   FoundServer,
@@ -179,6 +181,7 @@ export {
   PREVIEW_STEP_MS_MIN,
   REMOTE_DEFAULT_PORT,
   REMOTE_SESSION_BASE,
+  REMOTE_STREAM_BASE,
   SHOUTBOX_CEILING_DBFS_MAX,
   SHOUTBOX_CEILING_DBFS_MIN,
   SHOUTBOX_GAIN_DB_MAX,

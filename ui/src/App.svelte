@@ -12,7 +12,7 @@
   import UpdateButton from "./lib/UpdateButton.svelte";
   import { alreadySeen } from "./lib/changelog";
   import Notices, { type Notice } from "./lib/Notices.svelte";
-  import { toConfig, validate, absentChannels, isInput } from "./lib/streams";
+  import { toConfig, validate, absentChannels, shownChannels } from "./lib/streams";
   import { forgetChannels, visibleStreams } from "./lib/groups";
   import { forget as forgetInRules } from "./lib/rules";
   import {
@@ -268,6 +268,11 @@
   let device = $derived(active?.device ?? "");
   let deviceId = $derived(active?.deviceId ?? "");
   let channels = $derived(active?.channels ?? []);
+  /// Every channel the chat shows lines of: the inputs, and the channels read
+  /// from other instances (P29), each with the stream id its lines carry.
+  let allChannels = $derived(
+    active ? shownChannels(active.channels, active.remoteChannels) : [],
+  );
   let groups = $derived(active?.groups ?? []);
   // What fires on this profile's channels, and what it does (P19). On the
   // profile because a trigger names channels and groups — see `rules.ts`.
@@ -387,9 +392,9 @@
   // the normal case for a setup carried between the office and the house, and
   // it is a different problem from a device with no input channels.
   let connected = $derived(selected !== undefined);
-  // The stream id is the row's position, which is exactly how the backend
-  // assigns it — see `SessionConfig::streams`.
-  let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
+  // An input's stream id is its position, which is exactly how the backend
+  // assigns it — see `SessionConfig::streams`; a remote channel has its own.
+  let colors = $derived(new Map(allChannels.map((c) => [c.stream, c.color])));
   let problem = $derived(validate(channels, device, deviceChannels, connected));
 
   /// Everything a running session can only take on by being started again:
@@ -496,11 +501,7 @@
   let absent = $derived(
     status.state === "running"
       ? new Set(
-          status.streams
-            // A row read from another instance is carried as absent on
-            // purpose (P29); it is not a channel the device lacks.
-            .filter((s) => s.absent && isInput(channels[s.streamId] ?? { source: null }))
-            .map((s) => s.streamId),
+          status.streams.filter((s) => s.absent).map((s) => s.streamId),
         )
       : new Set(absentChannels(channels, deviceChannels)),
   );
@@ -511,9 +512,7 @@
   // wrong fix.
   let mutedCount = $derived(
     status.state === "running"
-      ? status.streams.filter(
-          (s) => s.muted && !s.absent && isInput(channels[s.streamId] ?? { source: null }),
-        ).length
+      ? status.streams.filter((s) => s.muted && !s.absent).length
       : 0,
   );
 
@@ -521,10 +520,7 @@
   /// device, channels, rate, model, and where and how fast it loaded.
   let statusDetail = $derived.by(() => {
     if (status.state !== "running") return "";
-    const inputs = status.streams.filter((s) =>
-      isInput(channels[s.streamId] ?? { source: null }),
-    ).length;
-    const count = inputs - absent.size;
+    const count = status.streams.length - absent.size;
     const counted = `${count} ${count === 1 ? "channel" : "channels"}`;
     const missing = absent.size > 0 ? `, ${absent.size} not on the device` : "";
     const muted = mutedCount > 0 ? `, ${mutedCount} muted` : "";
@@ -625,7 +621,7 @@
   // `null` means every stream, which is not the same as an empty set: a group
   // with no members shows nothing, and saying so is more useful than silently
   // falling back to showing everything.
-  let visible = $derived(visibleStreams(group, channels));
+  let visible = $derived(visibleStreams(group, allChannels));
   /// The line a ticker last asked this window to show (P24), for the chat.
   let revealing = $state<{ segment: ClipKey; nonce: number } | null>(null);
   let shown = $derived(
@@ -963,7 +959,7 @@
   // runs when a group gains a member or a channel is deleted: a rule that
   // names a group follows it, and the stream ids it resolves to are what
   // changed. Switching profile is the same event — the other profile's rules
-  // are other rules — which is why this reads `rules`, `channels` and `groups`
+  // are other rules — which is why this reads `rules`, the channels and `groups`
   // rather than only the first.
   //
   // Sent even when it is empty: that is how deleting the last rule takes
@@ -972,7 +968,7 @@
   let compiled: CompiledRule[] | null = null;
   $effect(() => {
     if (!loaded) return;
-    const next = compileRules(rules, channels, groups);
+    const next = compileRules(rules, allChannels, groups);
     // Writing a word is one keystroke at a time, and every intermediate state
     // is a rule: without this, "Feuer" is five compilations, four of which
     // fire on a word nobody is looking for.
@@ -1110,7 +1106,8 @@
   // view instead of staying pointed at a group that is no longer there.
   $effect(() => {
     if (active) {
-      const pruned = forgetChannels(active.groups, active.channels);
+      const every = [...active.channels, ...active.remoteChannels];
+      const pruned = forgetChannels(active.groups, every);
       if (pruned.some((g, i) => g.members.length !== active.groups[i].members.length)) {
         active.groups = pruned;
       }
@@ -1119,7 +1116,7 @@
       // last of its channels gone the trigger reads as "anywhere", so `forget`
       // switches that rule off rather than letting it grow louder than it was
       // written.
-      const rewritten = forgetInRules(active.rules, active.channels, active.groups);
+      const rewritten = forgetInRules(active.rules, every, active.groups);
       if (
         rewritten.some(
           (r, i) =>
@@ -1543,7 +1540,7 @@
 
     <GroupSidebar
       {groups}
-      {channels}
+      channels={allChannels}
       bind:selected={selectedGroup}
       bind:open={sidebarOpen}
       opensettings={() => (settings = true)}
@@ -1554,8 +1551,8 @@
       {#if channels.length > 0}
         <!-- The meters follow the same view — eight bars for a
              three-channel group are five things to read past. The filtering
-             happens by stream id inside the component, because the stream id
-             *is* the position in `channels`.
+             happens by stream id inside the component, because an input's
+             stream id *is* its position in `channels`.
 
              Shown before Start as well, off the monitor (P8): the bars are
              how an operator sees that the interface is plugged in and that

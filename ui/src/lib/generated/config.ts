@@ -33,35 +33,20 @@ channel: string, };
 export type StoredChannel = { 
 /**
  * What this channel is called where a name is not enough: in the feed
- * another instance subscribes to, and in a channel of that instance which
- * shows this one (P29).
+ * another instance subscribes to, in a channel of that instance which
+ * shows this one (P29), and in the groups and rules of this profile.
  *
  * Random and never shown. A position changes when a channel above it is
  * deleted and a label changes when somebody fixes a typo, and either
  * would silently re-point every subscriber at a different talkback.
- * Unique within its profile; a duplicated profile keeps its ids, so a
- * subscriber follows a production into its copy.
+ * Unique within its profile — across [`Profile::remote_channels`] too —
+ * and a duplicated profile keeps its ids, so a subscriber follows a
+ * production into its copy.
  *
  * `#[serde(default)]` — empty — because a file written before ids
  * existed has none. [`Config::sanitise`] hands one out on the way in.
  */
 id: string, 
-/**
- * Where this channel's lines come from when it is not an input of this
- * machine at all, but a channel another instance transcribes (P29).
- *
- * Such a channel is a row like any other — it has a label and a colour,
- * it can be in groups and named by rules — and that is the point: the
- * chat, the views and the rules all work by row, and a second kind of
- * channel next to the rows would need a second implementation of each.
- * What it does not have is audio here. The session carries it as a
- * channel the device does not have, and its lines arrive from the
- * subscription instead — see [`crate::sources`].
- *
- * `#[serde(default)]` — none — because every channel written before this
- * existed was an input.
- */
-source: ChannelSource | null, 
 /**
  * Zero-based channel index on the multichannel device, as the audio API
  * counts them. The UI shows it one-based and converts at its own
@@ -273,21 +258,19 @@ setupDone: boolean, profiles: Array<StoredProfile>, };
  */
 export type StoredGroup = { name: string, 
 /**
- * Positions in [`Profile::channels`], not the UI's channel keys and not
- * stream ids.
+ * Channel ids — [`StoredChannel::id`] or [`StoredRemoteChannel::id`] —
+ * not the UI's channel keys and not stream ids.
  *
- * At runtime membership is keyed on the channel's own key, precisely so
- * that deleting a channel does not re-point every group below it. That
- * argument is about a list being *edited*; a saved file is a snapshot in
- * which positions and keys say the same thing, and positions are the one
- * of the two that still means something after a restart. The translation
- * happens in the UI, in one place, on the way in and on the way out.
+ * Ids rather than positions since version 4, because there are two
+ * lists of channels and a position only means something in one of them.
+ * A version 3 file holds positions in the one list it had, and
+ * [`Config::migrate`] turns them into ids.
  *
- * A position past the end of the channel list is dropped on load rather
- * than refused: a hand-edited file should cost a group its member, not
- * the operator their whole setup.
+ * An id that names no channel is dropped on load rather than refused: a
+ * hand-edited file should cost a group its member, not the operator
+ * their whole setup.
  */
-members: Array<number>, 
+members: Array<string>, 
 /**
  * Whether this group's detached window (P7) stays in front of other
  * windows.
@@ -406,7 +389,20 @@ deviceId: string,
  * `#[serde(default)]` because a file written before this existed has no
  * such field, and its profiles must keep loading.
  */
-language: string, channels: Array<StoredChannel>, groups: Array<StoredGroup>, 
+language: string, 
+/**
+ * This machine's inputs, in stream order: a channel's position here is
+ * the stream id a session gives it.
+ */
+channels: Array<StoredChannel>, 
+/**
+ * The channels of other instances shown here (P29). See
+ * [`StoredRemoteChannel`] for why they are a list of their own.
+ *
+ * `#[serde(default)]` because a file written before version 4 kept them
+ * among the inputs — see [`Profile::split_remote_channels`].
+ */
+remoteChannels: Array<StoredRemoteChannel>, groups: Array<StoredGroup>, 
 /**
  * The rules of this profile: what fires, when (P19).
  *
@@ -479,6 +475,38 @@ address: string, port: number,
 key: string, };
 
 /**
+ * A channel of another instance, shown in this profile (P29).
+ *
+ * Its own list beside [`Profile::channels`] rather than a row in it. It has
+ * a label and a colour, it can be in groups and named by rules, and its
+ * lines arrive in the chat like any other — but it has no input here, and
+ * above all its stream id is not a position. The inputs' stream ids are
+ * their positions, because that is how a session numbers its streams; a
+ * channel read from somewhere else is not in a session at all, so it keeps
+ * the id it was given in [`StoredRemoteChannel::stream`], and editing the
+ * inputs above it can never re-point its lines.
+ */
+export type StoredRemoteChannel = { 
+/**
+ * Its id in this profile, for the groups and rules that name it. Shares
+ * one namespace with [`StoredChannel::id`].
+ */
+id: string, source: ChannelSource, 
+/**
+ * The stream id its lines carry here, at or above
+ * [`crate::sources::REMOTE_STREAM_BASE`] so it can never be mistaken
+ * for an input's. Handed out once, when the channel is ticked, and never
+ * changed afterwards; [`Config::sanitise`] fills in one that is missing
+ * or taken.
+ */
+stream: number, label: string, color: string, 
+/**
+ * Muted here: its lines are not shown on this machine. The instance
+ * that transcribes it is not told.
+ */
+muted: boolean, };
+
+/**
  * One rule: a trigger, and what it does (P19).
  *
  * Stored as the operator wrote it — words as words, channels and views as
@@ -515,12 +543,10 @@ enabled: boolean,
  */
 words: Array<string>, 
 /**
- * Positions in [`Profile::channels`], like [`StoredGroup::members`] and
- * for the same reason: a saved file is a snapshot, and a position is the
- * one of position and key that still means something after a restart. Out
- * of range is dropped on load.
+ * Channel ids, like [`StoredGroup::members`] and for the same reason.
+ * One that names no channel is dropped on load.
  */
-channels: Array<number>, 
+channels: Array<string>, 
 /**
  * Positions in [`Profile::groups`]: the windows the *flash* is for.
  *

@@ -3,23 +3,29 @@
 //
 // Two identifiers live here and they are not the same thing. `key` is stable
 // for the lifetime of a row so Svelte keeps the input the operator is typing
-// in when the list around it changes. The **stream id** is the row's position
-// in the list and is assigned by the backend at start — it is what every event
-// carries, and it only means anything while a session runs.
+// in when the list around it changes. The **stream id** is what every event
+// carries. For an input it is the row's position in the list, assigned by the
+// backend at start. A channel read from another instance (P29) is in a list
+// of its own and keeps the stream id it was given when it was ticked, at or
+// above `REMOTE_STREAM_BASE` — so editing the inputs never re-points its
+// lines, or their colour, at a neighbour.
 
 import { paletteColor } from "./palette";
-import { GAIN_DB_MAX, GAIN_DB_MIN, type ChannelSource, type StreamConfig } from "./bridge";
+import {
+  GAIN_DB_MAX,
+  GAIN_DB_MIN,
+  REMOTE_STREAM_BASE,
+  type ChannelSource,
+  type StreamConfig,
+} from "./bridge";
 
+/// An input of this machine.
 export interface Channel {
   key: number;
   /// Stable across restarts and windows, unlike `key`: what another instance
-  /// reading along names this channel by (P29), and what a row showing a
-  /// channel of another instance points at. Never shown.
+  /// reading along names this channel by (P29), and what the groups and
+  /// rules name it by in the file. Never shown.
   id: string;
-  /// Set when this row is a channel another instance transcribes (P29). It
-  /// is in the chat, the groups and the rules like any other row, and it has
-  /// no input here: no device channel, no trim, no draft.
-  source: ChannelSource | null;
   /// Zero-based device channel, as the backend wants it.
   channel: number;
   label: string;
@@ -63,11 +69,6 @@ export const DEFAULT_LANGUAGE = "de";
 
 let nextKey = 0;
 
-/// The device channel a row read from another instance is carried as (P29):
-/// one no interface has, so the session keeps the row's place — and with it
-/// every stream id after it — and sends it no audio.
-export const NO_INPUT = 0xffff;
-
 /// A fresh channel id: twelve hex digits, like the backend hands out to a
 /// file that predates them.
 export const newChannelId = (): string => {
@@ -76,30 +77,93 @@ export const newChannelId = (): string => {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 };
 
-/// Whether a row is an input of this machine rather than a channel read from
-/// another instance.
-export const isInput = (c: { source: ChannelSource | null }): boolean => c.source === null;
+/// A channel another instance transcribes, shown here (P29).
+///
+/// In the chat, the groups and the rules like an input, and with no input
+/// here: no device channel, no trim, no draft, no language of its own.
+export interface RemoteChannel {
+  key: number;
+  /// Its id in this profile, for the groups and rules — one namespace with
+  /// the inputs' ids.
+  id: string;
+  source: ChannelSource;
+  /// The stream id its lines carry, at or above `REMOTE_STREAM_BASE`. Handed
+  /// out once and never moved.
+  stream: number;
+  label: string;
+  color: string;
+  /// Muted here: its lines are not shown on this machine.
+  muted: boolean;
+}
 
-/// A row showing a channel of another instance (P29).
+/// A channel as the chat, the views and the rules see it: an input or a
+/// channel of another instance, with the stream id its lines carry.
+export interface ShownChannel {
+  key: number;
+  id: string;
+  label: string;
+  color: string;
+  muted: boolean;
+  stream: number;
+  /// Where it is read from, or `null` for an input of this machine.
+  source: ChannelSource | null;
+}
+
+/// Every channel of a profile as its lines are told apart: the inputs at
+/// their positions, then the channels read from elsewhere at their own
+/// stream ids.
+export const shownChannels = (channels: Channel[], remote: RemoteChannel[]): ShownChannel[] => [
+  ...channels.map((c, stream) => ({
+    key: c.key,
+    id: c.id,
+    label: c.label,
+    color: c.color,
+    muted: c.muted,
+    stream,
+    source: null,
+  })),
+  ...remote.map((c) => ({
+    key: c.key,
+    id: c.id,
+    label: c.label,
+    color: c.color,
+    muted: c.muted,
+    stream: c.stream,
+    source: c.source,
+  })),
+];
+
+/// A channel of another instance, newly ticked (P29), on the first stream id
+/// none of `remote` holds.
 export const remoteChannel = (
-  existing: Channel[],
+  existing: { channels: Channel[]; remote: RemoteChannel[] },
   source: ChannelSource,
   label: string,
   color: string,
-  language: string = DEFAULT_LANGUAGE,
-): Channel => ({
+): RemoteChannel => {
+  const taken = new Set(existing.remote.map((c) => c.stream));
+  let stream = REMOTE_STREAM_BASE;
+  while (taken.has(stream)) stream += 1;
+  const colors = [...existing.channels, ...existing.remote].map((c) => c.color);
+  return {
+    key: nextKey++,
+    id: newChannelId(),
+    source,
+    stream,
+    label,
+    // The colour it has over there, so the same talkback looks the same on
+    // both screens — unless a channel here already wears it.
+    color: colors.includes(color) ? paletteColor(colors.length) : color,
+    muted: false,
+  };
+};
+
+/// A channel of another instance read back from the stored configuration,
+/// with a fresh key.
+export const restoreRemoteChannel = (stored: Omit<RemoteChannel, "key">): RemoteChannel => ({
+  ...stored,
   key: nextKey++,
-  id: newChannelId(),
-  source,
-  channel: NO_INPUT,
-  label,
-  language,
-  // The colour it has over there, so the same talkback looks the same on both
-  // screens — unless a channel here already wears it.
-  color: existing.some((c) => c.color === color) ? paletteColor(existing.length) : color,
-  gainDb: 0,
-  muted: false,
-  preview: false,
+  muted: stored.muted ?? false,
 });
 
 /// A new row, preset to the first free channel and the next palette colour.
@@ -119,14 +183,13 @@ export const newChannel = (
   /// chances to miss one.
   language: string = DEFAULT_LANGUAGE,
 ): Channel => {
-  const taken = new Set(existing.filter(isInput).map((c) => c.channel));
+  const taken = new Set(existing.map((c) => c.channel));
   let channel = 0;
   while (taken.has(channel)) channel += 1;
 
   return {
     key: nextKey++,
     id: newChannelId(),
-    source: null,
     channel,
     label: `Channel ${channel + 1}`,
     language,
@@ -153,11 +216,10 @@ export const restoreChannel = (
   // `muted` optional, unlike the rest: a file written before it existed does
   // not carry it, and the frontend reads those files as well as the backend
   // does.
-  stored: Omit<Channel, "key" | "muted" | "preview" | "id" | "source"> & {
+  stored: Omit<Channel, "key" | "muted" | "preview" | "id"> & {
     muted?: boolean;
     preview?: boolean;
     id?: string;
-    source?: ChannelSource | null;
   },
 ): Channel => ({
   ...stored,
@@ -165,7 +227,6 @@ export const restoreChannel = (
   // The backend hands every channel an id on load, so this is for a file the
   // frontend reads some other way — a test, a hand-written fixture.
   id: stored.id || newChannelId(),
-  source: stored.source ?? null,
   // A hand-edited file may hold a trim the backend would clamp anyway. Doing
   // it on the way in means the knob shows the value that is actually in force
   // rather than the one the file claims.
@@ -199,15 +260,13 @@ export const usedLanguages = (channels: Channel[]): string[] => [
 /// that is what defines the stream ids.
 export const toConfig = (channels: Channel[]): StreamConfig[] =>
   channels.map((c) => ({
-    // A row read from another instance keeps its place and gets no input.
-    channel: isInput(c) ? c.channel : NO_INPUT,
+    channel: c.channel,
     label: c.label.trim() === "" ? `Channel ${c.channel + 1}` : c.label.trim(),
     language: c.language.trim().toLowerCase(),
     gainDb: clampGain(c.gainDb),
     muted: c.muted,
-    preview: isInput(c) && c.preview,
+    preview: c.preview,
     id: c.id,
-    remote: !isInput(c),
   }));
 
 /// Why the setup cannot be started, or `null` if it can.
@@ -228,9 +287,6 @@ export const validate = (
   /// list do not have to say so.
   connected = true,
 ): string | null => {
-  // Rows read from another instance need no device and no session: only
-  // this machine's own inputs are what a Start is for.
-  channels = channels.filter(isInput);
   if (device === "") return "No input device selected.";
   if (!connected) return `${device} is not connected.`;
   if (channels.length === 0) return "Add at least one channel.";
@@ -263,7 +319,7 @@ export const validate = (
 /// [`validate`] for why it is not an error.
 export const duplicateChannels = (channels: Channel[]): number[] => {
   const seen = new Map<number, number>();
-  for (const c of channels.filter(isInput)) seen.set(c.channel, (seen.get(c.channel) ?? 0) + 1);
+  for (const c of channels) seen.set(c.channel, (seen.get(c.channel) ?? 0) + 1);
   return [...seen.entries()].filter(([, n]) => n > 1).map(([channel]) => channel);
 };
 
@@ -281,7 +337,5 @@ export const duplicateChannels = (channels: Channel[]): number[] => {
 /// channel has to be traceable to one or the other.
 export const absentChannels = (channels: Channel[], deviceChannels: number): number[] =>
   channels
-    .map((c, streamId) =>
-      isInput(c) && (c.channel < 0 || c.channel >= deviceChannels) ? streamId : -1,
-    )
+    .map((c, streamId) => (c.channel < 0 || c.channel >= deviceChannels ? streamId : -1))
     .filter((streamId) => streamId >= 0);

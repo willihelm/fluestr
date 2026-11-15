@@ -7,12 +7,15 @@
 // a many-to-many relation, and removing a channel from a group removes it from
 // that view and nothing else.
 //
-// Membership is by channel `key`, never by stream id. The stream id is the
-// row's position in the channel list, so deleting the second of eight channels
-// would silently re-point every group below it at a different channel. The key
-// is stable for the lifetime of the row.
+// Membership is by channel `key`, never by stream id. An input's stream id is
+// the row's position in the channel list, so deleting the second of eight
+// channels would silently re-point every group below it at a different
+// channel. The key is stable for the lifetime of the row.
 
-import type { Channel } from "./streams";
+import type { ShownChannel } from "./streams";
+
+/// What membership needs of a channel: an input or one read from elsewhere.
+type Channel = Pick<ShownChannel, "key">;
 
 /// What a group no longer carries is its "flash on every message" setting: a
 /// group is a *view* again, and what a view does when something is said on it
@@ -52,8 +55,8 @@ export const newGroup = (existing: Group[]): Group => ({
 
 /// A group read back from the stored configuration (P12).
 ///
-/// The members arrive as channel keys, already translated from the positions
-/// the file stores — see `profiles.ts`, which is the one place that
+/// The members arrive as channel keys, already translated from the ids the
+/// file stores — see `profiles.ts`, which is the one place that
 /// translation happens.
 export const restoreGroup = (
   name: string,
@@ -90,18 +93,18 @@ export const forgetChannels = (groups: Group[], channels: Channel[]): Group[] =>
 
 /// The stream ids a group shows, or `null` for "every stream".
 ///
-/// Translating from channel keys to stream ids happens here and only here: the
-/// stream id is the channel's position in the list, which is exactly how the
-/// backend assigns it.
+/// Translating from channel keys to stream ids happens here and only here —
+/// from `shownChannels`, which knows an input's stream id is its position and
+/// a remote channel's is its own.
 export const visibleStreams = (
   group: Group | typeof ALL_CHANNELS,
-  channels: Channel[],
+  channels: ShownChannel[],
 ): Set<number> | null => {
   if (group === ALL_CHANNELS) return null;
 
   const streams = new Set<number>();
-  channels.forEach((c, streamId) => {
-    if (group.members.includes(c.key)) streams.add(streamId);
-  });
+  for (const c of channels) {
+    if (group.members.includes(c.key)) streams.add(c.stream);
+  }
   return streams;
 };

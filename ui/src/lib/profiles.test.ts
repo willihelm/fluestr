@@ -23,14 +23,12 @@ import {
   toStoredConfig,
   type Profile,
 } from "./profiles";
-import type { StoredConfig, Tuning } from "./bridge";
+import { REMOTE_STREAM_BASE, type StoredConfig, type Tuning } from "./bridge";
 import {
   restoreChannel,
   remoteChannel,
   toConfig,
-  validate,
-  absentChannels,
-  NO_INPUT,
+  shownChannels,
   DEFAULT_LANGUAGE,
 } from "./streams";
 import { restoreGroup } from "./groups";
@@ -85,6 +83,7 @@ const aProfile = (): Profile => {
     deviceId: "AppleUSBAudioEngine:RME:MADIface:2",
     language: "de",
     channels,
+    remoteChannels: [],
     groups,
     rules: [
       restoreRule({
@@ -120,7 +119,6 @@ const stored: StoredProfile = {
   channels: [
     {
       id: "regie",
-      source: null,
       channel: 0,
       label: "Regie",
       language: "de",
@@ -131,7 +129,6 @@ const stored: StoredProfile = {
     },
     {
       id: "licht",
-      source: null,
       channel: 3,
       label: "Licht",
       language: "en",
@@ -141,7 +138,8 @@ const stored: StoredProfile = {
       preview: false,
     },
   ],
-  groups: [{ name: "Bühne", onTop: false, members: [1] }],
+  remoteChannels: [],
+  groups: [{ name: "Bühne", onTop: false, members: ["licht"] }],
   rules: [
     {
       name: "Feuer",
@@ -157,7 +155,7 @@ const stored: StoredProfile = {
       name: "Go auf der Bühne",
       enabled: true,
       words: ["Go"],
-      channels: [1],
+      channels: ["licht"],
       views: [0],
       actions: ["flash"],
       webhook: null,
@@ -178,7 +176,7 @@ describe("toStored", () => {
     const profile = aProfile();
     profile.groups[0].members = [profile.channels[1].key, 12345];
 
-    expect(toStored(profile).groups[0].members).toEqual([1]);
+    expect(toStored(profile).groups[0].members).toEqual(["licht"]);
   });
 });
 
@@ -225,11 +223,11 @@ describe("fromStored", () => {
     expect(profile.groups[0].members).toEqual([profile.channels[1].key]);
   });
 
-  it("drops a member position past the end of the channel list", () => {
+  it("drops a member whose id names no channel", () => {
     // A hand-edited file costs a group its member, not the operator the setup.
     const broken = anOldFile<StoredProfile>({
       ...stored,
-      groups: [{ name: "Bühne", members: [1, 9, -1] }],
+      groups: [{ name: "Bühne", members: ["licht", "gone", ""] }],
     });
     const profile = fromStored(broken);
 
@@ -689,11 +687,11 @@ describe("rules across the file", () => {
   // Positions on the way out, keys on the way in — the same translation group
   // membership gets, and for the same reason: a key is a counter this window
   // handed out.
-  it("stores a rule's channels and views as positions and reads them back as keys", () => {
+  it("stores a rule's channels as ids and its views as positions, and reads them back as keys", () => {
     const profile = aProfile();
     const written = toStored(profile).rules[1];
 
-    expect(written.channels).toEqual([1]);
+    expect(written.channels).toEqual(["licht"]);
     expect(written.views).toEqual([0]);
 
     const read = fromStored(toStored(profile));
@@ -727,8 +725,8 @@ describe("reuseKeys", () => {
         device: "Scarlett",
         deviceId: "uid",
         language: "de",
-        channels: [{ channel: 0, label: "Regie", language: "de", color: "#fff" }],
-        groups: groups.map((g) => ({ name: g, members: [0] })),
+        channels: [{ id: "regie", channel: 0, label: "Regie", language: "de", color: "#fff" }],
+        groups: groups.map((g) => ({ name: g, members: ["regie"] })),
       }),
     ),
   });
@@ -965,31 +963,55 @@ describe("adopting a configuration", () => {
 });
 
 describe("a channel read from another instance (P29)", () => {
-  it("keeps its id and its source through the file", () => {
+  const withRemote = () => {
     const profile = aProfile();
-    profile.channels = [
-      ...profile.channels,
-      remoteChannel(profile.channels, { server: "abc", channel: "x1" }, "Their Regie", "#123456"),
+    profile.remoteChannels = [
+      remoteChannel(
+        { channels: profile.channels, remote: [] },
+        { server: "abc", channel: "x1" },
+        "Their Regie",
+        "#123456",
+      ),
     ];
-    const back = fromStored(toStored(profile));
-    expect(back.channels.map((c) => c.id)).toEqual(profile.channels.map((c) => c.id));
-    expect(back.channels[2].source).toEqual({ server: "abc", channel: "x1" });
-    expect(back.channels[0].source).toBeNull();
+    profile.groups[0].members = [...profile.groups[0].members, profile.remoteChannels[0].key];
+    return profile;
+  };
+
+  it("keeps its id, its source, its stream and its groups through the file", () => {
+    const profile = withRemote();
+    const stored = toStored(profile);
+    expect(stored.groups[0].members).toEqual(["licht", profile.remoteChannels[0].id]);
+
+    const back = fromStored(stored);
+    expect(back.channels.map((c) => c.id)).toEqual(["regie", "licht"]);
+    expect(back.remoteChannels).toEqual([{ ...profile.remoteChannels[0], key: back.remoteChannels[0].key }]);
+    expect(back.groups[0].members).toEqual([back.channels[1].key, back.remoteChannels[0].key]);
   });
 
-  it("is carried into a session without an input, and keeps every stream id after it", () => {
-    const profile = aProfile();
-    const remote = remoteChannel(profile.channels, { server: "abc", channel: "x1" }, "Theirs", "#123");
-    const config = toConfig([profile.channels[0], remote, profile.channels[1]]);
-    expect(config.map((s) => s.remote)).toEqual([false, true, false]);
-    expect(config[1].channel).toBe(NO_INPUT);
-    expect(config[2].channel).toBe(3);
-    expect(config.map((s) => s.id)).toEqual([profile.channels[0].id, remote.id, "licht"]);
+  it("has a stream id of its own, which no edit of the inputs moves", () => {
+    const profile = withRemote();
+    const [remote] = profile.remoteChannels;
+    expect(remote.stream).toBe(REMOTE_STREAM_BASE);
+    const before = shownChannels(profile.channels, profile.remoteChannels);
+    const after = shownChannels(profile.channels.slice(1), profile.remoteChannels);
+    expect(before.find((c) => c.key === remote.key)?.stream).toBe(REMOTE_STREAM_BASE);
+    expect(after.find((c) => c.key === remote.key)?.stream).toBe(REMOTE_STREAM_BASE);
   });
 
-  it("needs no device: only this machine's inputs are what a Start is for", () => {
-    const remote = remoteChannel([], { server: "abc", channel: "x1" }, "Theirs", "#123");
-    expect(validate([remote], "Desk", 8)).toBe("Add at least one channel.");
-    expect(absentChannels([remote], 0)).toEqual([]);
+  it("takes the next free stream id, and the colour it has over there unless it is taken", () => {
+    const profile = withRemote();
+    const second = remoteChannel(
+      { channels: profile.channels, remote: profile.remoteChannels },
+      { server: "abc", channel: "x2" },
+      "Their Licht",
+      "#5fd38d",
+    );
+    expect(second.stream).toBe(REMOTE_STREAM_BASE + 1);
+    expect(second.color).not.toBe("#5fd38d");
+  });
+
+  it("is never part of a session", () => {
+    const profile = withRemote();
+    expect(toConfig(profile.channels).map((s) => s.id)).toEqual(["regie", "licht"]);
   });
 });

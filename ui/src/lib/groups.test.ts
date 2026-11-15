@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { forgetChannels, isMember, toggleMember, visibleStreams, type Group } from "./groups";
-import type { Channel } from "./streams";
+import { REMOTE_STREAM_BASE } from "./bridge";
+import { remoteChannel, shownChannels, type Channel } from "./streams";
 
 const channel = (key: number, label = `Channel ${key}`): Channel => ({
   key,
   id: `c${key}`,
-  source: null,
   channel: key,
   label,
   language: "de",
@@ -56,7 +56,8 @@ describe("group membership", () => {
 });
 
 describe("visibleStreams", () => {
-  const channels = [channel(10), channel(11), channel(12)];
+  const inputs = [channel(10), channel(11), channel(12)];
+  const channels = shownChannels(inputs, []);
 
   it("translates channel keys to the stream ids the events carry", () => {
     // The stream id is the position in the channel list, which is exactly how
@@ -68,8 +69,27 @@ describe("visibleStreams", () => {
     // The point of keying membership on `key` rather than on position: delete
     // the first channel and the group must still show the same *channel*, at
     // its new stream id, instead of whatever moved into the old slot.
-    const remaining = [channel(11), channel(12)];
+    const remaining = shownChannels([channel(11), channel(12)], []);
     expect(visibleStreams(group(0, [12]), remaining)).toEqual(new Set([1]));
+  });
+
+  it("keeps a channel read from another instance on its own stream id", () => {
+    // The bug the separate list exists for: in one list its stream id was its
+    // position, and removing an input above it moved its lines — colour and
+    // all — onto the next channel down.
+    const remote = remoteChannel(
+      { channels: inputs, remote: [] },
+      { server: "desk", channel: "x1" },
+      "Their Regie",
+      "#123456",
+    );
+    const members = group(0, [remote.key, 12]);
+    expect(visibleStreams(members, shownChannels(inputs, [remote]))).toEqual(
+      new Set([2, REMOTE_STREAM_BASE]),
+    );
+    expect(visibleStreams(members, shownChannels(inputs.slice(1), [remote]))).toEqual(
+      new Set([1, REMOTE_STREAM_BASE]),
+    );
   });
 
   it("tells an empty group apart from no group at all", () => {

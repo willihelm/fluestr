@@ -32,7 +32,10 @@
 
 import { cleanTerms } from "./alerts";
 import type { Group } from "./groups";
-import type { Channel } from "./streams";
+import type { ShownChannel } from "./streams";
+
+/// What a rule needs of a channel: an input or one read from elsewhere.
+type Channel = Pick<ShownChannel, "key" | "label">;
 import type { Action, CompiledRule } from "./generated/rules";
 import type { Header, Method, Webhook } from "./generated/webhook";
 
@@ -160,7 +163,7 @@ export const newRule = (existing: Rule[]): Rule => ({
 });
 
 /// A rule read back from the stored configuration, with its keys already
-/// translated from the positions the file holds — see `profiles.ts`, which is
+/// translated from the ids and positions the file holds — see `profiles.ts`, which is
 /// the one place that translation happens.
 export const restoreRule = (stored: {
   name: string;
@@ -229,10 +232,14 @@ export const forget = (rules: Rule[], channels: Channel[], groups: Group[]): Rul
 ///     dropped on the same terms from a rule addressed only to windows that
 ///     are gone, and *webhook* from a rule with no destination typed yet —
 ///     for the reason an empty stream list is never sent.
-export const compile = (rules: Rule[], channels: Channel[], groups: Group[]): CompiledRule[] => {
-  // The stream id is the channel's position in the profile, exactly as the
-  // backend assigns it — see `SessionConfig::streams`.
-  const streamOf = new Map(channels.map((channel, streamId) => [channel.key, streamId]));
+export const compile = (
+  rules: Rule[],
+  channels: ShownChannel[],
+  groups: Group[],
+): CompiledRule[] => {
+  // From `shownChannels`: an input's position, as the backend assigns it —
+  // see `SessionConfig::streams` — or a remote channel's own stream id.
+  const streamOf = new Map(channels.map((channel) => [channel.key, channel.stream]));
   // The group's position in the profile, which is how a group window is
   // named and how the file stores a group — see `windows.ts`.
   const positionOf = new Map(groups.map((group, position) => [group.key, position]));

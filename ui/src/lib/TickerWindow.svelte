@@ -41,7 +41,7 @@
     type Geometry,
   } from "./ticker";
   import { ALL_CHANNELS_VIEW, setWindowTitle, type GroupView } from "./windows";
-  import type { Channel } from "./streams";
+  import { shownChannels, type ShownChannel } from "./streams";
   import {
     isRemote,
     loadConfig,
@@ -69,9 +69,9 @@
   const ALL_CHANNELS_NAME = "All channels";
 
   let showsAll = $derived(view === ALL_CHANNELS_VIEW);
-  // Every channel of the active profile, for `GroupWindow`'s reason: the
-  // stream id is the position in this list.
-  let channels = $state<Channel[]>([]);
+  // Every channel of the active profile, inputs and channels read from other
+  // instances alike, with the stream id each one's lines carry.
+  let channels = $state<ShownChannel[]>([]);
   let target = $state<Group | null>(null);
   let known = $state(false);
   let failure = $state<string | null>(null);
@@ -83,10 +83,10 @@
   let status = $state<SessionState | { state: "idle" }>({ state: "idle" });
 
   let name = $derived(showsAll ? ALL_CHANNELS_NAME : (target?.name ?? "Group"));
-  let colors = $derived(new Map(channels.map((c, streamId) => [streamId, c.color])));
+  let colors = $derived(new Map(channels.map((c) => [c.stream, c.color])));
   let visible = $derived(
     showsAll
-      ? new Set(channels.map((_, streamId) => streamId))
+      ? new Set(channels.map((c) => c.stream))
       : target === null
         ? new Set<number>()
         : visibleStreams(target, channels)!,
@@ -112,7 +112,7 @@
     const { profiles, activeKey, chatSort: sort } = fromStoredConfig(stored);
     chatSort = sort;
     const profile = profiles.find((p) => p.key === activeKey) ?? null;
-    channels = profile?.channels ?? [];
+    channels = profile ? shownChannels(profile.channels, profile.remoteChannels) : [];
     target = showsAll ? null : (profile?.groups[view as number] ?? null);
     known = true;
     // Never drawn — there is no title bar — but it is what the Window menu and

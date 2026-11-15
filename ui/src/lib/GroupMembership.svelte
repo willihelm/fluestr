@@ -17,7 +17,7 @@
   // narrowed to a word, which the checkbox never could.
 
   import { isMember, newGroup, toggleMember, type Group } from "./groups";
-  import type { Channel } from "./streams";
+  import type { ShownChannel as Channel } from "./streams";
 
   interface Props {
     groups: Group[];

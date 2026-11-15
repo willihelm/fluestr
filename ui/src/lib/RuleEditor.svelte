@@ -56,7 +56,7 @@
   } from "./rules";
   import { isRemote } from "./transport";
   import type { Group } from "./groups";
-  import type { Channel } from "./streams";
+  import type { ShownChannel as Channel } from "./streams";
 
   interface Props {
     rules: Rule[];

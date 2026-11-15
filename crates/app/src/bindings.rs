@@ -71,6 +71,14 @@ export const REMOTE_DEFAULT_PORT = {remote_port};
 export const REMOTE_SESSION_BASE = {remote_session_base};
 
 /**
+ * Where the stream ids of channels read from other instances begin (P29).
+ * Mirrors `sources::REMOTE_STREAM_BASE`: an input's stream id is its position
+ * in the channel list, and a remote channel keeps the one it was given, at or
+ * above this, however the inputs change.
+ */
+export const REMOTE_STREAM_BASE = {remote_stream_base};
+
+/**
  * The quietest an input trim goes, in decibels. Mirrors
  * `audio_core::gain::MIN_DB`, which clamps again on the way into a session —
  * the knob is not the only caller.
@@ -178,6 +186,7 @@ export const SHOUTBOX_ESTIMATED_CALIBRATION_DB = {shout_estimated};
         max_workers = crate::pool::MAX_WORKERS,
         remote_port = crate::remote::DEFAULT_PORT,
         remote_session_base = crate::sources::REMOTE_SESSION_BASE,
+        remote_stream_base = crate::sources::REMOTE_STREAM_BASE,
         gain_min = audio_core::gain::MIN_DB,
         gain_max = audio_core::gain::MAX_DB,
         silence_min = crate::config::Tuning::SILENCE_MS.start(),

@@ -13,13 +13,23 @@ import {
   type Rule,
 } from "./rules";
 import { restoreGroup, type Group } from "./groups";
-import { restoreChannel, type Channel } from "./streams";
+import {
+  REMOTE_STREAM_BASE,
+} from "./bridge";
+import {
+  remoteChannel,
+  restoreChannel,
+  shownChannels,
+  type Channel,
+  type ShownChannel,
+} from "./streams";
 
-const channels: Channel[] = [
+const inputs: Channel[] = [
   restoreChannel({ channel: 0, label: "Regie", language: "de", color: "#6ea8fe", gainDb: 0, muted: false }),
   restoreChannel({ channel: 1, label: "Inspizienz", language: "de", color: "#5fd38d", gainDb: 0, muted: false }),
   restoreChannel({ channel: 2, label: "Licht", language: "de", color: "#f2b35e", gainDb: 0, muted: false }),
 ];
+const channels: ShownChannel[] = shownChannels(inputs, []);
 
 /// Two of them, because a view is addressed by its *position* and one group
 /// cannot show that the second is not the first.
@@ -140,6 +150,24 @@ describe("compile", () => {
   it("cleans the words the way the matcher would", () => {
     const compiled = compile([rule({ words: ["Feuer", "  ", "feuer"] })], channels, groups);
     expect(compiled[0].words).toEqual(["Feuer"]);
+  });
+});
+
+describe("compile, with a channel read from another instance", () => {
+  // Its stream id is its own, not a position: removing an input above it
+  // must not re-point a rule that names it.
+  it("resolves it to its own stream id however the inputs change", () => {
+    const remote = remoteChannel(
+      { channels: inputs, remote: [] },
+      { server: "desk", channel: "x1" },
+      "Their Regie",
+      "#123456",
+    );
+    const narrowed = [rule({ channels: [remote.key] })];
+    const before = compile(narrowed, shownChannels(inputs, [remote]), groups);
+    const after = compile(narrowed, shownChannels(inputs.slice(1), [remote]), groups);
+    expect(before[0].streams).toEqual([REMOTE_STREAM_BASE]);
+    expect(after[0].streams).toEqual([REMOTE_STREAM_BASE]);
   });
 });
 

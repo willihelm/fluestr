@@ -62,6 +62,7 @@
   import ModelPicker from "./ModelPicker.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
   import SourcesSettings from "./SourcesSettings.svelte";
+  import { shownChannels } from "./streams";
   import StartupSettings from "./StartupSettings.svelte";
   import ViewSettings from "./ViewSettings.svelte";
   import DetectionSettings from "./DetectionSettings.svelte";
@@ -561,6 +562,7 @@
 
           <StreamSetup
             bind:channels={active.channels}
+            bind:remoteChannels={active.remoteChannels}
             bind:language={active.language}
             {languages}
             {deviceChannels}
@@ -587,13 +589,16 @@
         </div>
 
         <div class="sheet" hidden={section !== "groups"}>
-          <GroupMembership bind:groups={active.groups} channels={active.channels} />
+          <GroupMembership
+            bind:groups={active.groups}
+            channels={shownChannels(active.channels, active.remoteChannels)}
+          />
         </div>
 
         <div class="sheet" hidden={section !== "rules"}>
           <RuleEditor
             bind:rules={active.rules}
-            channels={active.channels}
+            channels={shownChannels(active.channels, active.remoteChannels)}
             groups={active.groups}
           />
         </div>
