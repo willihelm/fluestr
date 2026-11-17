@@ -131,6 +131,10 @@
   /// not transcribed, and building a channel is several edits in a row.
   const RESTART_DEBOUNCE_MS = 1500;
 
+  /// How long the auto-start waits after launch before it starts the session,
+  /// so a network audio driver has its inputs up first — see where it is used.
+  const AUTO_START_DELAY_MS = 3000;
+
   /// Whether the Settings dialog is standing over the chat.
   let settings = $state(false);
 
@@ -751,7 +755,17 @@
       // restored: an operator who stopped the session and left it stopped has
       // not asked the app to start it back up the moment something else in
       // the file changes.
-      if (autoStart && !running) await start();
+      //
+      // After a short wait. On a machine that boots straight into the app, an
+      // audio interface on a network driver (SoundGrid, Dante) is listed and
+      // opens well before its network is up, and a session started then runs
+      // on a device that delivers nothing — up and green, and deaf. Everything
+      // is checked again afterwards: the operator may have pressed Start, or
+      // switched the auto-start off, in the meantime.
+      if (autoStart && !running) {
+        await new Promise((resolve) => setTimeout(resolve, AUTO_START_DELAY_MS));
+        if (autoStart && !running && status.state === "idle") await start();
+      }
     };
 
     first().catch((e) => (status = { state: "failed", message: String(e) }));
