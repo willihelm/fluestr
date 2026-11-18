@@ -89,6 +89,12 @@ pub enum Command {
         id: String,
     },
     ListDevices,
+    /// A WAV file as an input device (its channels and rate), for a profile
+    /// that tests settings on a recording. Not for the remote: it would be a
+    /// way to ask whether any file on this disk exists.
+    ProbeAudioFile {
+        path: String,
+    },
     ListLanguages,
     /// The rules, already compiled by the view that holds the groups (P19).
     SetRules {
@@ -246,7 +252,23 @@ pub async fn dispatch<R: Runtime>(
         Command::DownloadModel { id } => json(download_model(app, id).await?),
         Command::CancelDownload { id } => json(cancel_download(app, &id)?),
         Command::RemoveModel { id } => json(remove_model(app, &id)?),
-        Command::ListDevices => json(session::list_devices().map_err(|err| err.to_string())?),
+        Command::ListDevices => {
+            // The audio files the profiles chose as their device, so that
+            // they stay in the picker like an interface that is plugged in.
+            let files: Vec<String> = load_config(app)?
+                .profiles
+                .iter()
+                .map(|p| p.device_id.clone())
+                .filter(|id| id.starts_with(audio_core::file_backend::PREFIX))
+                .collect();
+            json(session::list_devices(&files).map_err(|err| err.to_string())?)
+        }
+        Command::ProbeAudioFile { path } => {
+            if remote {
+                return Err("audio files are chosen on the machine itself".into());
+            }
+            json(session::probe_audio_file(&path).map_err(|err| err.to_string())?)
+        }
         Command::ListLanguages => json(list_languages(app)?),
         Command::SetRules { mut rules } => {
             if remote {

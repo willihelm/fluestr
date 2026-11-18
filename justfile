@@ -198,6 +198,12 @@ fixture name text:
     rm {{scratch}}/fixtures/{{name}}.aiff
     @echo "{{scratch}}/fixtures/{{name}}.wav"
 
+# A two-channel recording of intercom calls (German stage manager, English
+# lighting operator) to play in as an audio file: Settings -> Audio ->
+# "Play in an audio file". macOS text-to-speech, like `fixture`.
+test-clip out=(scratch / "fixtures/intercom-de-en.wav"):
+    python3 scripts/intercom-clip.py {{out}}
+
 # Run the vertical slice against a WAV file instead of a microphone: fixture ->
 # resampling -> segmentation -> sidecar -> transcript. Needs a model.
 slice fixture=(scratch / "fixtures/de_mixed.wav") model=(scratch / "models/ggml-small-q5_1.bin"):

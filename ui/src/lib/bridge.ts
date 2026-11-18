@@ -216,6 +216,19 @@ export const saveConfig = (config: StoredConfig) => call<void>("save_config", { 
 export const pickModelFile = (current: string | null) =>
   invoke<string | null>("pick_model_file", { current });
 
+/// Asks for a WAV file to play in as the input device, with the system's own
+/// file dialog. `null` is a cancelled dialog.
+export const pickAudioFile = (current: string | null) =>
+  invoke<string | null>("pick_audio_file", { current });
+
+/// Whether an audio file can be chosen as the input here: on the desktop, for
+/// the model file's reason.
+export const canPickAudioFile = !isRemote;
+
+/// What a profile's device id starts with when it is a WAV file rather than
+/// an interface — `audio_core::file_backend::PREFIX`.
+export const AUDIO_FILE_PREFIX = "file:";
+
 /// Whether there is a file dialog to open at all.
 ///
 /// One of the three things that stay on the desktop (P16): the picker is the
@@ -464,6 +477,8 @@ export const closeGroupWindows = (): Promise<void> => {
 };
 
 export const listDevices = () => call<DeviceOption[]>("list_devices");
+/// A WAV file as an input device: its name, channels and rate.
+export const probeAudioFile = (path: string) => call<DeviceOption>("probe_audio_file", { path });
 /// Every language the sidecar accepts — around a hundred, in whisper's own
 /// order. Asked for rather than listed in the UI, so that adding a language is
 /// a whisper.cpp version and never a change here. Needs no model, so it

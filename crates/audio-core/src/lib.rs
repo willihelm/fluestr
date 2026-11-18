@@ -22,7 +22,7 @@ pub mod shoutbox;
 pub mod silero;
 pub mod vad;
 
-pub use backend::CpalBackend;
+pub use backend::{file_backend, CpalBackend, InputBackend};
 pub use capture::{CaptureStats, ChannelAssignment, ChannelMap, Demuxer, SampleSink, Tap};
 pub use device::{
     AudioBackend, CaptureConfig, CaptureEvent, CaptureSession, DeviceId, DeviceInfo, OutputConfig,

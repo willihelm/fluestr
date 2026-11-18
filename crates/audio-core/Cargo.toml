@@ -14,6 +14,8 @@ silero = ["dep:whisper-rs"]
 
 [dependencies]
 cpal = { workspace = true }
+# WAV files played in as an input (`backend::file_backend`).
+hound = { workspace = true }
 ringbuf = { workspace = true }
 rubato = { workspace = true }
 serde = { workspace = true }

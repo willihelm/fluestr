@@ -143,6 +143,7 @@ for now, with the reason recorded in the package.
 | P27 | The shoutbox as a VST3 plug-in | **Open** | An idea of 2026-10-05 — everything, beginning with whether each host passes a sidechain |
 | P28 | Live preview by re-decoding the open segment | **Partial** | Built on 2026-10-20; not yet run on a show, and the latency of the final lines under load is unmeasured |
 | P29 | Reading along with another instance | **Partial** | Built on 2026-11-08 and tested with two instances in one process; not yet run between two machines in the house |
+| P30 | An audio file as the input | **Done** | Built on 2026-11-17; the language hints tried alongside were dropped |
 
 **What runs today:** every channel of one multichannel device end to end —
 capture, one ring buffer and segmenter per channel, Silero speech detection,
@@ -2814,6 +2815,41 @@ by the one it reads subscribes back.
 
 **Missing:** two machines in the house, and the local network permission
 prompt on a signed build. The transport is plain http, as for P16.
+
+---
+
+### P30 — An audio file as the input — **Done**
+
+*Asked for on 2026-11-17: a way to feed an audio file in, to compare settings
+on the same recording.*
+
+**An audio file as the input** (`audio_core::file_backend`; Settings › Audio
+› *Play in an audio file…*). A WAV of any rate and channel count becomes a
+device whose id is `file:` and its path, so a profile can hold it and the
+whole pipeline — meters, solo, replay, the chat — runs on it as on a desk.
+Played once in real time from each Start, then silence. A full ring makes the
+file wait instead of dropping audio, so the first seconds survive a cold
+start. `tests/file_input.rs` runs a file through the app end to end;
+`just test-clip` writes a two-channel test recording (macOS voices).
+
+**Tried alongside and dropped: telling Parakeet the language.** Parakeet v3
+takes most short German intercom calls for English and has no language
+input. Three workarounds were built and tested in the house, and none was
+kept:
+
+- audio in front of each segment, decoded with it and cut back off by word
+  timestamps — the channel's own earlier two seconds, or a fixed German
+  sentence. On synthetic speech it fixed a few calls; on the real intercom it
+  did not change Parakeet's behaviour;
+- Canary 180M Flash, which takes the language as an input: right language,
+  but clearly worse recognition than Parakeet.
+
+Worth knowing before trying again: sherpa-onnx 1.13 ignores Canary's
+`src_lang` set per stream (it reads it only from the recogniser's
+configuration), and Parakeet's token stamps for word *endings* can fall
+after a cut placed between two utterances.
+
+**Missing:** looping the file.
 
 ---
 

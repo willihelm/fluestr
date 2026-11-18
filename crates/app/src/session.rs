@@ -42,7 +42,7 @@ use crate::replay::{ClipKey, Horizon, ReplayStore};
 use anyhow::{bail, Context, Result};
 use audio_core::{
     gain::Gain, ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession,
-    ChannelAssignment, ChannelMap, CpalBackend, EnergyVad, LanguageCode, LanguageMode, Segment,
+    ChannelAssignment, ChannelMap, EnergyVad, InputBackend, LanguageCode, LanguageMode, Segment,
     Segmenter, SegmenterConfig, SileroVad, StreamId, StreamProcessor, Vad, SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
@@ -638,7 +638,8 @@ impl Session {
         if config.streams.is_empty() {
             bail!("no channels configured");
         }
-        let backend = CpalBackend::new();
+        // An interface, or a WAV file played in as one (`file:` ids).
+        let backend = InputBackend::new();
         let requested = audio_core::DeviceId(config.device_id.clone());
         let info = backend.device(&requested)?;
         // What the device answers to from here on. It differs from
@@ -1805,19 +1806,48 @@ pub struct DeviceOption {
     pub is_default: bool,
 }
 
-pub fn list_devices() -> Result<Vec<DeviceOption>> {
-    let backend = CpalBackend::new();
-    Ok(backend
+/// The interfaces that are plugged in, followed by the audio files among
+/// `files` that are still there.
+///
+/// `files` is every `file:` device the profiles name. A file is not plugged
+/// in, it is chosen; listing the ones the profiles remember is what keeps a
+/// test profile's device in the picker, with its channel count, after the
+/// next Refresh — the same thing a connected interface gets.
+pub fn list_devices(files: &[String]) -> Result<Vec<DeviceOption>> {
+    let backend = InputBackend::new();
+    let mut devices: Vec<DeviceOption> = backend
         .input_devices()?
         .into_iter()
-        .map(|info| DeviceOption {
+        .map(DeviceOption::from)
+        .collect();
+    for id in files {
+        let id = audio_core::DeviceId(id.clone());
+        if !audio_core::file_backend::is_file(&id) || devices.iter().any(|d| d.id == id.0) {
+            continue;
+        }
+        if let Ok(info) = backend.device(&id) {
+            devices.push(DeviceOption::from(info));
+        }
+    }
+    Ok(devices)
+}
+
+/// A WAV file as a device, for the picker: its name, channels and rate.
+pub fn probe_audio_file(path: &str) -> Result<DeviceOption> {
+    let id = audio_core::file_backend::id_for(std::path::Path::new(path));
+    Ok(InputBackend::new().device(&id)?.into())
+}
+
+impl From<audio_core::DeviceInfo> for DeviceOption {
+    fn from(info: audio_core::DeviceInfo) -> Self {
+        Self {
             id: info.id.0,
             name: info.name,
             channels: info.channels,
             default_sample_rate: info.default_sample_rate,
             is_default: info.is_default,
-        })
-        .collect())
+        }
+    }
 }
 
 #[cfg(test)]

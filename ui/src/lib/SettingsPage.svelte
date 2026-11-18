@@ -72,9 +72,13 @@
   import { connectedDevice, type ModelChoice, type Profile } from "./profiles";
   import type { SortDirection } from "./sort";
   import {
+    AUDIO_FILE_PREFIX,
+    canPickAudioFile,
     isRemote,
     listDevices,
     listLanguages,
+    pickAudioFile,
+    probeAudioFile,
     type DeviceOption,
     type Language,
     type StoredRemote,
@@ -275,6 +279,29 @@
     if (!option || active === null) return;
     active.device = option.name;
     active.deviceId = option.id;
+  };
+
+  // A WAV file played in as the input, for testing settings on a recording:
+  // its device id is `file:` and its path. Chosen with the system's file
+  // dialog, then probed for its channels and added to the device list the
+  // whole app shares — the backend lists it there from then on, for as long
+  // as a profile names it.
+  let isAudioFile = $derived(active !== null && active.deviceId.startsWith(AUDIO_FILE_PREFIX));
+  let fileError = $state<string | null>(null);
+  const useAudioFile = async () => {
+    if (active === null) return;
+    const current = isAudioFile ? active.deviceId.slice(AUDIO_FILE_PREFIX.length) : null;
+    const path = await pickAudioFile(current);
+    if (path === null || active === null) return;
+    try {
+      const option = await probeAudioFile(path);
+      devices = [...devices.filter((d) => d.id !== option.id), option];
+      active.device = option.name;
+      active.deviceId = option.id;
+      fileError = null;
+    } catch (e) {
+      fileError = String(e);
+    }
   };
 
   // Reported upwards by the model manager, which is the only thing that knows
@@ -554,10 +581,34 @@
                 {#if missing}
                   <!-- Selectable, because it is what the profile says and
                        deselecting it would throw that away. -->
-                  <option value={active.deviceId}>{active.device} — not connected</option>
+                  <option value={active.deviceId}>
+                    {active.device} — {isAudioFile ? "file not found" : "not connected"}
+                  </option>
                 {/if}
               </select>
             </label>
+            {#if canPickAudioFile}
+              <div class="file-row">
+                <button type="button" class="file-pick" disabled={locked} onclick={useAudioFile}>
+                  {isAudioFile ? "Choose another audio file…" : "Play in an audio file…"}
+                </button>
+                {#if isAudioFile}
+                  <span class="file-path" title={active.deviceId.slice(AUDIO_FILE_PREFIX.length)}>
+                    {active.deviceId.slice(AUDIO_FILE_PREFIX.length)}
+                  </span>
+                {/if}
+              </div>
+            {/if}
+            {#if isAudioFile}
+              <p class="file-note">
+                A WAV file stands in for the interface: each of its channels is an input. It plays
+                once, in real time, from the start of every session — Stop and Start to run it again
+                with other settings. Put it in a profile of its own to keep your show setup as it is.
+              </p>
+            {/if}
+            {#if fileError}
+              <p class="file-error">The audio file could not be used: {fileError}</p>
+            {/if}
           </section>
 
           <StreamSetup
@@ -863,6 +914,59 @@
     font-size: 0.7rem;
     color: var(--text-dim);
     max-width: 28rem;
+  }
+
+  /* Under the device picker, small and secondary: playing a file in is for
+     testing, and the picker above is what a show is set up with. */
+  .file-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-top: 0.5rem;
+    max-width: 28rem;
+    min-width: 0;
+  }
+
+  .file-pick {
+    flex: none;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.2rem 0.6rem;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .file-pick:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .file-pick:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .file-path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .file-note,
+  .file-error {
+    margin: 0.5rem 0 0;
+    max-width: 28rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .file-error {
+    color: #ff6b6b;
   }
 
   select {

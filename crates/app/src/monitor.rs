@@ -22,7 +22,7 @@
 use anyhow::{bail, Context, Result};
 use audio_core::{
     gain::Gain, ring, vad, AudioBackend, CaptureConfig, CaptureEvent, CaptureSession,
-    ChannelAssignment, ChannelMap, CpalBackend, RingSource, StreamId,
+    ChannelAssignment, ChannelMap, InputBackend, RingSource, StreamId,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -86,7 +86,8 @@ impl Monitor {
             bail!("no channels configured");
         }
 
-        let backend = CpalBackend::new();
+        // A file chosen as the device is metered by playing it, like a desk.
+        let backend = InputBackend::new();
         let info = backend.device(&audio_core::DeviceId(config.device_id.clone()))?;
 
         let live: Vec<(u16, &crate::session::StreamConfig)> = config

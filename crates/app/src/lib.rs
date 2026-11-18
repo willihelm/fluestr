@@ -471,6 +471,26 @@ async fn pick_model_file<R: Runtime>(app: AppHandle<R>, current: Option<String>)
     dialog.blocking_pick_file().map(|file| file.to_string())
 }
 
+/// Asks for a WAV file to play in as the input, with the system's own file
+/// dialog — for a profile that tests settings on a recording rather than on
+/// a desk. `current` is the file chosen now, which the dialog opens beside,
+/// for `pick_model_file`'s reason. `None` is a cancelled dialog.
+#[tauri::command]
+async fn pick_audio_file<R: Runtime>(app: AppHandle<R>, current: Option<String>) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter("WAV audio", &["wav", "wave"]);
+    if let Some(current) = current.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        if let Some(dir) = Path::new(current).parent().filter(|dir| dir.is_dir()) {
+            dialog = dialog.set_directory(dir);
+        }
+    }
+    dialog.blocking_pick_file().map(|file| file.to_string())
+}
+
 /// Whether the app is registered to start when the user logs in.
 ///
 /// Asked of the operating system every time rather than kept in
@@ -919,6 +939,7 @@ pub fn run() {
             commands::command,
             // What only a window can do.
             pick_model_file,
+            pick_audio_file,
             autostart_enabled,
             set_autostart,
             updater::check_for_update,
